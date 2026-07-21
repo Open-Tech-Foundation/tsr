@@ -258,18 +258,63 @@ fn packages_fan_out_across_matching_packages() {
 fn resolves_local_node_modules_bin() {
     // A `run` string naming a locally-installed binary must resolve from
     // node_modules/.bin — the same lookup npm/bun do — so `run = "vite"` works.
+    // Uses a *symlink* (the real npm/yarn/pnpm layout: .bin/x → ../pkg/bin/x),
+    // pointing at a shebang script, to match how tools are actually installed.
     use std::os::unix::fs::PermissionsExt;
     let ws = workspace();
+    let real = ws.join("node_modules/vite/bin/vite.js");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::write(
+        &real,
+        "#!/usr/bin/env node\nconsole.log('vite ' + process.argv[2]);\n",
+    )
+    .unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).unwrap();
+
     let bindir = ws.join("node_modules/.bin");
     fs::create_dir_all(&bindir).unwrap();
-    let bin = bindir.join("mytool");
-    fs::write(&bin, "#!/bin/sh\necho ran-local-tool\n").unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink("../vite/bin/vite.js", bindir.join("vite")).unwrap();
 
-    write(&ws, "tasks.toml", "[tasks.lint]\nrun = \"mytool\"\n");
-    let out = tsr(&ws, &["lint"]);
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.dev]\nrun = \"vite\"\nargs = [\"build\"]\n",
+    );
+    let out = tsr(&ws, &["dev"]);
+    // Skip if `node` isn't available on this machine (the shebang needs it).
+    if code(&out) == 0 {
+        assert!(stdout(&out).contains("vite build"), "{}", stdout(&out));
+    } else {
+        assert!(
+            stderr(&out).contains("node"),
+            "expected a node-related failure, got: {}",
+            stderr(&out)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn nested_package_bin_wins_over_hoisted_root_bin() {
+    // node_modules/.bin is collected nearest-first: a package's own bin shadows a
+    // hoisted root one of the same name.
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace();
+    let mk = |path: &std::path::Path, msg: &str| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, format!("#!/bin/sh\necho {msg}\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    mk(&ws.join("node_modules/.bin/tool"), "root-tool");
+    mk(&ws.join("apps/web/node_modules/.bin/tool"), "web-tool");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"tool\"\ndir = \"apps/web\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
     assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
-    assert!(stdout(&out).contains("ran-local-tool"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("web-tool"), "{}", stdout(&out));
 }
 
 #[test]
