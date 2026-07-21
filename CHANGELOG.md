@@ -16,3 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `^upstream` deps (v1.1) with exit code `64`.
 - Error model mapping runner-level failures to exit code `64` and task failures
   to their child's exact exit code.
+- Detection layer: identify a package's ecosystem from marker files
+  (`package.json` → npm/bun, `Cargo.toml`, `go.mod`, `pyproject.toml`) and map a
+  bare task to its native runner convention (`npm run <task>`, `cargo <task>`, …).
+- Task-form resolution honouring precedence `delegate` → `run` → auto-detect.

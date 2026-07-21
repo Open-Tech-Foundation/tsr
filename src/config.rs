@@ -57,6 +57,20 @@ pub struct Task {
     pub env: Vec<(String, String)>,
 }
 
+impl Task {
+    /// The task-name portion of the key: everything after a `#` package prefix,
+    /// or the whole key when there is none (SPEC §4.2). This is what form-3
+    /// auto-detection and `delegate` string form map onto the native runner.
+    pub fn task_name(&self) -> &str {
+        self.key.rsplit('#').next().unwrap_or(&self.key)
+    }
+
+    /// The package portion of a `pkg#task` key, if present.
+    pub fn package(&self) -> Option<&str> {
+        self.key.split_once('#').map(|(pkg, _)| pkg)
+    }
+}
+
 impl Config {
     /// Discover the workspace root by walking up from `start` to the nearest
     /// directory containing `tasks.toml`, then load and validate it.

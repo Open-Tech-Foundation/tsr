@@ -1,7 +1,9 @@
 //! `tsr` — a lightweight, polyglot, repo-aware task runner (SPEC v1).
 
 mod config;
+mod detect;
 mod error;
+mod resolve;
 
 use std::process::ExitCode;
 
