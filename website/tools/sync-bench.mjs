@@ -16,6 +16,7 @@ const outFile = join(here, "../app/docs/benchmarks/data.json");
 // Scenario key → human label. Keys match benches/results/<key>.json.
 const SCENARIOS = [
   ["startup", "startup — one task that spawns `true`"],
+  ["shell", "shell one-liner — `echo $HOME && echo done` ($VAR + &&)"],
   ["steps5", "in-task steps — one task, 5 sequential commands"],
   ["graph5", "dependency graph — one task, 5 dependencies"],
   ["graph10", "dependency graph — one task, 10 dependencies"],

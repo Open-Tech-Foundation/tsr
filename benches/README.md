@@ -11,9 +11,15 @@ commands.
 | Scenario | Shape | Isolates |
 |----------|-------|----------|
 | `startup` | one task, spawns `true` | Pure per-invocation overhead. |
+| `shell` | one task, `echo $HOME && echo done` | Shell support — `$VAR` expansion + `&&`, which tsr's mini-shell handles in-process. |
 | `steps5` | one task, 5 sequential commands | In-task sequencing — the runner launches **once**. |
 | `graph5` | one task with 5 trivial dependencies | Dependency-graph overhead. |
 | `graph10` | one task with 10 trivial dependencies | Graph overhead, scaled — shows it grow linearly. |
+
+The `shell` scenario exercises the mini-shell tsr supports natively (`$VAR`,
+`&&`/`||`/`;`, quoting). Pipes, redirects, globs and command substitution are
+**not** in the mini-shell — for those, tsr users reach for a `delegate` to
+`sh -c` or a script file, so they aren't part of this comparison.
 
 The task definitions are generated for every tool by
 [`gen-workspace.sh`](gen-workspace.sh) into [`workspace/`](workspace/):
@@ -66,22 +72,27 @@ is faster; `×` is relative to the fastest runner in that scenario. Raw exports:
 
 Mean wall-clock, in milliseconds:
 
-| Runner | `startup` | `steps5` | `graph5` | `graph10` |
-|--------|----------:|---------:|---------:|----------:|
-| `make` | 1.5 | 3.2 | 3.3 | 6.0 |
-| **`tsr`** | **1.7** | **5.0** | **5.1** | **9.4** |
-| `just` | 2.2 | 4.2 | 4.2 | 6.9 |
-| `bun` | 2.6 | 2.6 | 13.4 | 26.5 |
-| `task` (go-task) | 111.9 | 122.7 | 122.5 | 134.0 |
-| `npm` | 94.6 | 94.6 | 490.9 | 947.7 |
+| Runner | `startup` | `shell` | `steps5` | `graph5` | `graph10` |
+|--------|----------:|--------:|---------:|---------:|----------:|
+| `make` | 1.4 | 1.5 | 3.1 | 3.3 | 5.6 |
+| **`tsr`** | **1.7** | **2.5** | **5.0** | **5.2** | **9.5** |
+| `just` | 2.1 | 2.1 | 4.1 | 4.1 | 7.0 |
+| `bun` | 2.4 | 2.5 | 2.5 | 12.2 | 25.7 |
+| `task` (go-task) | 105.0 | 106.0 | 110.0 | 114.5 | 116.0 |
+| `npm` | 87.6 | 89.0 | 89.9 | 452.1 | 900.9 |
 
-The graph columns tell the story. `tsr`, `just`, and `make` resolve the whole
-graph in one launch, so they stay in the low single-digit milliseconds. `npm` has
-no graph: chaining `npm run` per task multiplies its ~95 ms startup, reaching
-**~948 ms for ten no-op tasks (≈158× the fastest)**. `bun` chains too but from a
-cheaper startup (~26 ms). `go-task` *does* resolve its graph in-process, so it
-stays flat at its ~120 ms startup rather than multiplying — slow to start, but it
-doesn't compound.
+`startup`/`shell`: `tsr` sits with the native runners and ~60× ahead of npm/task.
+On the `shell` one-liner it's a touch slower than `make`/`just` because it spawns
+each command as a real process while a shell runs `echo` as a builtin — the win
+lands when the commands are real programs, not builtins.
+
+The graph columns tell the bigger story. `tsr`, `just`, and `make` resolve the
+whole graph in one launch, so they stay in the low single-digit milliseconds.
+`npm` has no graph: chaining `npm run` per task multiplies its ~88 ms startup,
+reaching **~901 ms for ten no-op tasks (≈161× the fastest)**. `bun` chains too but
+from a cheaper startup (~26 ms). `go-task` *does* resolve its graph in-process, so
+it stays flat at its ~110 ms startup rather than multiplying — slow to start, but
+it doesn't compound.
 
 Exact tables: [`results/startup.md`](results/startup.md),
 [`results/steps5.md`](results/steps5.md), [`results/graph5.md`](results/graph5.md),

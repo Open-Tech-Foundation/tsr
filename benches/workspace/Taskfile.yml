@@ -5,6 +5,9 @@ tasks:
   noop:
     silent: true
     cmds: [true]
+  shell:
+    silent: true
+    cmds: ["echo $HOME && echo done"]
   steps5:
     silent: true
     cmds: [true,true,true,true,true]

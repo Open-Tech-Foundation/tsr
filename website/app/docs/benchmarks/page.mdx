@@ -26,6 +26,17 @@ runners separate from the interpreter-based ones.
 
 <BenchChart scenario={data.scenarios.startup} />
 
+## shell one-liner — `$VAR` + `&&`
+
+A task defined as `echo $HOME && echo done`. This is where tsr's **mini-shell**
+earns its place: it expands `$VAR` and sequences with `&&`/`||`/`;` *in-process*,
+without launching a shell. tsr spawns each command directly, so on a one-liner
+that a real shell would run with builtins it can be a touch slower — the win comes
+when the commands are real programs. (Pipes and redirects aren't in the mini-shell;
+those use a `delegate` to `sh -c` as an escape hatch, not measured here.)
+
+<BenchChart scenario={data.scenarios.shell} />
+
 ## in-task steps — one launch, five commands
 
 One task that runs five commands in sequence. Every runner launches **once** and

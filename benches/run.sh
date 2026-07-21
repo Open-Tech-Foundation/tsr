@@ -3,6 +3,7 @@
 # across four scenarios, driven by hyperfine (statistical, with warmup):
 #
 #   startup   one task that spawns `true`           per-invocation overhead
+#   shell     one task, `echo $HOME && echo done`   shell one-liner ($VAR + &&)
 #   steps5    one task, 5 sequential commands       in-task sequencing (one launch)
 #   graph5    a task with 5 trivial dependencies    dependency-graph overhead
 #   graph10   a task with 10 trivial dependencies   graph overhead, scaled
@@ -75,8 +76,9 @@ bench() {
 }
 
 bench startup none noop
+bench shell none shell
 bench steps5 none steps5
 bench graph5 sh graph5 5
 bench graph10 sh graph10 10
 
-echo "results written to benches/results/{startup,steps5,graph5,graph10}.{md,json}" >&2
+echo "results written to benches/results/{startup,shell,steps5,graph5,graph10}.{md,json}" >&2
