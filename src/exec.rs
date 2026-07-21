@@ -591,7 +591,11 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
     }
 }
 
-#[cfg(test)]
+// These tests spawn real Unix coreutils (`true`, `false`, `sh`, `touch`, `sleep`)
+// as stand-in workloads, so they run on Unix only. The execution engine itself is
+// cross-platform; Windows coverage comes from the pure-logic tests in other
+// modules (config, shell, env, graph, …) plus a `cargo build` on the CI matrix.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};

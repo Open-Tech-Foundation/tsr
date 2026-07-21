@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (chained `npm` ~901 ms for ten no-op tasks vs tsr ~9 ms); `localbin` shows tsr
   ~3.8× faster than `npm run` when calling a project-local tool.
 
+- CI: GitHub Actions matrix — build + test on ubuntu, macOS, and **Windows**
+  (validating cross-platform behaviour, notably the `node_modules/.bin` PATH
+  logic), plus a `fmt --check` + `clippy -D warnings` lint job. Execution tests
+  that shell out to Unix coreutils are `#[cfg(unix)]`; Windows runs the
+  platform-independent unit tests and a full `cargo build`.
+
 ### Fixed
 
 - `run` strings now resolve locally-installed binaries: `tsr` prepends

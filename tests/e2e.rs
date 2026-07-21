@@ -1,5 +1,10 @@
 //! End-to-end tests driving the compiled `tsr` binary against real temp
 //! workspaces, asserting on exit codes and output (SPEC §5, §6, §7, §8, §10).
+//!
+//! The tasks these tests run use Unix coreutils (`echo`, `sh`, `touch`, `false`),
+//! so the suite is Unix-only. On Windows the CI matrix still compiles the binary
+//! and runs every platform-independent unit test.
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
