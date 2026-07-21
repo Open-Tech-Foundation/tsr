@@ -4,8 +4,11 @@ mod config;
 mod detect;
 mod env;
 mod error;
+mod exec;
+mod graph;
 mod resolve;
 mod shell;
+mod workspace;
 
 use std::process::ExitCode;
 

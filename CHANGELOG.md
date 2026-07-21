@@ -29,3 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process` (lower sources augmented, never wiped), with per-value `$VAR`
   expansion against process env and earlier keys, root `.env` auto-loading, and
   a load-time check that every `$VAR` in a `run` string is defined (else `64`).
+- Workspace package discovery (expand `[workspace] members` globs to
+  marker-carrying dirs, read manifest names) and `packages` matching by path
+  glob or exact manifest name (SPEC §9.1).
+- Dependency-graph validation: unknown-task and cycle detection (exit `64`).
+- Execution engine (SPEC §5): recursive `deps`-before-task ordering with
+  per-task memoisation (diamond-safe), sequential-by-default / opt-in
+  `parallel` batches, `packages` fan-out, and fail-fast that stops sequential
+  launches and kills running parallel siblings, then prints a summary. The first
+  failing child's exact exit code is propagated; runner breakage exits `64`.
