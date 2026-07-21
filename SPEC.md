@@ -186,15 +186,21 @@ args = ["--color"]
 ```
 tsr <task> [-- <args>...]   run a task; args after -- are forwarded
 tsr --list                  list the tasks defined in tasks.toml
+tsr --config                edit tasks.toml in an interactive TUI
 tsr --init                  create a starter tasks.toml here
 tsr --help | --version
 ```
 
 The **first positional argument is always a task name**. Every builtin is a flag
-(`--list`, `--init`, `--help`, `--version`), never a bare subcommand, so a task
-named `list` or `init` is never shadowed — `tsr list` runs the user's `list`
-task. This keeps the entire bare-word namespace available for tasks/scripts, which
-is the point of the tool.
+(`--list`, `--config`, `--init`, `--help`, `--version`), never a bare subcommand,
+so a task named `list` or `init` is never shadowed — `tsr list` runs the user's
+`list` task. This keeps the entire bare-word namespace available for
+tasks/scripts, which is the point of the tool.
+
+`--config` opens a TUI for authoring tasks with every option (form, `dir`/
+`packages`, `deps`, `parallel`, `args`, `env`). It edits through the `toml_edit`
+document, so comments and unknown keys survive (§1.5), and validates each change
+before writing.
 
 ---
 

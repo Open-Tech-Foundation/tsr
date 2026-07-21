@@ -14,6 +14,7 @@ tsr — a lightweight, polyglot, repo-aware task runner
 USAGE:
     tsr <task> [-- <args>...]   run a task; args after -- are forwarded
     tsr --list                  list the tasks defined in tasks.toml
+    tsr --config                edit tasks.toml in an interactive TUI
     tsr --init                  create a starter tasks.toml here
     tsr --help | --version
 
@@ -67,6 +68,7 @@ pub enum Cli {
     },
     List,
     Init,
+    Config,
     Help,
     Version,
 }
@@ -95,6 +97,12 @@ pub fn parse(args: &[String]) -> Result<Cli> {
                 return Err(TsrError::runtime("'--init' takes no arguments"));
             }
             Ok(Cli::Init)
+        }
+        Some("--config") => {
+            if head.len() > 1 {
+                return Err(TsrError::runtime("'--config' takes no arguments"));
+            }
+            Ok(Cli::Config)
         }
         Some("-h" | "--help") => Ok(Cli::Help),
         Some("-V" | "--version") => Ok(Cli::Version),
@@ -245,6 +253,16 @@ mod tests {
         assert_eq!(parse_ok(&["--init"]), Cli::Init);
         assert!(
             parse_err(&["--init", "x"])
+                .to_string()
+                .contains("no arguments")
+        );
+    }
+
+    #[test]
+    fn parses_config() {
+        assert_eq!(parse_ok(&["--config"]), Cli::Config);
+        assert!(
+            parse_err(&["--config", "x"])
                 .to_string()
                 .contains("no arguments")
         );

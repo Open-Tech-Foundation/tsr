@@ -101,6 +101,27 @@ impl Config {
     }
 }
 
+/// Locate the nearest existing `tasks.toml` at/above `start`, if any. Used by the
+/// `--config` TUI to decide whether to open an existing workspace or start a new
+/// file in the current directory.
+pub fn locate(start: &Path) -> Option<PathBuf> {
+    find_config(start)
+}
+
+/// Validate a full config document given as text, without touching the file
+/// system — parse then run the structural checks. Used by the `--config` TUI to
+/// reject an edit before it is written.
+pub(crate) fn validate_str(text: &str) -> Result<()> {
+    let cfg = parse(text, PathBuf::from("."))?;
+    cfg.validate()
+}
+
+/// Validate a single task-name/key against the grammar (SPEC §4.1). Exposed for
+/// the TUI's per-field feedback.
+pub(crate) fn validate_task_name(key: &str) -> Result<()> {
+    validate_task_key(key)
+}
+
 /// Walk up from `start` looking for the nearest `tasks.toml`.
 fn find_config(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_dir() {

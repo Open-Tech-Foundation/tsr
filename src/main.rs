@@ -9,6 +9,7 @@ mod exec;
 mod graph;
 mod resolve;
 mod shell;
+mod tui;
 mod workspace;
 
 use std::process::ExitCode;
@@ -41,6 +42,14 @@ fn run() -> error::Result<i32> {
         Cli::Init => {
             let cwd = std::env::current_dir().map_err(|e| TsrError::runtime(e.to_string()))?;
             cli::init(&cwd)?;
+            Ok(0)
+        }
+        Cli::Config => {
+            // Open an existing tasks.toml if present, otherwise author a new one
+            // in the current directory (SPEC §1.5 — TUI-primary editing).
+            let cwd = std::env::current_dir().map_err(|e| TsrError::runtime(e.to_string()))?;
+            let path = config::locate(&cwd).unwrap_or_else(|| cwd.join(config::CONFIG_FILE));
+            tui::run(&path)?;
             Ok(0)
         }
         Cli::List => {

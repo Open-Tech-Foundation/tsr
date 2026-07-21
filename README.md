@@ -20,6 +20,7 @@ cargo build --release   # binary at target/release/tsr
 tsr <task>              # run a task
 tsr test -- --watch     # forward args after -- to the resolved command
 tsr --list              # list the tasks defined in tasks.toml
+tsr --config            # edit tasks.toml in an interactive TUI
 tsr --init              # scaffold a starter tasks.toml
 tsr --help
 ```

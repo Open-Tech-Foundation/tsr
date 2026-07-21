@@ -13,9 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory, showcasing all three task forms plus the graph. Refuses to overwrite
   an existing file (exit `64`); the generated file is immediately valid and
   runnable.
-- Builtins (`--list`, `--init`, `--help`, `--version`) are flags only, never bare
-  subcommands: the first positional argument is always a task name, so a task
-  named `list` or `init` is never shadowed.
+- Builtins (`--list`, `--config`, `--init`, `--help`, `--version`) are flags only,
+  never bare subcommands: the first positional argument is always a task name, so
+  a task named `list` or `init` is never shadowed.
+- `tsr --config`: an interactive TUI (ratatui) for authoring tasks with every
+  option (form, `dir`/`packages`, `deps`, `parallel`, `args`, `env`) instead of
+  hand-editing TOML. Add/edit/delete tasks in a list + form UI; edits go through
+  the format-preserving `toml_edit` document (comments and unknown keys survive)
+  and are validated before being committed or written. Starts a new file if none
+  exists.
 - Website + documentation under `website/`, built with the OTF Web framework and
   `@opentf/web-docs` (`DocsLayout`): a marketing landing page plus a ten-page
   docs section (overview, getting started, configuration, task forms, mini-shell,
