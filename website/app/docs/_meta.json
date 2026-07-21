@@ -8,5 +8,6 @@
   "graph": "Graph & parallelism",
   "monorepo": "Monorepo & packages",
   "cli": "CLI reference",
-  "exit-codes": "Exit codes"
+  "exit-codes": "Exit codes",
+  "benchmarks": "Benchmarks"
 }

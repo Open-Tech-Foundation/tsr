@@ -17,10 +17,8 @@ export default defineDocsConfig({
     // renders the navbar search trigger (⌘K).
     search: { provider: "pagefind" },
     // Top-level navbar links — shared by the marketing shell (RootLayout) and the
-    // docs chrome (DocsLayout), so the whole site carries one navbar.
-    nav: [
-      { label: "Docs", href: "/docs" },
-      { label: "GitHub", href: "https://github.com/Open-Tech-Foundation/tsr" },
-    ],
+    // docs chrome (DocsLayout), so the whole site carries one navbar. GitHub is
+    // omitted here: the navbar already renders a GitHub icon from `github` above.
+    nav: [{ label: "Docs", href: "/docs" }],
   },
 });

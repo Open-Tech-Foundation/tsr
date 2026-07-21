@@ -181,6 +181,21 @@ args = ["--color"]
 
 `tsr test -- --watch` → `vitest --color --watch`.
 
+### 6.1 CLI surface
+
+```
+tsr <task> [-- <args>...]   run a task; args after -- are forwarded
+tsr --list                  list the tasks defined in tasks.toml
+tsr --init                  create a starter tasks.toml here
+tsr --help | --version
+```
+
+The **first positional argument is always a task name**. Every builtin is a flag
+(`--list`, `--init`, `--help`, `--version`), never a bare subcommand, so a task
+named `list` or `init` is never shadowed — `tsr list` runs the user's `list`
+task. This keeps the entire bare-word namespace available for tasks/scripts, which
+is the point of the tool.
+
 ---
 
 ## 7. Environment variables

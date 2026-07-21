@@ -1,0 +1,103 @@
+{
+  "meta": {
+    "generatedAt": "2026-07-21T17:35:27.122Z",
+    "source": "benches/results/*.json (hyperfine --export-json)",
+    "harness": "hyperfine, --shell=none, 20 warmup runs"
+  },
+  "scenarios": {
+    "noop": {
+      "label": "no-op — spawn `true`",
+      "results": [
+        {
+          "command": "tsr",
+          "meanMs": 1.5827335590551221,
+          "stddevMs": 0.15452531480162993,
+          "minMs": 1.204647,
+          "maxMs": 4.654986000000001
+        },
+        {
+          "command": "npm",
+          "meanMs": 85.60576976000002,
+          "stddevMs": 2.89393838618052,
+          "minMs": 81.860745,
+          "maxMs": 96.727674
+        },
+        {
+          "command": "bun",
+          "meanMs": 2.441603494582045,
+          "stddevMs": 0.22985287134029786,
+          "minMs": 2.264208,
+          "maxMs": 5.730149
+        },
+        {
+          "command": "just",
+          "meanMs": 1.9525770794362605,
+          "stddevMs": 0.1878752346617367,
+          "minMs": 1.781036,
+          "maxMs": 4.465658
+        },
+        {
+          "command": "task",
+          "meanMs": 102.88841709999997,
+          "stddevMs": 3.556599449851465,
+          "minMs": 97.225378,
+          "maxMs": 117.453237
+        },
+        {
+          "command": "make",
+          "meanMs": 1.368172436786656,
+          "stddevMs": 0.15640144932132607,
+          "minMs": 1.185526,
+          "maxMs": 4.533308000000001
+        }
+      ]
+    },
+    "hello": {
+      "label": "`echo hello`",
+      "results": [
+        {
+          "command": "tsr",
+          "meanMs": 1.5873984623999986,
+          "stddevMs": 0.1693671550367683,
+          "minMs": 1.3911280000000001,
+          "maxMs": 5.289826
+        },
+        {
+          "command": "npm",
+          "meanMs": 87.27846864,
+          "stddevMs": 3.318773854035077,
+          "minMs": 82.56193,
+          "maxMs": 96.741668
+        },
+        {
+          "command": "bun",
+          "meanMs": 2.459908816194335,
+          "stddevMs": 0.23149633915694542,
+          "minMs": 2.2582430000000002,
+          "maxMs": 5.844293
+        },
+        {
+          "command": "just",
+          "meanMs": 1.9438504759769388,
+          "stddevMs": 0.17587771614409015,
+          "minMs": 1.7874860000000001,
+          "maxMs": 4.551496
+        },
+        {
+          "command": "task",
+          "meanMs": 102.45309202999998,
+          "stddevMs": 3.2239429462684757,
+          "minMs": 97.608338,
+          "maxMs": 111.0291
+        },
+        {
+          "command": "make",
+          "meanMs": 1.4313103980952373,
+          "stddevMs": 0.16933386483501853,
+          "minMs": 1.260143,
+          "maxMs": 5.00356
+        }
+      ]
+    }
+  }
+}

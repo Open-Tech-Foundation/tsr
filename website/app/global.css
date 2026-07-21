@@ -52,10 +52,14 @@
   --maxw: 1080px;
 }
 
-/* Always-dark island: the hero terminal stays dark in both themes (a terminal
-   surface reads as dark like a code block). */
-.term-window {
+/* Always-dark islands: the hero terminal and the code samples stay dark in both
+   themes (a terminal/code surface reads as dark like a code block). Pin the
+   tokens they consume to dark values so their light foreground text stays legible
+   in light mode too. */
+.term-window,
+.codeblock {
   --bg-elev: #0c0f0e;
+  --line: #222a26;
 }
 
 * {
@@ -388,4 +392,64 @@ h1.title .grad {
   border-radius: 5px;
   padding: 1px 6px;
   color: var(--accent-soft);
+}
+
+/* --- benchmark chart (docs/benchmarks) — theme-aware, used inside DocsLayout --- */
+.bench {
+  margin: 20px 0 8px;
+}
+.bench-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bench-row {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.bench-name {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: right;
+}
+.bench-row-tsr .bench-name {
+  color: var(--accent);
+  font-weight: 700;
+}
+.bench-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+}
+.bench-bar {
+  height: 22px;
+  min-width: 3px;
+  border-radius: 5px;
+  background: var(--line);
+  transition: width 0.3s ease;
+}
+.bench-row-tsr .bench-bar {
+  background: linear-gradient(90deg, var(--accent), var(--accent-soft));
+}
+.bench-val {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.bench-row-tsr .bench-val {
+  color: var(--text);
+}
+.bench-rel {
+  color: var(--text-faint);
+}
+.bench-caption {
+  font-size: 13px;
+  color: var(--text-faint);
+  margin-top: 14px;
 }
