@@ -240,6 +240,25 @@ fn packages_fan_out_across_matching_packages() {
 }
 
 #[test]
+fn init_scaffolds_a_runnable_config() {
+    let ws = workspace();
+    // No tasks.toml yet.
+    let out = tsr(&ws, &["--init"]);
+    assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
+    assert!(ws.join("tasks.toml").exists());
+    assert!(stdout(&out).contains("Created"));
+
+    // The scaffolded `dev` task runs.
+    let dev = tsr(&ws, &["dev"]);
+    assert_eq!(code(&dev), 0, "stderr: {}", stderr(&dev));
+
+    // Re-running --init must not overwrite.
+    let again = tsr(&ws, &["--init"]);
+    assert_eq!(code(&again), 64);
+    assert!(stderr(&again).contains("already exists"));
+}
+
+#[test]
 fn packages_pattern_matching_nothing_is_error_64() {
     let ws = workspace();
     write(

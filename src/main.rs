@@ -38,6 +38,11 @@ fn run() -> error::Result<i32> {
             println!("tsr {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
         }
+        Cli::Init => {
+            let cwd = std::env::current_dir().map_err(|e| TsrError::runtime(e.to_string()))?;
+            cli::init(&cwd)?;
+            Ok(0)
+        }
         Cli::List => {
             let cfg = discover()?;
             cli::list(&cfg);

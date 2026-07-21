@@ -1,9 +1,10 @@
 //! Command-line parsing and the `list` output (SPEC §6, §7).
 //!
 //! Grammar: `tsr <task> [-- <passthrough>…]` runs a task, forwarding everything
-//! after `--` to the resolved command. `tsr list` prints the defined tasks.
+//! after `--` to the resolved command. `tsr list` prints the defined tasks;
+//! `tsr --init` scaffolds a starter `tasks.toml`.
 
-use crate::config::{Config, Delegate, Task};
+use crate::config::{CONFIG_FILE, Config, Delegate, Task};
 use crate::error::{Result, TsrError};
 
 pub const USAGE: &str = "\
@@ -12,12 +13,46 @@ tsr — a lightweight, polyglot, repo-aware task runner
 USAGE:
     tsr <task> [-- <args>...]   run a task; args after -- are forwarded
     tsr list                    list the tasks defined in tasks.toml
+    tsr --init                  create a starter tasks.toml here
     tsr --help | --version
 
 EXAMPLES:
     tsr dev
     tsr test -- --watch
     tsr ci";
+
+/// The starter config written by `tsr --init`. Kept valid and legible for hand
+/// editing (SPEC §1.5); it showcases all three task forms plus the graph.
+pub const INIT_TEMPLATE: &str = "\
+# tasks.toml — the workspace root anchor and config for `tsr`.
+#
+# Task names: [A-Za-z0-9_:-]+   ·   `#` = pkg#task   ·   quote keys containing `:`.
+# Precedence when a task runs: delegate → run → auto-detect the native runner.
+
+# [workspace]
+# members = [\"apps/*\", \"packages/*\"]   # uncomment for a monorepo
+
+[env]
+# Shared environment inherited by every task (task `env` overrides these).
+# NODE_ENV = \"development\"
+
+# Form 2 — spawn a command directly (no `npm run` startup tax).
+[tasks.dev]
+run = \"echo 'edit tasks.toml to set your dev command'\"
+
+# Form 3 — no `run`/`delegate`: auto-detect the ecosystem and use its runner
+# (npm/bun run <task>, cargo <task>, go <task>, uv run <task>).
+# [tasks.test]
+
+# Form 1 — delegate (and hand caching) to a specialist backend.
+# [tasks.build]
+# delegate = \"turbo\"                       # → `turbo run build`
+
+# Dependency graph + opt-in parallelism (sequential by default).
+# [tasks.ci]
+# deps = [\"lint\", \"test\", \"build\"]
+# parallel = true
+";
 
 /// A parsed command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -27,6 +62,7 @@ pub enum Cli {
         passthrough: Vec<String>,
     },
     List,
+    Init,
     Help,
     Version,
 }
@@ -48,6 +84,12 @@ pub fn parse(args: &[String]) -> Result<Cli> {
             }
             Ok(Cli::List)
         }
+        Some("--init" | "init") => {
+            if head.len() > 1 {
+                return Err(TsrError::runtime("'--init' takes no arguments"));
+            }
+            Ok(Cli::Init)
+        }
         Some("-h" | "--help") => Ok(Cli::Help),
         Some("-V" | "--version") => Ok(Cli::Version),
         Some(flag) if flag.starts_with('-') => Err(TsrError::runtime(format!(
@@ -66,6 +108,23 @@ pub fn parse(args: &[String]) -> Result<Cli> {
             })
         }
     }
+}
+
+/// Scaffold a starter `tasks.toml` in `dir`. Refuses to overwrite an existing
+/// one (a runner-level error, exit `64`), so `--init` is always safe to run.
+pub fn init(dir: &std::path::Path) -> Result<()> {
+    let path = dir.join(CONFIG_FILE);
+    if path.exists() {
+        return Err(TsrError::runtime(format!(
+            "'{}' already exists — not overwriting",
+            path.display()
+        )));
+    }
+    std::fs::write(&path, INIT_TEMPLATE)
+        .map_err(|e| TsrError::runtime(format!("cannot write '{}': {e}", path.display())))?;
+    println!("Created {}", path.display());
+    println!("Next: edit it, then run `tsr <task>` or `tsr list`.");
+    Ok(())
 }
 
 /// Print the tasks defined in the config, with a one-line form descriptor.
@@ -173,6 +232,42 @@ mod tests {
         assert_eq!(parse_ok(&["list"]), Cli::List);
         assert_eq!(parse_ok(&["--help"]), Cli::Help);
         assert_eq!(parse_ok(&["-V"]), Cli::Version);
+    }
+
+    #[test]
+    fn parses_init() {
+        assert_eq!(parse_ok(&["--init"]), Cli::Init);
+        assert_eq!(parse_ok(&["init"]), Cli::Init);
+        assert!(
+            parse_err(&["--init", "x"])
+                .to_string()
+                .contains("no arguments")
+        );
+    }
+
+    #[test]
+    fn init_writes_template_and_refuses_overwrite() {
+        let dir = std::env::temp_dir().join(format!("tsr-init-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        init(&dir).unwrap();
+        assert!(dir.join(CONFIG_FILE).exists());
+        // Second run must not clobber the existing file.
+        let err = init(&dir).unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn init_template_is_a_valid_runnable_config() {
+        // The scaffold must load cleanly and expose the uncommented `dev` task,
+        // so `tsr --init` immediately followed by `tsr dev` works.
+        let dir = std::env::temp_dir().join(format!("tsr-inittmpl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(CONFIG_FILE), INIT_TEMPLATE).unwrap();
+        let cfg = Config::load(&dir.join(CONFIG_FILE)).unwrap();
+        assert!(cfg.task("dev").and_then(|t| t.run.as_deref()).is_some());
     }
 
     #[test]

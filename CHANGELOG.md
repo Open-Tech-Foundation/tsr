@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tsr --init` (also `tsr init`): scaffold a commented starter `tasks.toml` in
+  the current directory, showcasing all three task forms plus the graph. Refuses
+  to overwrite an existing file (exit `64`); the generated file is immediately
+  valid and runnable.
+
 - Config layer: parse `tasks.toml` via `toml_edit` (comments and unknown keys
   survive a round-trip), discover the workspace root by walking up to the
   nearest `tasks.toml`, and structurally validate at load time — rejecting
