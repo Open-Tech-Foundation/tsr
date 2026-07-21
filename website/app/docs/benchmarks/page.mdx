@@ -37,6 +37,18 @@ those use a `delegate` to `sh -c` as an escape hatch, not measured here.)
 
 <BenchChart scenario={data.scenarios.shell} />
 
+## local binary — resolving `node_modules/.bin`
+
+The real "`npm run` replacement" case: a task that calls a project-local tool
+like `vite` or `eslint`. These are Node programs, so every runner ultimately
+spawns Node; what differs is the runner's *own* startup on top. Only the runners
+that resolve `node_modules/.bin` can do this — `tsr`, `npm`, and `bun` — so this
+is a three-way comparison (a bare `just`/`make`/go-task recipe wouldn't find the
+binary at all). `tsr` prepends `node_modules/.bin` to `PATH` like npm/bun, then
+spawns the tool directly — skipping npm's extra Node startup.
+
+<BenchChart scenario={data.scenarios.localbin} />
+
 ## in-task steps — one launch, five commands
 
 One task that runs five commands in sequence. Every runner launches **once** and

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generatedAt": "2026-07-21T19:33:24.205Z",
+    "generatedAt": "2026-07-21T20:06:01.163Z",
     "source": "benches/results/*.json (hyperfine --export-json)",
     "harness": "hyperfine, 20 warmup runs; graph scenarios chain npm/bun with &&"
   },
@@ -96,6 +96,32 @@
           "stddevMs": 0.19555895104456184,
           "minMs": 1.3094370000000002,
           "maxMs": 4.675306000000001
+        }
+      ]
+    },
+    "localbin": {
+      "label": "local binary — calling node_modules/.bin (vite/eslint-style)",
+      "results": [
+        {
+          "command": "tsr",
+          "meanMs": 27.536662495412834,
+          "stddevMs": 0.20556114679383544,
+          "minMs": 27.346654,
+          "maxMs": 29.308446000000004
+        },
+        {
+          "command": "npm",
+          "meanMs": 105.31402918750003,
+          "stddevMs": 3.3978837416783554,
+          "minMs": 99.818306,
+          "maxMs": 118.710542
+        },
+        {
+          "command": "bun",
+          "meanMs": 20.12059936,
+          "stddevMs": 1.038077911381811,
+          "minMs": 18.864914,
+          "maxMs": 24.455628
         }
       ]
     },

@@ -1,2 +1,3 @@
 # Raw hyperfine JSON exports (the committed .md tables are the reference sample).
 results/*.json
+workspace/node_modules

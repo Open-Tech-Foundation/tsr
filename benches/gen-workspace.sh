@@ -37,6 +37,10 @@ MAXS=$LARGE
   # Exercises tsr's mini-shell: $VAR expansion + && sequencing, no shell launched.
   echo 'run = "echo $HOME && echo done"'
   echo
+  echo "[tasks.cli]"
+  # Calls a locally-installed binary from node_modules/.bin (like vite/eslint).
+  echo 'run = "localcli"'
+  echo
   echo "[tasks.graph5]"
   echo "deps = [$(seq 1 $SMALL | sed 's/.*/"s&"/' | paste -sd, -)]"
   echo
@@ -53,6 +57,7 @@ MAXS=$LARGE
   echo '  "scripts": {'
   echo '    "noop": "true",'
   echo '    "shell": "echo $HOME && echo done",'
+  echo '    "cli": "localcli",'
   printf '    "steps5": "%s",\n' "$(yes true | head -n $STEPS | paste -sd' ' - | sed 's/ / \&\& /g')"
   for i in $(seq 1 $MAXS); do
     printf '    "s%s": "true"%s\n' "$i" "$([ "$i" -lt "$MAXS" ] && echo , )"
@@ -121,4 +126,16 @@ MAXS=$LARGE
   printf 'graph10: %s\n' "$(seq 1 $LARGE | sed 's/.*/s&/' | paste -sd' ' -)"
 } > "$ws/Makefile"
 
-echo "generated $ws/{tasks.toml,package.json,justfile,Taskfile.yml,Makefile}"
+# --- a locally-installed Node CLI in node_modules/.bin ---
+# Stands in for vite/eslint (Node programs): the `cli`/`localbin` scenario measures
+# tsr vs npm vs bun resolving and launching a project-local binary. Not committed
+# (node_modules is gitignored); regenerated here.
+mkdir -p "$ws/node_modules/.bin"
+cat > "$ws/node_modules/.bin/localcli" <<'EOF'
+#!/usr/bin/env node
+// Minimal stand-in for a real local CLI (eslint/vite are Node programs too).
+process.exit(0);
+EOF
+chmod +x "$ws/node_modules/.bin/localcli"
+
+echo "generated $ws/{tasks.toml,package.json,justfile,Taskfile.yml,Makefile} + node_modules/.bin/localcli"

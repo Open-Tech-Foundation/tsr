@@ -39,6 +39,9 @@ run = "true"
 [tasks.shell]
 run = "echo $HOME && echo done"
 
+[tasks.cli]
+run = "localcli"
+
 [tasks.graph5]
 deps = ["s1","s2","s3","s4","s5"]
 

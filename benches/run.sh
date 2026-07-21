@@ -4,6 +4,7 @@
 #
 #   startup   one task that spawns `true`           per-invocation overhead
 #   shell     one task, `echo $HOME && echo done`   shell one-liner ($VAR + &&)
+#   localbin  one task calling node_modules/.bin     local-binary resolution (JS only)
 #   steps5    one task, 5 sequential commands       in-task sequencing (one launch)
 #   graph5    a task with 5 trivial dependencies    dependency-graph overhead
 #   graph10   a task with 10 trivial dependencies   graph overhead, scaled
@@ -48,10 +49,13 @@ chain() {
   printf '%s' "$out"
 }
 
-# Run one scenario. $1=name $2=shell-mode(none|sh) $3=task/target, rest ignored.
-# The per-tool command list is assembled from what's installed.
+# Run one scenario.
+#   $1=name  $2=shell-mode(none|sh)  $3=task/target  $4=graph_n(0)  $5=tools(all|js)
+# `js` restricts to the runners that resolve node_modules/.bin (tsr/npm/bun) — the
+# only fair set for the local-binary scenario. The list is assembled from what's
+# installed.
 bench() {
-  local name="$1" shellmode="$2" target="$3" graph_n="${4:-0}"
+  local name="$1" shellmode="$2" target="$3" graph_n="${4:-0}" tools="${5:-all}"
   local args=(-n tsr "$TSR $target")
   if [[ "$graph_n" -gt 0 ]]; then
     has npm && args+=(-n npm "$(chain 'npm run --silent' "$graph_n")")
@@ -60,9 +64,11 @@ bench() {
     has npm && args+=(-n npm "npm run --silent $target")
     has bun && args+=(-n bun "bun run $target")
   fi
-  has just && args+=(-n just "just $target")
-  has task && args+=(-n task "task $target")
-  has make && args+=(-n make "make $target")
+  if [[ "$tools" != "js" ]]; then
+    has just && args+=(-n just "just $target")
+    has task && args+=(-n task "task $target")
+    has make && args+=(-n make "make $target")
+  fi
 
   local shellflag=(--shell=none)
   [[ "$shellmode" == "sh" ]] && shellflag=() # default shell for `&&` chains
@@ -77,8 +83,9 @@ bench() {
 
 bench startup none noop
 bench shell none shell
+bench localbin none cli 0 js
 bench steps5 none steps5
 bench graph5 sh graph5 5
 bench graph10 sh graph10 10
 
-echo "results written to benches/results/{startup,shell,steps5,graph5,graph10}.{md,json}" >&2
+echo "results in benches/results/{startup,shell,localbin,steps5,graph5,graph10}.{md,json}" >&2

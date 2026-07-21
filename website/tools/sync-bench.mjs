@@ -17,6 +17,7 @@ const outFile = join(here, "../app/docs/benchmarks/data.json");
 const SCENARIOS = [
   ["startup", "startup — one task that spawns `true`"],
   ["shell", "shell one-liner — `echo $HOME && echo done` ($VAR + &&)"],
+  ["localbin", "local binary — calling node_modules/.bin (vite/eslint-style)"],
   ["steps5", "in-task steps — one task, 5 sequential commands"],
   ["graph5", "dependency graph — one task, 5 dependencies"],
   ["graph10", "dependency graph — one task, 10 dependencies"],

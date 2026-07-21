@@ -12,6 +12,7 @@ commands.
 |----------|-------|----------|
 | `startup` | one task, spawns `true` | Pure per-invocation overhead. |
 | `shell` | one task, `echo $HOME && echo done` | Shell support — `$VAR` expansion + `&&`, which tsr's mini-shell handles in-process. |
+| `localbin` | one task calling `node_modules/.bin/localcli` (a Node script) | Local-binary resolution — the real `npm run` replacement case. `tsr`/`npm`/`bun` only (see below). |
 | `steps5` | one task, 5 sequential commands | In-task sequencing — the runner launches **once**. |
 | `graph5` | one task with 5 trivial dependencies | Dependency-graph overhead. |
 | `graph10` | one task with 10 trivial dependencies | Graph overhead, scaled — shows it grow linearly. |
@@ -20,6 +21,12 @@ The `shell` scenario exercises the mini-shell tsr supports natively (`$VAR`,
 `&&`/`||`/`;`, quoting). Pipes, redirects, globs and command substitution are
 **not** in the mini-shell — for those, tsr users reach for a `delegate` to
 `sh -c` or a script file, so they aren't part of this comparison.
+
+The `localbin` scenario resolves a binary from `node_modules/.bin` — the lookup
+`tsr`, `npm`, and `bun` perform but `just`/`make`/go-task do not — so it compares
+only those three. The stand-in binary is a trivial Node script, because the real
+tools it represents (`vite`, `eslint`) are Node programs; every runner pays Node's
+startup once, and the delta is the runner's own overhead on top.
 
 The task definitions are generated for every tool by
 [`gen-workspace.sh`](gen-workspace.sh) into [`workspace/`](workspace/):
@@ -80,6 +87,12 @@ Mean wall-clock, in milliseconds:
 | `bun` | 2.4 | 2.5 | 2.5 | 12.2 | 25.7 |
 | `task` (go-task) | 105.0 | 106.0 | 110.0 | 114.5 | 116.0 |
 | `npm` | 87.6 | 89.0 | 89.9 | 452.1 | 900.9 |
+
+**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun only):
+`bun` 20.1 ms · **`tsr` 27.5 ms** · `npm` 105.3 ms. Calling a project-local Node
+tool (`vite`/`eslint`), `tsr` is **~3.8× faster than `npm run`** and on par with
+`bun` — it resolves the same `node_modules/.bin` binary but skips npm's extra Node
+startup.
 
 `startup`/`shell`: `tsr` sits with the native runners and ~60× ahead of npm/task.
 On the `shell` one-liner it's a touch slower than `make`/`just` because it spawns
