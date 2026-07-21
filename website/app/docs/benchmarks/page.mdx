@@ -1,6 +1,6 @@
 ---
 title: Benchmarks
-description: How tsr's per-invocation overhead compares to npm, bun, just, go-task, and make.
+description: How tsr's overhead compares to npm, bun, just, go-task, and make — for a single task and across a dependency graph.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -10,34 +10,55 @@ import data from "./data.json";
 # Benchmarks
 
 Task runners spend most of their wall-clock on *the work they launch*. To compare
-the **runners themselves**, we run tasks that do almost nothing and measure what's
-left: process startup, config parsing, and the cost of reaching the child command.
+the **runners themselves**, these scenarios run tasks that do almost nothing and
+measure what's left: process startup, config parsing, and the cost of reaching
+the child commands.
 
-The same two tasks are defined for every tool (`tsr`, `npm`, `bun`, `just`,
-go-task, and `make`) and timed with [hyperfine](https://github.com/sharkdp/hyperfine)
-(`--shell=none`, 20 warmup runs). The numbers below are loaded directly from the
-benchmark's JSON export — see [`benches/`](https://github.com/Open-Tech-Foundation/tsr/tree/main/benches).
+The same task definitions are generated for every tool (`tsr`, `npm`, `bun`,
+`just`, go-task, `make`) — see [`benches/`](https://github.com/Open-Tech-Foundation/tsr/tree/main/benches)
+— and timed with [hyperfine](https://github.com/sharkdp/hyperfine). The numbers
+below are loaded directly from the benchmark's JSON export.
 
-## `noop` — spawn `true`
+## startup — a single task
 
-Pure runner overhead: startup + config parse + spawn.
+Spawns `true`. This is pure per-invocation overhead, and where the compiled
+runners separate from the interpreter-based ones.
 
-<BenchChart scenario={data.scenarios.noop} />
+<BenchChart scenario={data.scenarios.startup} />
 
-## `hello` — `echo hello`
+## in-task steps — one launch, five commands
 
-The same, with a trivial real command.
+One task that runs five commands in sequence. Every runner launches **once** and
+then spawns the child commands, so even `npm`/`bun` stay cheap here — the startup
+tax is paid a single time.
 
-<BenchChart scenario={data.scenarios.hello} />
+<BenchChart scenario={data.scenarios.steps5} />
+
+## dependency graph — five tasks
+
+One task depending on five trivial tasks. `tsr`, `just`, go-task, and `make`
+resolve the whole graph in a **single** launch. `npm`/`bun` have no dependency
+graph, so — as their users do — the five tasks are chained with `&&`, paying the
+runner's startup **five times over**.
+
+<BenchChart scenario={data.scenarios.graph5} />
+
+## dependency graph — ten tasks
+
+The same, scaled to ten dependencies. Overhead that is paid per-invocation grows
+linearly: the graph-native runners barely move, while the chained `npm`/`bun`
+costs roughly double from the five-task graph.
+
+<BenchChart scenario={data.scenarios.graph10} />
 
 ## Takeaway
 
-`tsr` runs a metacharacter-free `run` string by splitting it and spawning the
-child directly (`execvp`-style) — no language runtime to boot and no wrapping
-shell. It lands essentially tied with the native runners (`make`, `just`), a touch
-ahead of `bun run`, and **~60–75× faster** than the interpreter-backed `npm run`
-and go-task, which pay their startup on every invocation. This "no startup tax" is
-the common-path win `tsr` is designed for.
+For a single task, `tsr` runs a metacharacter-free `run` string by spawning the
+child directly (`execvp`-style) — no language runtime, no wrapping shell — so it
+sits with the native runners (`make`, `just`) and well ahead of `npm run`. The
+gap **compounds across a dependency graph**: because `tsr` resolves the entire
+graph in one process, its cost stays flat while a chained `npm`/`bun` pays its
+startup once per task. That is the case `tsr` is built for.
 
 <Callout type="info" title="Not a build-performance claim">
   This measures runner overhead only. Content-hash and incremental caching are
@@ -46,6 +67,7 @@ the common-path win `tsr` is designed for.
 </Callout>
 
 <Callout type="warning" title="Your numbers will differ">
-  Measured on one reference machine (Linux x86-64). Re-run <code>benches/run.sh</code>
-  locally, then <code>node website/tools/sync-bench.mjs</code> to refresh this page.
+  Measured on one reference machine (Linux x86-64). Regenerate with
+  <code>benches/run.sh</code>, then <code>node website/tools/sync-bench.mjs</code>
+  to refresh this page.
 </Callout>

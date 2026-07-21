@@ -2,9 +2,18 @@
   "name": "tsr-bench-workspace",
   "private": true,
   "version": "0.0.0",
-  "description": "npm/bun script definitions for the cross-tool benchmark.",
   "scripts": {
     "noop": "true",
-    "hello": "echo hello"
+    "steps5": "true && true && true && true && true",
+    "s1": "true",
+    "s2": "true",
+    "s3": "true",
+    "s4": "true",
+    "s5": "true",
+    "s6": "true",
+    "s7": "true",
+    "s8": "true",
+    "s9": "true",
+    "s10": "true"
   }
 }

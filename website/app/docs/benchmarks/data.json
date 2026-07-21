@@ -1,101 +1,195 @@
 {
   "meta": {
-    "generatedAt": "2026-07-21T17:35:27.122Z",
+    "generatedAt": "2026-07-21T19:13:06.135Z",
     "source": "benches/results/*.json (hyperfine --export-json)",
-    "harness": "hyperfine, --shell=none, 20 warmup runs"
+    "harness": "hyperfine, 20 warmup runs; graph scenarios chain npm/bun with &&"
   },
   "scenarios": {
-    "noop": {
-      "label": "no-op — spawn `true`",
+    "startup": {
+      "label": "startup — one task that spawns `true`",
       "results": [
         {
           "command": "tsr",
-          "meanMs": 1.5827335590551221,
-          "stddevMs": 0.15452531480162993,
-          "minMs": 1.204647,
-          "maxMs": 4.654986000000001
+          "meanMs": 1.6864584752747256,
+          "stddevMs": 0.22123971367197862,
+          "minMs": 1.38503,
+          "maxMs": 5.300104
         },
         {
           "command": "npm",
-          "meanMs": 85.60576976000002,
-          "stddevMs": 2.89393838618052,
-          "minMs": 81.860745,
-          "maxMs": 96.727674
+          "meanMs": 94.6121578,
+          "stddevMs": 3.988664067469793,
+          "minMs": 88.104452,
+          "maxMs": 108.882267
         },
         {
           "command": "bun",
-          "meanMs": 2.441603494582045,
-          "stddevMs": 0.22985287134029786,
-          "minMs": 2.264208,
-          "maxMs": 5.730149
+          "meanMs": 2.568861798785771,
+          "stddevMs": 0.3001618165501433,
+          "minMs": 2.21148,
+          "maxMs": 5.817507
         },
         {
           "command": "just",
-          "meanMs": 1.9525770794362605,
-          "stddevMs": 0.1878752346617367,
-          "minMs": 1.781036,
-          "maxMs": 4.465658
+          "meanMs": 2.150971415805023,
+          "stddevMs": 0.30773575881107973,
+          "minMs": 1.8669480000000003,
+          "maxMs": 5.494594
         },
         {
           "command": "task",
-          "meanMs": 102.88841709999997,
-          "stddevMs": 3.556599449851465,
-          "minMs": 97.225378,
-          "maxMs": 117.453237
+          "meanMs": 111.85085988750002,
+          "stddevMs": 5.408361197537761,
+          "minMs": 102.60811100000001,
+          "maxMs": 129.57640800000001
         },
         {
           "command": "make",
-          "meanMs": 1.368172436786656,
-          "stddevMs": 0.15640144932132607,
-          "minMs": 1.185526,
-          "maxMs": 4.533308000000001
+          "meanMs": 1.4908946532865033,
+          "stddevMs": 0.23470517895550755,
+          "minMs": 1.229416,
+          "maxMs": 5.104571000000001
         }
       ]
     },
-    "hello": {
-      "label": "`echo hello`",
+    "steps5": {
+      "label": "in-task steps — one task, 5 sequential commands",
       "results": [
         {
           "command": "tsr",
-          "meanMs": 1.5873984623999986,
-          "stddevMs": 0.1693671550367683,
-          "minMs": 1.3911280000000001,
-          "maxMs": 5.289826
+          "meanMs": 4.984430081260362,
+          "stddevMs": 0.4074409571050136,
+          "minMs": 4.313581,
+          "maxMs": 8.71742
         },
         {
           "command": "npm",
-          "meanMs": 87.27846864,
-          "stddevMs": 3.318773854035077,
-          "minMs": 82.56193,
-          "maxMs": 96.741668
+          "meanMs": 94.6091641,
+          "stddevMs": 3.8170294635105964,
+          "minMs": 85.54706200000001,
+          "maxMs": 104.26605300000001
         },
         {
           "command": "bun",
-          "meanMs": 2.459908816194335,
-          "stddevMs": 0.23149633915694542,
-          "minMs": 2.2582430000000002,
-          "maxMs": 5.844293
+          "meanMs": 2.5926991524547836,
+          "stddevMs": 0.32018954374637565,
+          "minMs": 2.2333350000000003,
+          "maxMs": 6.429023000000001
         },
         {
           "command": "just",
-          "meanMs": 1.9438504759769388,
-          "stddevMs": 0.17587771614409015,
-          "minMs": 1.7874860000000001,
-          "maxMs": 4.551496
+          "meanMs": 4.1574868449931435,
+          "stddevMs": 0.40343202363032027,
+          "minMs": 3.7315800000000006,
+          "maxMs": 8.699466000000001
         },
         {
           "command": "task",
-          "meanMs": 102.45309202999998,
-          "stddevMs": 3.2239429462684757,
-          "minMs": 97.608338,
-          "maxMs": 111.0291
+          "meanMs": 122.72173047500002,
+          "stddevMs": 6.652807083434997,
+          "minMs": 108.471597,
+          "maxMs": 146.17517100000003
         },
         {
           "command": "make",
-          "meanMs": 1.4313103980952373,
-          "stddevMs": 0.16933386483501853,
-          "minMs": 1.260143,
-          "maxMs": 5.00356
+          "meanMs": 3.2406499102691964,
+          "stddevMs": 0.3912019653712304,
+          "minMs": 2.7406680000000003,
+          "maxMs": 7.4819830000000005
+        }
+      ]
+    },
+    "graph5": {
+      "label": "dependency graph — one task, 5 dependencies",
+      "results": [
+        {
+          "command": "tsr",
+          "meanMs": 5.065152113119094,
+          "stddevMs": 0.4084569401685627,
+          "minMs": 4.428479960000001,
+          "maxMs": 9.321244960000001
+        },
+        {
+          "command": "npm",
+          "meanMs": 490.93176044750004,
+          "stddevMs": 16.283016127685297,
+          "minMs": 455.67683196,
+          "maxMs": 526.0914609600001
+        },
+        {
+          "command": "bun",
+          "meanMs": 13.442016175962447,
+          "stddevMs": 0.7922116213958146,
+          "minMs": 12.160240960000001,
+          "maxMs": 16.982398959999998
+        },
+        {
+          "command": "just",
+          "meanMs": 4.241874621485319,
+          "stddevMs": 0.4302211104773686,
+          "minMs": 3.65980696,
+          "maxMs": 8.14190196
+        },
+        {
+          "command": "task",
+          "meanMs": 122.48179541,
+          "stddevMs": 5.781218041648599,
+          "minMs": 110.26156796000001,
+          "maxMs": 141.84478096
+        },
+        {
+          "command": "make",
+          "meanMs": 3.340193887595629,
+          "stddevMs": 0.3299016669176167,
+          "minMs": 2.8777799600000002,
+          "maxMs": 6.795354959999999
+        }
+      ]
+    },
+    "graph10": {
+      "label": "dependency graph — one task, 10 dependencies",
+      "results": [
+        {
+          "command": "tsr",
+          "meanMs": 9.434936551315792,
+          "stddevMs": 0.6359302778224175,
+          "minMs": 8.411542400000002,
+          "maxMs": 13.295835400000001
+        },
+        {
+          "command": "npm",
+          "meanMs": 947.7397176875003,
+          "stddevMs": 17.06962173437663,
+          "minMs": 908.6669694,
+          "maxMs": 982.7178544000001
+        },
+        {
+          "command": "bun",
+          "meanMs": 26.543300632142863,
+          "stddevMs": 1.3926921722472285,
+          "minMs": 24.2408204,
+          "maxMs": 34.703792400000005
+        },
+        {
+          "command": "just",
+          "meanMs": 6.884999376439792,
+          "stddevMs": 0.6412231850114292,
+          "minMs": 6.119437400000001,
+          "maxMs": 11.851905400000001
+        },
+        {
+          "command": "task",
+          "meanMs": 134.0274542375,
+          "stddevMs": 6.024983738271121,
+          "minMs": 117.08313439999999,
+          "maxMs": 150.6364294
+        },
+        {
+          "command": "make",
+          "meanMs": 6.002776558458242,
+          "stddevMs": 0.5418736373550727,
+          "minMs": 5.053101400000001,
+          "maxMs": 10.524535400000001
         }
       ]
     }
