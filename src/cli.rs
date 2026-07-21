@@ -1,8 +1,9 @@
 //! Command-line parsing and the `list` output (SPEC §6, §7).
 //!
 //! Grammar: `tsr <task> [-- <passthrough>…]` runs a task, forwarding everything
-//! after `--` to the resolved command. `tsr list` prints the defined tasks;
-//! `tsr --init` scaffolds a starter `tasks.toml`.
+//! after `--` to the resolved command. `tsr --list` prints the defined tasks and
+//! `tsr --init` scaffolds a starter `tasks.toml`. Builtins are flags, never bare
+//! subcommands, so the first positional is always a task name.
 
 use crate::config::{CONFIG_FILE, Config, Delegate, Task};
 use crate::error::{Result, TsrError};
@@ -12,9 +13,12 @@ tsr — a lightweight, polyglot, repo-aware task runner
 
 USAGE:
     tsr <task> [-- <args>...]   run a task; args after -- are forwarded
-    tsr list                    list the tasks defined in tasks.toml
+    tsr --list                  list the tasks defined in tasks.toml
     tsr --init                  create a starter tasks.toml here
     tsr --help | --version
+
+The first argument is always a task name — every builtin is a flag, so a task
+named `list` or `init` is never shadowed.
 
 EXAMPLES:
     tsr dev
@@ -76,15 +80,17 @@ pub fn parse(args: &[String]) -> Result<Cli> {
         None => (args, &[]),
     };
 
+    // Builtins are flags, never bare subcommands: the first positional argument
+    // is always a task name, so a task called `list` or `init` is never shadowed.
     match head.first().map(String::as_str) {
         None => Err(TsrError::runtime(format!("no task specified\n\n{USAGE}"))),
-        Some("list") => {
+        Some("--list") => {
             if head.len() > 1 {
-                return Err(TsrError::runtime("'list' takes no arguments"));
+                return Err(TsrError::runtime("'--list' takes no arguments"));
             }
             Ok(Cli::List)
         }
-        Some("--init" | "init") => {
+        Some("--init") => {
             if head.len() > 1 {
                 return Err(TsrError::runtime("'--init' takes no arguments"));
             }
@@ -123,7 +129,7 @@ pub fn init(dir: &std::path::Path) -> Result<()> {
     std::fs::write(&path, INIT_TEMPLATE)
         .map_err(|e| TsrError::runtime(format!("cannot write '{}': {e}", path.display())))?;
     println!("Created {}", path.display());
-    println!("Next: edit it, then run `tsr <task>` or `tsr list`.");
+    println!("Next: edit it, then run `tsr <task>` or `tsr --list`.");
     Ok(())
 }
 
@@ -140,7 +146,7 @@ pub fn list(cfg: &Config) {
     }
 }
 
-/// A short human descriptor of a task's form, for `tsr list`.
+/// A short human descriptor of a task's form, for `tsr --list`.
 fn describe(task: &Task) -> String {
     let mut parts: Vec<String> = Vec::new();
     match &task.delegate {
@@ -229,7 +235,7 @@ mod tests {
 
     #[test]
     fn parses_list_help_version() {
-        assert_eq!(parse_ok(&["list"]), Cli::List);
+        assert_eq!(parse_ok(&["--list"]), Cli::List);
         assert_eq!(parse_ok(&["--help"]), Cli::Help);
         assert_eq!(parse_ok(&["-V"]), Cli::Version);
     }
@@ -237,11 +243,30 @@ mod tests {
     #[test]
     fn parses_init() {
         assert_eq!(parse_ok(&["--init"]), Cli::Init);
-        assert_eq!(parse_ok(&["init"]), Cli::Init);
         assert!(
             parse_err(&["--init", "x"])
                 .to_string()
                 .contains("no arguments")
+        );
+    }
+
+    #[test]
+    fn builtin_names_are_not_reserved_as_tasks() {
+        // The first positional is always a task name — builtins are flags only,
+        // so `tsr list` / `tsr init` run tasks called `list` / `init`.
+        assert_eq!(
+            parse_ok(&["list"]),
+            Cli::Run {
+                task: "list".into(),
+                passthrough: vec![],
+            }
+        );
+        assert_eq!(
+            parse_ok(&["init", "--", "--flag"]),
+            Cli::Run {
+                task: "init".into(),
+                passthrough: vec!["--flag".into()],
+            }
         );
     }
 
@@ -290,7 +315,7 @@ mod tests {
     #[test]
     fn list_rejects_arguments() {
         assert!(
-            parse_err(&["list", "x"])
+            parse_err(&["--list", "x"])
                 .to_string()
                 .contains("no arguments")
         );

@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `tsr --init` (also `tsr init`): scaffold a commented starter `tasks.toml` in
-  the current directory, showcasing all three task forms plus the graph. Refuses
-  to overwrite an existing file (exit `64`); the generated file is immediately
-  valid and runnable.
+- `tsr --init`: scaffold a commented starter `tasks.toml` in the current
+  directory, showcasing all three task forms plus the graph. Refuses to overwrite
+  an existing file (exit `64`); the generated file is immediately valid and
+  runnable.
+- Builtins (`--list`, `--init`, `--help`, `--version`) are flags only, never bare
+  subcommands: the first positional argument is always a task name, so a task
+  named `list` or `init` is never shadowed.
 - Website + documentation under `website/`, built with the OTF Web framework and
   `@opentf/web-docs` (`DocsLayout`): a marketing landing page plus a ten-page
   docs section (overview, getting started, configuration, task forms, mini-shell,
@@ -59,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parallel` batches, `packages` fan-out, and fail-fast that stops sequential
   launches and kills running parallel siblings, then prints a summary. The first
   failing child's exact exit code is propagated; runner breakage exits `64`.
-- CLI: `tsr <task>`, `--` argument passthrough (SPEC §6), and `tsr list`, plus
+- CLI: `tsr <task>`, `--` argument passthrough (SPEC §6), and `tsr --list`, plus
   `--help` / `--version`. Exit codes follow SPEC §10: `0`, the failing child's
   exact code, or `64` for any runner-level error.
 - End-to-end test suite driving the compiled binary against temp workspaces, and

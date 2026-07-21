@@ -7,10 +7,13 @@ description: Every tsr command and flag — running tasks, passthrough, list, an
 
 ```text
 tsr <task> [-- <args>...]   run a task; args after -- are forwarded
-tsr list                    list the tasks defined in tasks.toml
+tsr --list                  list the tasks defined in tasks.toml
 tsr --init                  create a starter tasks.toml here
 tsr --help | --version
 ```
+
+The first argument is **always a task name**. Every builtin is a flag, so a task
+named `list` or `init` is never shadowed — `tsr list` runs your `list` task.
 
 ## `tsr <task>`
 
@@ -38,7 +41,7 @@ args = ["--color"]
 tsr test -- --watch    # → vitest --color --watch
 ```
 
-## `tsr list`
+## `tsr --list`
 
 Prints the tasks defined in `tasks.toml`, each with a one-line form descriptor.
 
@@ -54,7 +57,7 @@ Available tasks:
 
 Scaffolds a commented starter `tasks.toml` in the current directory, showcasing
 all three task forms plus the graph. It refuses to overwrite an existing file, so
-it is always safe to run. (`tsr init` works too.)
+it is always safe to run.
 
 ## `tsr --help` · `tsr --version`
 

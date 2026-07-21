@@ -19,11 +19,14 @@ cargo build --release   # binary at target/release/tsr
 ```sh
 tsr <task>              # run a task
 tsr test -- --watch     # forward args after -- to the resolved command
-tsr list                # list the tasks defined in tasks.toml
+tsr --list              # list the tasks defined in tasks.toml
+tsr --init              # scaffold a starter tasks.toml
 tsr --help
 ```
 
-`tsr` finds the workspace root by walking up to the nearest `tasks.toml`.
+`tsr` finds the workspace root by walking up to the nearest `tasks.toml`. The
+first argument is always a task name — every builtin is a flag, so a task named
+`list` or `init` is never shadowed.
 
 ## `tasks.toml`
 

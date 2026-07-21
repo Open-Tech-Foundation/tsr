@@ -216,11 +216,25 @@ fn list_shows_tasks() {
         "tasks.toml",
         "[tasks.build]\ndelegate = \"turbo\"\n[tasks.dev]\nrun = \"vite\"\n",
     );
-    let out = tsr(&ws, &["list"]);
+    let out = tsr(&ws, &["--list"]);
     assert_eq!(code(&out), 0);
     let s = stdout(&out);
     assert!(s.contains("build") && s.contains("delegate: turbo"));
     assert!(s.contains("dev") && s.contains("run: vite"));
+}
+
+#[test]
+fn a_task_named_list_is_not_shadowed_by_a_builtin() {
+    // Builtins are flags (`--list`), so the bare word `list` runs the task.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.list]\nrun = \"echo iam-the-task\"\n",
+    );
+    let out = tsr(&ws, &["list"]);
+    assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("iam-the-task"), "{}", stdout(&out));
 }
 
 #[test]
