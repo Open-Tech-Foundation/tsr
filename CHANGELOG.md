@@ -25,3 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$VAR`/`${VAR}` expansion, `&&`/`||`/`;` sequencing, and single/double quoting.
   Unsupported constructs (`|`, `>`/`<`, globs, `$(...)`/backticks, bare `&`,
   subshells) are rejected at load time with exit code `64`.
+- Environment model (SPEC §7): merge `task > workspace [env] > root .env >
+  process` (lower sources augmented, never wiped), with per-value `$VAR`
+  expansion against process env and earlier keys, root `.env` auto-loading, and
+  a load-time check that every `$VAR` in a `run` string is defined (else `64`).

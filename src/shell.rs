@@ -58,6 +58,16 @@ pub enum RunPlan {
     Shell(Program),
 }
 
+impl RunPlan {
+    /// Variable names referenced by this plan (none for a direct spawn).
+    pub fn referenced_vars(&self) -> Vec<String> {
+        match self {
+            RunPlan::Direct(_) => Vec::new(),
+            RunPlan::Shell(p) => p.referenced_vars(),
+        }
+    }
+}
+
 /// A command whose words have been expanded against the env, ready to spawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpandedCommand {

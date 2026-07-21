@@ -2,6 +2,7 @@
 
 mod config;
 mod detect;
+mod env;
 mod error;
 mod resolve;
 mod shell;
