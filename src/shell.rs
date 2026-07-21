@@ -339,9 +339,7 @@ impl Lexer {
                 Some('\'') => break,
                 Some(c) => lit.push(c),
                 None => {
-                    return Err(TsrError::config(
-                        "'run' string: unterminated single quote",
-                    ));
+                    return Err(TsrError::config("'run' string: unterminated single quote"));
                 }
             }
         }
@@ -371,9 +369,7 @@ impl Lexer {
                     push_fragment(cur, Fragment::Literal(c.to_string()));
                 }
                 None => {
-                    return Err(TsrError::config(
-                        "'run' string: unterminated double quote",
-                    ));
+                    return Err(TsrError::config("'run' string: unterminated double quote"));
                 }
             }
         }
@@ -394,9 +390,7 @@ impl Lexer {
                         Some('}') => break,
                         Some(c) => name.push(c),
                         None => {
-                            return Err(TsrError::config(
-                                "'run' string: unterminated '${...}'",
-                            ));
+                            return Err(TsrError::config("'run' string: unterminated '${...}'"));
                         }
                     }
                 }
@@ -436,17 +430,13 @@ fn push_fragment(word: &mut Vec<Fragment>, frag: Fragment) {
 /// hatch (SPEC §8.2 table).
 fn reject_unsupported(c: char) -> Result<()> {
     match c {
-        '|' => Err(unsupported_msg('|', "pipe", "use `delegate` or a script file")),
-        '>' | '<' => Err(unsupported_msg(
-            c,
-            "redirection",
-            "use a script file",
+        '|' => Err(unsupported_msg(
+            '|',
+            "pipe",
+            "use `delegate` or a script file",
         )),
-        '*' | '?' | '[' => Err(unsupported_msg(
-            c,
-            "glob",
-            "pass an explicit path",
-        )),
+        '>' | '<' => Err(unsupported_msg(c, "redirection", "use a script file")),
+        '*' | '?' | '[' => Err(unsupported_msg(c, "glob", "pass an explicit path")),
         '`' => Err(unsupported_substitution()),
         '&' => Err(unsupported_msg(
             '&',
@@ -503,9 +493,7 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let plan = shell(input)
-            .expand(&|k| map.get(k).cloned())
-            .unwrap();
+        let plan = shell(input).expand(&|k| map.get(k).cloned()).unwrap();
         std::iter::once(plan.first.clone())
             .chain(plan.rest.iter().map(|(_, c)| c.clone()))
             .map(|c| c.argv)
@@ -520,7 +508,10 @@ mod tests {
 
     #[test]
     fn quotes_group_words() {
-        assert_eq!(expand_argv("echo 'hello world'", &[]), vec![vec!["echo", "hello world"]]);
+        assert_eq!(
+            expand_argv("echo 'hello world'", &[]),
+            vec![vec!["echo", "hello world"]]
+        );
         assert_eq!(expand_argv("echo \"a b\"", &[]), vec![vec!["echo", "a b"]]);
     }
 
@@ -555,9 +546,7 @@ mod tests {
 
     #[test]
     fn undefined_var_is_hard_error() {
-        let err = shell("deploy $MISSING")
-            .expand(&|_| None)
-            .unwrap_err();
+        let err = shell("deploy $MISSING").expand(&|_| None).unwrap_err();
         assert!(matches!(err, TsrError::Config(_)));
         assert!(err.to_string().contains("$MISSING"));
         assert_eq!(err.exit_code(), 64);
@@ -602,12 +591,22 @@ mod tests {
 
     #[test]
     fn rejects_pipe() {
-        assert!(parse("cat x | grep y").unwrap_err().to_string().contains("pipe"));
+        assert!(
+            parse("cat x | grep y")
+                .unwrap_err()
+                .to_string()
+                .contains("pipe")
+        );
     }
 
     #[test]
     fn rejects_redirection() {
-        assert!(parse("echo x > file").unwrap_err().to_string().contains("redirection"));
+        assert!(
+            parse("echo x > file")
+                .unwrap_err()
+                .to_string()
+                .contains("redirection")
+        );
         assert!(parse("cmd 2>&1").is_err());
     }
 
@@ -619,7 +618,12 @@ mod tests {
 
     #[test]
     fn rejects_command_substitution() {
-        assert!(parse("echo $(date)").unwrap_err().to_string().contains("substitution"));
+        assert!(
+            parse("echo $(date)")
+                .unwrap_err()
+                .to_string()
+                .contains("substitution")
+        );
         assert!(parse("echo `date`").is_err());
     }
 

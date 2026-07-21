@@ -58,9 +58,9 @@ fn dfs(
         return Ok(());
     }
 
-    let task = cfg.task(key).ok_or_else(|| {
-        TsrError::config(format!("task depends on unknown task '{key}'"))
-    })?;
+    let task = cfg
+        .task(key)
+        .ok_or_else(|| TsrError::config(format!("task depends on unknown task '{key}'")))?;
 
     on_stack.push(key.to_string());
     for dep in &task.deps {

@@ -233,8 +233,7 @@ impl<'a> Ctx<'a> {
         }
 
         // 2. The task's own command.
-        let has_own =
-            task.run.is_some() || task.delegate.is_some() || task.packages.is_some();
+        let has_own = task.run.is_some() || task.delegate.is_some() || task.packages.is_some();
 
         if let Some(patterns) = &task.packages {
             self.run_packages(task, patterns, passthrough)
@@ -311,7 +310,9 @@ impl<'a> Ctx<'a> {
             Invocation::Run(s) => match shell::parse(&s).map_err(|e| strip_error(&e))? {
                 RunPlan::Direct(argv) => {
                     let mut it = argv.into_iter();
-                    let program = it.next().ok_or_else(|| "'run' string is empty".to_string())?;
+                    let program = it
+                        .next()
+                        .ok_or_else(|| "'run' string is empty".to_string())?;
                     Action::Spawn {
                         program,
                         args: extra(it.collect()),
@@ -449,11 +450,7 @@ impl<'a> Ctx<'a> {
     /// Run a mini-shell sequence with `&&`/`||`/`;` semantics (SPEC §8.1),
     /// checking the abort flag between commands.
     fn run_shell(&self, plan: &ExecPlan, job: &Job) -> LeafWait {
-        let mut last = match self.spawn_wait(
-            &plan.first.argv[0],
-            &plan.first.argv[1..],
-            job,
-        ) {
+        let mut last = match self.spawn_wait(&plan.first.argv[0], &plan.first.argv[1..], job) {
             LeafWait::Exited(c) => c,
             other => return other,
         };
@@ -706,7 +703,10 @@ mod tests {
         let start = Instant::now();
         let code = run(&cfg, "top", &[]);
         assert_eq!(code, 1);
-        assert!(start.elapsed() < Duration::from_secs(4), "slow sibling not killed");
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "slow sibling not killed"
+        );
     }
 
     #[test]

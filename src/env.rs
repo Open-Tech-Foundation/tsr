@@ -316,7 +316,8 @@ mod tests {
         let cfg = Config::load(&write_config("[tasks.x]\nrun = \"echo $TOKEN\"\n")).unwrap();
         let keys = vec!["x".to_string()];
         assert!(
-            validate_run_vars_from(&cfg, &keys, &HashMap::new(), &owned(&[("TOKEN", "abc")])).is_ok()
+            validate_run_vars_from(&cfg, &keys, &HashMap::new(), &owned(&[("TOKEN", "abc")]))
+                .is_ok()
         );
     }
 

@@ -41,3 +41,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: `tsr <task>`, `--` argument passthrough (SPEC §6), and `tsr list`, plus
   `--help` / `--version`. Exit codes follow SPEC §10: `0`, the failing child's
   exact code, or `64` for any runner-level error.
+- End-to-end test suite driving the compiled binary against temp workspaces, and
+  expanded README covering configuration, `run` strings, env, and exit codes.

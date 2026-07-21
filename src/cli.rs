@@ -50,9 +50,9 @@ pub fn parse(args: &[String]) -> Result<Cli> {
         }
         Some("-h" | "--help") => Ok(Cli::Help),
         Some("-V" | "--version") => Ok(Cli::Version),
-        Some(flag) if flag.starts_with('-') => {
-            Err(TsrError::runtime(format!("unknown flag '{flag}'\n\n{USAGE}")))
-        }
+        Some(flag) if flag.starts_with('-') => Err(TsrError::runtime(format!(
+            "unknown flag '{flag}'\n\n{USAGE}"
+        ))),
         Some(task) => {
             if head.len() > 1 {
                 return Err(TsrError::runtime(format!(
@@ -194,6 +194,10 @@ mod tests {
 
     #[test]
     fn list_rejects_arguments() {
-        assert!(parse_err(&["list", "x"]).to_string().contains("no arguments"));
+        assert!(
+            parse_err(&["list", "x"])
+                .to_string()
+                .contains("no arguments")
+        );
     }
 }

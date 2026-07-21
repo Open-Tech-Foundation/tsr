@@ -35,7 +35,6 @@ impl Ecosystem {
             Ecosystem::Python => ("uv".into(), vec!["run".into(), task.into()]),
         }
     }
-
 }
 
 /// Detect the ecosystem of the package rooted at `dir` by probing for marker
@@ -218,7 +217,11 @@ mod tests {
     #[test]
     fn reads_manifest_names() {
         let d = scratch();
-        fs::write(d.join("package.json"), "{\n  \"name\": \"@scope/web\",\n  \"version\": \"1\"\n}").unwrap();
+        fs::write(
+            d.join("package.json"),
+            "{\n  \"name\": \"@scope/web\",\n  \"version\": \"1\"\n}",
+        )
+        .unwrap();
         assert_eq!(manifest_name(&d, Ecosystem::Npm), Some("@scope/web".into()));
 
         let d = scratch();
@@ -227,7 +230,10 @@ mod tests {
 
         let d = scratch();
         fs::write(d.join("go.mod"), "module github.com/me/proj\n\ngo 1.22\n").unwrap();
-        assert_eq!(manifest_name(&d, Ecosystem::Go), Some("github.com/me/proj".into()));
+        assert_eq!(
+            manifest_name(&d, Ecosystem::Go),
+            Some("github.com/me/proj".into())
+        );
 
         let d = scratch();
         fs::write(d.join("pyproject.toml"), "[project]\nname = \"pkg\"\n").unwrap();

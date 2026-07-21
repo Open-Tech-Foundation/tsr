@@ -67,7 +67,6 @@ impl Task {
     pub fn task_name(&self) -> &str {
         self.key.rsplit('#').next().unwrap_or(&self.key)
     }
-
 }
 
 impl Config {
@@ -412,7 +411,10 @@ mod tests {
         assert_eq!(dev.dir.as_deref(), Some("apps/web"));
         assert_eq!(dev.args, vec!["--host"]);
 
-        assert_eq!(cfg.task("test").unwrap().packages, Some(vec!["apps/*".into()]));
+        assert_eq!(
+            cfg.task("test").unwrap().packages,
+            Some(vec!["apps/*".into()])
+        );
         assert_eq!(
             cfg.task("build").unwrap().delegate,
             Some(Delegate::Bin("turbo".into()))
@@ -433,7 +435,8 @@ mod tests {
 
     #[test]
     fn preserves_comments_and_unknown_keys_on_round_trip() {
-        let src = "# top comment\n[tasks.dev]\nrun = \"vite\" # trailing\nfuture_key = \"keep me\"\n";
+        let src =
+            "# top comment\n[tasks.dev]\nrun = \"vite\" # trailing\nfuture_key = \"keep me\"\n";
         let cfg = load(src).unwrap();
         // Unknown key is tolerated (not modeled) but survives via the document.
         assert_eq!(cfg.doc.to_string(), src);
