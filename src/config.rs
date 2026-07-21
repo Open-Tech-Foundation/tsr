@@ -28,7 +28,10 @@ pub struct Config {
     pub env: Vec<(String, String)>,
     /// Tasks keyed by their full table key (may contain a `#` package prefix).
     pub tasks: BTreeMap<String, Task>,
-    /// The parsed document, retained for comment/unknown-key-preserving edits.
+    /// The parsed document, retained so comments and unknown keys survive a
+    /// round-trip when the config is rewritten (SPEC §1.5). Not read on the
+    /// execution path; consumed by tooling and the round-trip test.
+    #[allow(dead_code)]
     pub doc: DocumentMut,
 }
 
@@ -65,10 +68,6 @@ impl Task {
         self.key.rsplit('#').next().unwrap_or(&self.key)
     }
 
-    /// The package portion of a `pkg#task` key, if present.
-    pub fn package(&self) -> Option<&str> {
-        self.key.split_once('#').map(|(pkg, _)| pkg)
-    }
 }
 
 impl Config {
@@ -92,7 +91,7 @@ impl Config {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let mut cfg = parse(&text, root)?;
+        let cfg = parse(&text, root)?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -127,10 +126,10 @@ fn parse(text: &str, root: PathBuf) -> Result<Config> {
         .map_err(|e| TsrError::config(format!("invalid TOML in '{CONFIG_FILE}': {e}")))?;
 
     let mut members = Vec::new();
-    if let Some(ws) = doc.get("workspace").and_then(Item::as_table_like) {
-        if let Some(m) = ws.get("members") {
-            members = parse_string_array(m, "workspace.members")?;
-        }
+    if let Some(ws) = doc.get("workspace").and_then(Item::as_table_like)
+        && let Some(m) = ws.get("members")
+    {
+        members = parse_string_array(m, "workspace.members")?;
     }
 
     let env = match doc.get("env") {

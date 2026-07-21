@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{Config, Task};
 use crate::env;
-use crate::error::{Outcome, Result, TsrError};
+use crate::error::TsrError;
 use crate::resolve::{self, Invocation};
 use crate::shell::{self, ExecPlan, RunPlan, Sep};
 use crate::workspace;
@@ -27,33 +27,30 @@ use crate::workspace;
 /// How often a running child is polled for completion / abort (SPEC §5.2).
 const POLL_INTERVAL: Duration = Duration::from_millis(15);
 
-/// Run `root` and its dependency tree. `passthrough` is forwarded to the root
-/// task's own command (SPEC §6). Returns the propagated [`Outcome`], or a
-/// runner-level error (exit `64`) if the runner itself could not proceed.
-pub fn run(cfg: &Config, root: &str, passthrough: &[String]) -> Result<Outcome> {
+/// Run `root` and its dependency tree, owning all failure reporting. Returns the
+/// process exit code to propagate (SPEC §10): `0` on success, the first failing
+/// child's exact code, or `64` when the runner itself could not proceed (bad
+/// spawn, missing delegate, unmatched `packages`, …). `passthrough` is forwarded
+/// to the root task's own command (SPEC §6).
+pub fn run(cfg: &Config, root: &str, passthrough: &[String]) -> i32 {
     let ctx = Ctx::new(cfg);
-    let status = ctx.run_task(root, passthrough, true);
+    let _ = ctx.run_task(root, passthrough, true);
 
     let runner_error = ctx.runner_error.lock().unwrap().clone();
     let first_failure = *ctx.first_failure.lock().unwrap();
 
-    let outcome = match status {
-        Status::Ok => Outcome::Success,
-        _ => Outcome::TaskFailed(first_failure.unwrap_or(1)),
+    // A genuine child failure yields its exact code; otherwise a runner-level
+    // failure is 64; otherwise success.
+    let code = match (first_failure, &runner_error) {
+        (Some(c), _) => c,
+        (None, Some(_)) => crate::error::EXIT_RUNNER_ERROR,
+        (None, None) => 0,
     };
 
-    if outcome != Outcome::Success || runner_error.is_some() {
-        ctx.print_summary(root, &outcome, runner_error.as_deref());
+    if code != 0 {
+        ctx.print_summary(root, code, runner_error.as_deref());
     }
-
-    if let Some(msg) = runner_error {
-        // The runner itself broke (bad spawn, missing delegate, …) → exit 64,
-        // unless a genuine child failure already produced a real signal.
-        if first_failure.is_none() {
-            return Err(TsrError::runtime(msg));
-        }
-    }
-    Ok(outcome)
+    code
 }
 
 /// Control-flow status of a task or job. `Copy` so it can be memoised cheaply;
@@ -511,7 +508,7 @@ impl<'a> Ctx<'a> {
 
     // --- reporting ---
 
-    fn print_summary(&self, root: &str, outcome: &Outcome, runner_error: Option<&str>) {
+    fn print_summary(&self, root: &str, code: i32, runner_error: Option<&str>) {
         let results = self.results.lock().unwrap();
         eprintln!();
         eprintln!("✗ {root} failed");
@@ -537,7 +534,7 @@ impl<'a> Ctx<'a> {
             eprintln!("  {msg}");
             eprintln!();
         }
-        eprintln!("exit code: {}", outcome.exit_code());
+        eprintln!("exit code: {code}");
     }
 }
 
@@ -608,9 +605,9 @@ mod tests {
         (Config::load(&path).unwrap(), root)
     }
 
-    fn run_task(toml: &str, task: &str) -> Result<Outcome> {
+    fn run_task(toml: &str, task: &str) -> i32 {
         let (cfg, _root) = setup(toml);
-        graph::validate(&cfg, task)?;
+        graph::validate(&cfg, task).unwrap();
         run(&cfg, task, &[])
     }
 
@@ -618,31 +615,24 @@ mod tests {
 
     #[test]
     fn single_run_task_succeeds() {
-        assert_eq!(
-            run_task("[tasks.ok]\nrun = \"true\"\n", "ok").unwrap(),
-            Outcome::Success
-        );
+        assert_eq!(run_task("[tasks.ok]\nrun = \"true\"\n", "ok"), 0);
     }
 
     #[test]
     fn single_run_task_propagates_failure_code() {
-        assert_eq!(
-            run_task("[tasks.bad]\nrun = \"false\"\n", "bad").unwrap(),
-            Outcome::TaskFailed(1)
-        );
+        assert_eq!(run_task("[tasks.bad]\nrun = \"false\"\n", "bad"), 1);
     }
 
     #[test]
     fn propagates_exact_child_exit_code() {
         let toml = "[tasks.x]\ndelegate = { bin = \"sh\", args = [\"-c\", \"exit 3\"] }\n";
-        assert_eq!(run_task(toml, "x").unwrap(), Outcome::TaskFailed(3));
+        assert_eq!(run_task(toml, "x"), 3);
     }
 
     #[test]
     fn missing_binary_is_runner_error_64() {
         let toml = "[tasks.x]\nrun = \"definitely-not-a-real-binary-xyz\"\n";
-        let err = run_task(toml, "x").unwrap_err();
-        assert_eq!(err.exit_code(), 64);
+        assert_eq!(run_task(toml, "x"), 64);
     }
 
     #[test]
@@ -659,7 +649,7 @@ mod tests {
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "ci").unwrap();
         // a fails → b must be skipped (never launched).
-        assert_eq!(run(&cfg, "ci", &[]).unwrap(), Outcome::TaskFailed(1));
+        assert_eq!(run(&cfg, "ci", &[]), 1);
         assert!(!marker.exists(), "sibling 'b' should not have run");
     }
 
@@ -674,7 +664,7 @@ mod tests {
         std::fs::write(root.join("tasks.toml"), &toml).unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "top").unwrap();
-        assert_eq!(run(&cfg, "top", &[]).unwrap(), Outcome::Success);
+        assert_eq!(run(&cfg, "top", &[]), 0);
         assert!(marker.exists());
     }
 
@@ -692,7 +682,7 @@ mod tests {
         std::fs::write(root.join("tasks.toml"), &toml).unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "top").unwrap();
-        assert_eq!(run(&cfg, "top", &[]).unwrap(), Outcome::Success);
+        assert_eq!(run(&cfg, "top", &[]), 0);
         let contents = std::fs::read_to_string(&log).unwrap();
         assert_eq!(contents.lines().count(), 1, "base must run exactly once");
     }
@@ -701,7 +691,7 @@ mod tests {
     fn parallel_batch_all_succeed() {
         let toml = "[tasks.top]\ndeps = [\"a\", \"b\"]\nparallel = true\n\
                     [tasks.a]\nrun = \"true\"\n[tasks.b]\nrun = \"true\"\n";
-        assert_eq!(run_task(toml, "top").unwrap(), Outcome::Success);
+        assert_eq!(run_task(toml, "top"), 0);
     }
 
     #[test]
@@ -714,8 +704,8 @@ mod tests {
         let (cfg, _r) = setup(toml);
         graph::validate(&cfg, "top").unwrap();
         let start = Instant::now();
-        let outcome = run(&cfg, "top", &[]).unwrap();
-        assert_eq!(outcome, Outcome::TaskFailed(1));
+        let code = run(&cfg, "top", &[]);
+        assert_eq!(code, 1);
         assert!(start.elapsed() < Duration::from_secs(4), "slow sibling not killed");
     }
 

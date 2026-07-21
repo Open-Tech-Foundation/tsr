@@ -21,6 +21,26 @@ pub fn validate(cfg: &Config, root: &str) -> Result<()> {
     dfs(cfg, root, &mut on_stack, &mut visited)
 }
 
+/// All task keys reachable from `root` through `deps`, including `root` itself.
+/// Assumes the subgraph has already been [`validate`]d (defined, acyclic).
+pub fn reachable(cfg: &Config, root: &str) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut stack = vec![root.to_string()];
+    while let Some(key) = stack.pop() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        order.push(key.clone());
+        if let Some(task) = cfg.task(&key) {
+            for dep in &task.deps {
+                stack.push(dep.clone());
+            }
+        }
+    }
+    order
+}
+
 fn dfs(
     cfg: &Config,
     key: &str,

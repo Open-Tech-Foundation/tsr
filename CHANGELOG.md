@@ -38,3 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parallel` batches, `packages` fan-out, and fail-fast that stops sequential
   launches and kills running parallel siblings, then prints a summary. The first
   failing child's exact exit code is propagated; runner breakage exits `64`.
+- CLI: `tsr <task>`, `--` argument passthrough (SPEC §6), and `tsr list`, plus
+  `--help` / `--version`. Exit codes follow SPEC §10: `0`, the failing child's
+  exact code, or `64` for any runner-level error.

@@ -36,15 +36,6 @@ impl Ecosystem {
         }
     }
 
-    /// The marker file that identifies this ecosystem.
-    pub fn marker(self) -> &'static str {
-        match self {
-            Ecosystem::Npm | Ecosystem::Bun => "package.json",
-            Ecosystem::Cargo => "Cargo.toml",
-            Ecosystem::Go => "go.mod",
-            Ecosystem::Python => "pyproject.toml",
-        }
-    }
 }
 
 /// Detect the ecosystem of the package rooted at `dir` by probing for marker

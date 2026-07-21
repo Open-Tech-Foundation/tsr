@@ -167,6 +167,11 @@ impl ExecPlan {
     /// Execute the sequence, applying `&&`/`||`/`;` semantics, using `spawn` to
     /// run each command and yield its exit code. Returns the sequence's exit
     /// code: the last command actually executed (SPEC §8.1).
+    ///
+    /// The executor uses its own abort-aware loop (`exec::run_shell`) on the hot
+    /// path; this pure-logic version is the reference used to unit-test the
+    /// sequencing semantics in isolation.
+    #[allow(dead_code)]
     pub fn run(&self, spawn: &mut dyn FnMut(&[String]) -> i32) -> i32 {
         let mut code = spawn(&self.first.argv);
         for (sep, cmd) in &self.rest {

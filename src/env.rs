@@ -108,12 +108,12 @@ fn expand_value(input: &str, map: &HashMap<String, String>) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '$' {
-            if let Some((name, next)) = read_var(&chars, i + 1) {
-                out.push_str(map.get(&name).map(String::as_str).unwrap_or(""));
-                i = next;
-                continue;
-            }
+        if chars[i] == '$'
+            && let Some((name, next)) = read_var(&chars, i + 1)
+        {
+            out.push_str(map.get(&name).map(String::as_str).unwrap_or(""));
+            i = next;
+            continue;
         }
         out.push(chars[i]);
         i += 1;
@@ -158,20 +158,24 @@ fn read_var(chars: &[char], start: usize) -> Option<(String, usize)> {
     }
 }
 
-/// Validate, at load time, that every `$VAR` referenced by a `run` string is
-/// defined in that task's merged env (SPEC §7.3). Undefined → exit `64`.
-pub fn validate_run_vars(cfg: &Config) -> Result<()> {
+/// Validate, at load time, that every `$VAR` referenced by a `run` string in the
+/// given tasks is defined in that task's merged env (SPEC §7.3). Undefined →
+/// exit `64`. Only the tasks that will actually run are checked, so an unrelated
+/// broken task does not block the invoked one.
+pub fn validate_run_vars(cfg: &Config, keys: &[String]) -> Result<()> {
     let process: HashMap<String, String> = std::env::vars().collect();
     let dotenv = load_dotenv(&cfg.root);
-    validate_run_vars_from(cfg, &process, &dotenv)
+    validate_run_vars_from(cfg, keys, &process, &dotenv)
 }
 
 fn validate_run_vars_from(
     cfg: &Config,
+    keys: &[String],
     process: &HashMap<String, String>,
     dotenv: &[(String, String)],
 ) -> Result<()> {
-    for task in cfg.tasks.values() {
+    for key in keys {
+        let Some(task) = cfg.task(key) else { continue };
         let Some(run) = &task.run else { continue };
         let plan = shell::parse(run)?;
         let vars = plan.referenced_vars();
@@ -284,7 +288,8 @@ mod tests {
             "[tasks.deploy]\nrun = \"deploy --target $TARGET\"\n",
         ))
         .unwrap();
-        let err = validate_run_vars_from(&cfg, &HashMap::new(), &[]).unwrap_err();
+        let keys = vec!["deploy".to_string()];
+        let err = validate_run_vars_from(&cfg, &keys, &HashMap::new(), &[]).unwrap_err();
         assert!(err.to_string().contains("$TARGET"));
         assert_eq!(err.exit_code(), 64);
     }
@@ -295,18 +300,35 @@ mod tests {
             "[tasks.deploy]\nrun = \"deploy $TARGET\"\nenv = { TARGET = \"prod\" }\n",
         ))
         .unwrap();
-        assert!(validate_run_vars_from(&cfg, &HashMap::new(), &[]).is_ok());
+        let keys = vec!["deploy".to_string()];
+        assert!(validate_run_vars_from(&cfg, &keys, &HashMap::new(), &[]).is_ok());
     }
 
     #[test]
     fn run_var_defined_in_process_env_passes() {
         let cfg = Config::load(&write_config("[tasks.x]\nrun = \"echo $HOME\"\n")).unwrap();
-        assert!(validate_run_vars_from(&cfg, &proc(&[("HOME", "/h")]), &[]).is_ok());
+        let keys = vec!["x".to_string()];
+        assert!(validate_run_vars_from(&cfg, &keys, &proc(&[("HOME", "/h")]), &[]).is_ok());
     }
 
     #[test]
     fn run_var_defined_in_dotenv_passes() {
         let cfg = Config::load(&write_config("[tasks.x]\nrun = \"echo $TOKEN\"\n")).unwrap();
-        assert!(validate_run_vars_from(&cfg, &HashMap::new(), &owned(&[("TOKEN", "abc")])).is_ok());
+        let keys = vec!["x".to_string()];
+        assert!(
+            validate_run_vars_from(&cfg, &keys, &HashMap::new(), &owned(&[("TOKEN", "abc")])).is_ok()
+        );
+    }
+
+    #[test]
+    fn unreachable_broken_task_is_not_checked() {
+        // Only the requested keys are validated; an unrelated undefined-var task
+        // must not block them.
+        let cfg = Config::load(&write_config(
+            "[tasks.ok]\nrun = \"echo hi\"\n[tasks.broken]\nrun = \"deploy $NOPE\"\n",
+        ))
+        .unwrap();
+        let keys = vec!["ok".to_string()];
+        assert!(validate_run_vars_from(&cfg, &keys, &HashMap::new(), &[]).is_ok());
     }
 }

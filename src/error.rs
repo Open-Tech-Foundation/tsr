@@ -1,10 +1,10 @@
 //! Error types and their mapping to process exit codes.
 //!
 //! Exit-code contract (SPEC §10):
-//! - `0`            success
-//! - child's code  a task's child process failed; its exact code is propagated
-//! - `64`          runner-level error (config parse, validation, delegate binary
-//!                 not found, undefined `$VAR`, rejected mini-shell metacharacter)
+//! - `0` — success
+//! - child's code — a task's child process failed; its exact code is propagated
+//! - `64` — runner-level error (config parse, validation, delegate binary not
+//!   found, undefined `$VAR`, rejected mini-shell metacharacter)
 
 use std::fmt;
 
@@ -58,21 +58,3 @@ impl From<std::io::Error> for TsrError {
 }
 
 pub type Result<T> = std::result::Result<T, TsrError>;
-
-/// The result of running the requested task tree. Distinguishes clean success
-/// from a task's child failure (whose exact code we must propagate verbatim).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
-    Success,
-    /// A task's child process exited non-zero; carries that exact code.
-    TaskFailed(i32),
-}
-
-impl Outcome {
-    pub fn exit_code(self) -> i32 {
-        match self {
-            Outcome::Success => 0,
-            Outcome::TaskFailed(code) => code,
-        }
-    }
-}
