@@ -23,21 +23,21 @@ The `shell` scenario exercises the mini-shell tsr supports natively (`$VAR`,
 `sh -c` or a script file, so they aren't part of this comparison.
 
 The `localbin` scenario resolves a binary from `node_modules/.bin` — the lookup
-`tsr`, `npm`, and `bun` perform but `just`/`make`/go-task do not — so it compares
-only those three. The stand-in binary is a trivial Node script, because the real
-tools it represents (`vite`, `eslint`) are Node programs; every runner pays Node's
-startup once, and the delta is the runner's own overhead on top.
+`tsr`, `npm`, and `bun` perform but `just`/`make`/go-task/`mise` do not — so it
+compares only those three. The stand-in binary is a trivial Node script, because
+the real tools it represents (`vite`, `eslint`) are Node programs; every runner
+pays Node's startup once, and the delta is the runner's own overhead on top.
 
 The task definitions are generated for every tool by
 [`gen-workspace.sh`](gen-workspace.sh) into [`workspace/`](workspace/):
 [`tasks.toml`](workspace/tasks.toml) (tsr), [`package.json`](workspace/package.json)
 (npm/bun), [`justfile`](workspace/justfile) (just),
-[`Taskfile.yml`](workspace/Taskfile.yml) (go-task), and
-[`Makefile`](workspace/Makefile) (make).
+[`Taskfile.yml`](workspace/Taskfile.yml) (go-task), [`Makefile`](workspace/Makefile)
+(make), and [`mise.toml`](workspace/mise.toml) (mise).
 
-`tsr`, `just`, go-task, and `make` express a dependency graph natively — one
-launch resolves the whole graph. `npm` and `bun` have **no** dependency graph, so
-the graph scenarios chain the tasks with `&&` (`npm run s1 && npm run s2 && …`),
+`tsr`, `just`, go-task, `make`, and `mise` express a dependency graph natively —
+one launch resolves the whole graph. `npm` and `bun` have **no** dependency graph,
+so the graph scenarios chain the tasks with `&&` (`npm run s1 && npm run s2 && …`),
 exactly as their users do — which is why the per-invocation cost compounds for
 them. That contrast is the point of the benchmark, not a handicap.
 
@@ -65,6 +65,7 @@ Install the comparison tools with:
 ```sh
 cargo install hyperfine just
 npm install -g @go-task/cli    # provides `task`
+curl https://mise.run | sh     # provides `mise`
 ```
 
 Results are written to `results/<scenario>.{md,json}`. The website's benchmark
@@ -81,31 +82,32 @@ Mean wall-clock, in milliseconds:
 
 | Runner | `startup` | `shell` | `steps5` | `graph5` | `graph10` |
 |--------|----------:|--------:|---------:|---------:|----------:|
-| `make` | 1.4 | 1.5 | 3.1 | 3.3 | 5.6 |
-| **`tsr`** | **1.7** | **2.5** | **5.0** | **5.2** | **9.5** |
-| `just` | 2.1 | 2.1 | 4.1 | 4.1 | 7.0 |
-| `bun` | 2.4 | 2.5 | 2.5 | 12.2 | 25.7 |
-| `task` (go-task) | 105.0 | 106.0 | 110.0 | 114.5 | 116.0 |
-| `npm` | 87.6 | 89.0 | 89.9 | 452.1 | 900.9 |
+| `make` | 1.4 | 1.4 | 3.0 | 3.1 | 5.1 |
+| **`tsr`** | **1.6** | **2.5** | **5.0** | **5.1** | **9.6** |
+| `just` | 1.9 | 1.9 | 3.8 | 3.8 | 6.1 |
+| `bun` | 2.3 | 2.3 | 2.3 | 11.5 | 22.7 |
+| `mise` | 19.7 | 19.7 | 24.2 | 32.2 | 45.8 |
+| `task` (go-task) | 99.5 | 99.8 | 103.6 | 104.7 | 107.4 |
+| `npm` | 83.9 | 84.0 | 83.4 | 416.8 | 843.1 |
 
-**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun only):
-`bun` 20.1 ms · **`tsr` 27.5 ms** · `npm` 105.3 ms. Calling a project-local Node
-tool (`vite`/`eslint`), `tsr` is **~3.8× faster than `npm run`** and on par with
-`bun` — it resolves the same `node_modules/.bin` binary but skips npm's extra Node
-startup.
+**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun only —
+just/make/go-task/mise don't resolve project-local binaries): `bun` 19.7 ms ·
+**`tsr` 27.5 ms** · `npm` 100.2 ms. Calling a project-local Node tool
+(`vite`/`eslint`), `tsr` is **~3.6× faster than `npm run`** and near `bun` — it
+resolves the same `node_modules/.bin` binary but skips npm's extra Node startup.
 
-`startup`/`shell`: `tsr` sits with the native runners and ~60× ahead of npm/task.
-On the `shell` one-liner it's a touch slower than `make`/`just` because it spawns
-each command as a real process while a shell runs `echo` as a builtin — the win
-lands when the commands are real programs, not builtins.
+`startup`/`shell`: `tsr` sits with the native runners and ~50–60× ahead of
+npm/task; `mise` lands in between (~20 ms — a Rust binary, but it does more at
+startup). On the `shell` one-liner `tsr` is a touch slower than `make`/`just`
+because it spawns each command as a real process while a shell runs `echo` as a
+builtin — the win lands when the commands are real programs, not builtins.
 
-The graph columns tell the bigger story. `tsr`, `just`, and `make` resolve the
-whole graph in one launch, so they stay in the low single-digit milliseconds.
-`npm` has no graph: chaining `npm run` per task multiplies its ~88 ms startup,
-reaching **~901 ms for ten no-op tasks (≈161× the fastest)**. `bun` chains too but
-from a cheaper startup (~26 ms). `go-task` *does* resolve its graph in-process, so
-it stays flat at its ~110 ms startup rather than multiplying — slow to start, but
-it doesn't compound.
+The graph columns tell the bigger story. `tsr`, `just`, `make`, and `mise` resolve
+the whole graph in one launch, so their cost grows gently with graph size. `npm`
+has no graph: chaining `npm run` per task multiplies its ~84 ms startup, reaching
+**~843 ms for ten no-op tasks (≈164× the fastest)**. `bun` chains too but from a
+cheaper startup (~23 ms). `go-task` also resolves its graph in-process but from a
+~100 ms startup, so it stays roughly flat — slow to start, but it doesn't compound.
 
 Exact tables: [`results/startup.md`](results/startup.md),
 [`results/steps5.md`](results/steps5.md), [`results/graph5.md`](results/graph5.md),

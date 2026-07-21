@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cross-tool benchmark for `tsr`. Compares tsr · npm · bun · just · go-task · make
-# across four scenarios, driven by hyperfine (statistical, with warmup):
+# · mise across the scenarios below, driven by hyperfine (statistical, with warmup):
 #
 #   startup   one task that spawns `true`           per-invocation overhead
 #   shell     one task, `echo $HOME && echo done`   shell one-liner ($VAR + &&)
@@ -39,6 +39,9 @@ command -v hyperfine >/dev/null 2>&1 || {
 
 has() { command -v "$1" >/dev/null 2>&1; }
 
+# mise refuses to run tasks from an untrusted config; trust the bench workspace.
+has mise && mise trust >/dev/null 2>&1 || true
+
 # Build the `npm run … && npm run …` (or bun) chain for a graph of N tasks.
 chain() {
   local runner="$1" n="$2" out="" i
@@ -68,6 +71,7 @@ bench() {
     has just && args+=(-n just "just $target")
     has task && args+=(-n task "task $target")
     has make && args+=(-n make "make $target")
+    has mise && args+=(-n mise "mise run $target")
   fi
 
   local shellflag=(--shell=none)

@@ -31,10 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   driven by hyperfine): six scenarios — `startup`, `shell` (mini-shell `$VAR` +
   `&&`), `localbin` (resolving a `node_modules/.bin` tool), `steps5` (in-task
   sequencing), and `graph5`/`graph10` (dependency graphs) — across tsr, npm, bun,
-  just, go-task, and make, with committed reference results and a website page that
-  loads the JSON. The graph scenarios show per-invocation overhead compounding
-  (chained `npm` ~901 ms for ten no-op tasks vs tsr ~9 ms); `localbin` shows tsr
-  ~3.8× faster than `npm run` when calling a project-local tool.
+  just, go-task, make, and mise, with committed reference results and a website
+  page that loads the JSON. The graph scenarios show per-invocation overhead
+  compounding (chained `npm` ~843 ms for ten no-op tasks vs tsr ~9 ms); `localbin`
+  shows tsr ~3.6× faster than `npm run` when calling a project-local tool; `mise`
+  sits between the native runners and npm/go-task (~20 ms startup).
 
 - CI: GitHub Actions matrix — build + test on ubuntu, macOS, and **Windows**
   (validating cross-platform behaviour, notably the `node_modules/.bin` PATH
