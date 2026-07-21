@@ -1,0 +1,60 @@
+---
+title: Environment
+description: The four-source environment merge, root .env loading, and variable expansion.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Environment
+
+## Sources & precedence
+
+Four sources are **merged** — never replaced. A task's `env` adds to and
+overrides the inherited set; it does not wipe `PATH` and friends. Highest wins:
+
+```text
+task env  >  workspace [env]  >  root .env file  >  process env
+```
+
+```toml
+[env]
+NODE_ENV = "development"
+
+[tasks.ci]
+env = { CI = "true" }        # adds CI, keeps everything else
+```
+
+## `.env` loading
+
+- Only the **workspace-root** `.env` is loaded (next to `tasks.toml`).
+- It is **auto-loaded if present** — no flag.
+- Per-package `.env` files are **ignored** in v1, by design: frameworks (Next,
+  Vite, …) load their own app-level `.env` at runtime; `tsr` owns only the
+  shared, workspace-level vars.
+
+## Expansion
+
+- `$VAR` / `${VAR}` are expanded **after** the full merge, against the final
+  resolved env.
+- `[env]` values may reference the process env and **earlier** keys in the same
+  block. No forward references; there is no dependency graph for env resolution.
+
+```toml
+[env]
+ROOT = "/srv/app"
+LOGS = "$ROOT/logs"          # → /srv/app/logs
+```
+
+<Callout type="warning" title="Undefined variables are a hard error">
+  A <code>$VAR</code> referenced in a <code>run</code> string but defined nowhere
+  (task env, workspace <code>[env]</code>, or <code>.env</code>) is a config
+  error, caught at load time, exit <code>64</code>:
+  <br />
+  <br />
+  <code>✗ config error: task 'deploy': '$TARGET' is not defined…</code>
+</Callout>
+
+## Process env
+
+The process environment is fully inherited; there is no filtering or
+allow-listing in v1.

@@ -1,0 +1,92 @@
+---
+title: Task forms
+description: The three task forms and the precedence that resolves them — delegate, run, and auto-detect.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Task forms
+
+A task takes one of three **forms**, chosen by precedence when `tsr <task>` runs:
+
+1. **`delegate` present** → hand off to a backend.
+2. **`run` present** → spawn the command directly.
+3. **Neither** → auto-detect the package's ecosystem and map the task name to its
+   native runner.
+
+<Callout type="info" title="Precedence, not merging">
+  The first matching form wins. If a task has both <code>delegate</code> and
+  <code>run</code>, <code>delegate</code> is used and <code>run</code> is ignored.
+</Callout>
+
+## Form 1 — `delegate`
+
+Hand execution (and caching) to a specialist backend.
+
+```toml
+# String form → `<bin> run <task>`
+[tasks.build]
+delegate = "turbo"          # → turbo run build
+
+# Table form → full control over bin + args
+[tasks.bundle]
+delegate = { bin = "make", args = ["bundle"] }
+```
+
+- **String** `delegate = "turbo"` expands to `turbo run <task>`, using the task's
+  own name.
+- **Table** `{ bin, args }` runs exactly `bin args…` — nothing is inferred.
+
+This is the escape hatch for real shell power, too:
+
+```toml
+[tasks.pipeline]
+delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
+```
+
+## Form 2 — `run`
+
+Spawn a command directly — the `npm run` replacement, with no Node startup tax.
+
+```toml
+[tasks.dev]
+run = "vite"
+dir = "apps/web"            # optional; defaults to workspace root
+args = ["--host"]          # prepended before CLI passthrough
+```
+
+How the string is executed (direct spawn vs. the mini-shell) is covered in
+[run & the mini-shell](/docs/run-and-shell).
+
+## Form 3 — auto-detect
+
+With neither `delegate` nor `run`, `tsr` detects the package's ecosystem from its
+marker file and maps the task name to that ecosystem's native runner:
+
+| Marker file | Ecosystem | `tsr test` runs |
+|-------------|-----------|-----------------|
+| `package.json` (+ bun lockfile) | bun | `bun run test` |
+| `package.json` | npm | `npm run test` |
+| `Cargo.toml` | cargo | `cargo test` |
+| `go.mod` | go | `go test` |
+| `pyproject.toml` | uv | `uv run test` |
+
+This is the core "wrapper" behaviour: a bare `[tasks.test]` just works across a
+polyglot repo with no per-package config.
+
+```toml
+# Fanned out across every matching package, each using its own native runner.
+[tasks.test]
+packages = ["apps/*", "packages/*"]
+```
+
+## Aggregator tasks
+
+A task with `deps` but no `run`, `delegate`, or `packages` is a pure
+**aggregator**: it runs its dependencies and nothing of its own.
+
+```toml
+[tasks.ci]
+deps = ["lint", "test", "build"]
+parallel = true
+```

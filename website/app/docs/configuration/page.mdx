@@ -1,0 +1,79 @@
+---
+title: Configuration
+description: The tasks.toml file — workspace root, [workspace] members, [env], and the task-name grammar.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Configuration
+
+`tasks.toml` serves two purposes: it holds the config, and its location defines
+the **workspace root**. Root detection walks up from the current directory to the
+nearest `tasks.toml`.
+
+```toml
+[workspace]
+members = ["apps/*", "packages/*"]   # monorepo globs; omit for a single package
+
+[env]
+NODE_ENV = "development"
+
+[tasks.dev]
+run = "vite"
+```
+
+## `[workspace]`
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `members` | array | Glob patterns identifying the packages in a monorepo. Omit entirely for a single-package repo. |
+
+## `[env]`
+
+Workspace-wide environment variables inherited by every task. See
+[Environment](/docs/environment) for the full precedence model and expansion
+rules.
+
+## Tasks
+
+Each task is a `[tasks.<name>]` table. The full field list:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `run` | string | Command to spawn directly (form 2). |
+| `delegate` | string \| table | Backend to hand off to (form 1). |
+| `dir` | string | Directory to run in. Defaults to the workspace root. **Mutually exclusive with `packages`.** |
+| `packages` | array | Fan out across matching packages (globs or names). **Mutually exclusive with `dir`.** |
+| `deps` | array | Tasks that must run before this one (the dependency graph). |
+| `parallel` | bool | Run `deps` / `packages` concurrently. Default `false`. |
+| `args` | array | Default args prepended to the resolved command, before CLI passthrough. |
+| `env` | table | Per-task env; overrides `[env]`. |
+
+<Callout type="warning" title="dir and packages are mutually exclusive">
+  Setting both `dir` and `packages` on the same task is a config error and exits
+  with code <code>64</code>.
+</Callout>
+
+## Task-name grammar
+
+Legal task-name characters are `[A-Za-z0-9_-:]+` — letters, digits, `_`, `-`,
+and `:`.
+
+- **`:`** is an ordinary name character with no meaning to the parser. It exists
+  so ecosystem-conventional names like `build:prod` or `test:watch` are legal and
+  `package.json` scripts import 1:1 without renaming.
+- **`#`** is the package↔task separator: `web#build` means "the `build` task in
+  package `web`". Parsing splits on `#` first, then the task portion may freely
+  contain `:` — `web#build:prod` → package `web`, task `build:prod`.
+- **`^`** (upstream marker) and whitespace are reserved and not legal in a name.
+
+<Callout type="info" title="Quote keys containing ':'">
+  TOML bare keys don't allow `:`, so quote any task key that contains one:
+  `[tasks."build:prod"]`.
+</Callout>
+
+## Unknown keys round-trip
+
+`tsr` parses `tasks.toml` with a format-preserving parser. Comments and keys it
+doesn't recognize survive untouched when the file is rewritten by tooling — so
+the config stays safe to edit by hand.

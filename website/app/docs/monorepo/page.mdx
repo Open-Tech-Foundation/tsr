@@ -1,0 +1,82 @@
+---
+title: Monorepo & packages
+description: Fanning a task out across packages, matching by path glob or manifest name.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Monorepo & packages
+
+## Workspace members
+
+Declare the packages in your monorepo with `[workspace] members` — glob patterns
+relative to the workspace root:
+
+```toml
+[workspace]
+members = ["apps/*", "packages/*"]
+```
+
+A directory matches only if it carries a recognised ecosystem marker
+(`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`).
+
+## Fanning out with `packages`
+
+A task's `packages` list fans it out across matching packages. Each package
+resolves the task independently — a bare task auto-detects that package's native
+runner:
+
+```toml
+[tasks.test]
+packages = ["apps/*", "packages/*"]
+```
+
+Add `parallel = true` to run the fan-out concurrently:
+
+```toml
+[tasks.test]
+packages = ["apps/*"]
+parallel = true
+```
+
+## Matching: path glob or manifest name
+
+Each `packages` entry matches against **either**:
+
+- a **path glob** (`apps/*`), or
+- an **exact manifest name** (`@scope/pkg`).
+
+Matching against manifest names is what allows faithful conversion of
+`bun run --filter <name>` style scripts.
+
+```toml
+[tasks."build:update"]
+packages = [
+  "@opentf/workeros-programs",
+  "@opentf/workeros-coreutils",
+  "@opentf/workeros-web",
+]
+```
+
+The `packages` list matches manifest names; form-3 auto-detection resolves
+`build:update` to each package's native runner.
+
+<Callout type="warning" title="A pattern that matches nothing is an error">
+  If a <code>packages</code> entry matches no workspace package, `tsr` exits with
+  code <code>64</code> — it's almost always a typo.
+</Callout>
+
+## Cross-package dependencies
+
+Explicit cross-package edges use the `pkg#task` form and require no graph
+inference:
+
+```toml
+[tasks."web#build"]
+run = "vite build"
+dir = "apps/web"
+deps = ["ui#build"]
+```
+
+Topological deps (`^task`), affected/changed detection, and the package
+dependency graph arrive in **v1.1** — the "monorepo release."

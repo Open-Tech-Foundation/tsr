@@ -1,0 +1,72 @@
+---
+title: run & the mini-shell
+description: How run strings execute — direct spawn vs the built-in mini-shell, and which metacharacters are supported.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# `run` & the mini-shell
+
+A `run` string executes one of two ways, chosen by scanning for shell
+metacharacters:
+
+1. **No metacharacters** → the string is split and the command is spawned
+   **directly** (`execvp`-style). Fast, fully cross-platform. This is the common
+   path and where `tsr` beats `npm run`.
+2. **Supported metacharacters present** → the string runs through `tsr`'s own
+   **minimal shell**.
+
+## Supported — the entire feature set
+
+- **`$VAR` / `${VAR}`** — expansion from the [merged env](/docs/environment).
+- **`&&` `||` `;`** — sequencing with correct exit-code semantics (`&&` on `0`,
+  `||` on non-zero, `;` always).
+- **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion
+  applies).
+
+```toml
+[tasks.deploy]
+run = "build && deploy --target $TARGET || notify 'deploy failed'"
+```
+
+## Rejected — never attempted
+
+These require OS-level plumbing outside the tool's scope, so they are rejected at
+**load time** with a specific error and exit code `64`:
+
+| Construct | Instead |
+|-----------|---------|
+| `\|` pipes | use `delegate` or a script file |
+| `>` `>>` `2>&1` redirection | use a script file |
+| `*` `?` `[...]` globs | pass an explicit path |
+| `$(...)` / backtick substitution | use a script file |
+
+<Callout type="warning" title="Rejection happens up front">
+  Unsupported metacharacters are caught when the config loads — before any task
+  runs — so a broken <code>run</code> string never executes half-way.
+</Callout>
+
+## Detection order
+
+```text
+scan → no metachars        → direct spawn
+     → supported-only      → mini-shell
+     → any unsupported     → error 64 at load
+```
+
+Metacharacter *detection* always runs before *rejection*, and metacharacters
+inside quotes are literal — so `run = "echo 'a | b'"` prints `a | b`, it does not
+trip the pipe rule.
+
+## The escape hatch
+
+When a `run` string genuinely needs a real shell, opt in explicitly with
+`delegate`, or point `run` at a script file:
+
+```toml
+[tasks.pipeline]
+delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
+
+[tasks.build]
+run = "./scripts/build.sh"
+```

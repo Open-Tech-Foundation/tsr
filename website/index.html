@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="tsr — a lightweight, polyglot, repo-aware task runner. One unified interface over npm, bun, cargo, go and uv, with a task dependency graph, opt-in parallelism, and caching delegated to Turbo/Nx."
+    />
+    <title>tsr — a lightweight, polyglot task runner</title>
+    <!--
+      No-flash theme resolution. The whole site (landing + docs) is theme-aware and
+      driven by the @opentf/web-docs ThemeToggle, which persists a mode to
+      localStorage("theme") = "light" | "dark" | "system" (default "system") and sets
+      data-theme on <html>. Resolve the effective theme here, before first paint, so
+      there's no light/dark flash and the toggle's onMount finds a matching attribute.
+    -->
+    <script>
+      try {
+        var mode = localStorage.getItem("theme") || "system";
+        var dark =
+          mode === "dark" ||
+          (mode === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    </script>
+    <link rel="stylesheet" href="/app/global.css" />
+  </head>
+  <body>
+    <!-- The OTF Web toolchain mounts the app here and injects the bundle. -->
+    <div id="app"></div>
+  </body>
+</html>

@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current directory, showcasing all three task forms plus the graph. Refuses
   to overwrite an existing file (exit `64`); the generated file is immediately
   valid and runnable.
+- Website + documentation under `website/`, built with the OTF Web framework and
+  `@opentf/web-docs` (`DocsLayout`): a marketing landing page plus a ten-page
+  docs section (overview, getting started, configuration, task forms, mini-shell,
+  environment, graph/parallelism, monorepo, CLI reference, exit codes). Builds to
+  a static site with search via `bun run build`.
 
 - Config layer: parse `tasks.toml` via `toml_edit` (comments and unknown keys
   survive a round-trip), discover the workspace root by walking up to the

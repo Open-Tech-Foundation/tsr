@@ -1,0 +1,41 @@
+---
+title: Exit codes
+description: The exit-code contract — 0, the child's exact code, or 64 for runner-level errors.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Exit codes
+
+`tsr` distinguishes "my task failed" from "the runner itself broke" so CI
+pipelines see the real signal.
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success. |
+| *child's code* | On task failure, the first failed child's **exact** exit code is propagated verbatim (`1`, `2`, `130`, …). |
+| `64` | **Runner-level** error. |
+
+## What counts as a runner-level error (`64`)
+
+- config parse failure or invalid TOML;
+- `dir` and `packages` both set on a task;
+- an unknown task name, or a dependency cycle;
+- a `delegate` binary (or any command) that can't be launched;
+- an undefined `$VAR` referenced in a `run` string;
+- a rejected mini-shell metacharacter (`|`, `>`, `*`, `$(…)`, …);
+- a `packages` pattern that matches no package.
+
+<Callout type="info" title="Why the distinction matters">
+  A child code (like <code>1</code> or <code>130</code>) means <em>your task</em>
+  failed. Code <code>64</code> means <em>tsr itself</em> couldn't proceed — a
+  config or setup problem, not a test that went red. Pipelines can branch on the
+  difference.
+</Callout>
+
+## Fail-fast propagation
+
+When several tasks run in a batch and one fails, `tsr` stops launching new work,
+kills running siblings, and propagates **that** child's exact code. In a parallel
+batch, the reported failure is whichever child exited non-zero first in
+wall-clock time.

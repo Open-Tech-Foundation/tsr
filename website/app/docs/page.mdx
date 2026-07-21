@@ -1,0 +1,51 @@
+---
+title: Overview
+description: What tsr is, what it deliberately is not, and how the docs are organized.
+---
+
+# tsr
+
+`tsr` is a lightweight, polyglot, repo-aware **task runner**. It is a *command
+runner*, not a build system: it provides one unified interface over the native
+runners already in your repo (`npm`, `bun`, `cargo`, `go`, `uv`, …), adds a task
+dependency graph and opt-in parallelism, and **delegates** caching to specialist
+tools (Turbo, Nx) rather than reimplementing it.
+
+```sh
+tsr dev            # run the 'dev' task
+tsr ci             # run the 'ci' task
+tsr test -- --watch
+```
+
+- **Binary:** `tsr`
+- **Config file:** `tasks.toml` (also the workspace-root anchor)
+- **Written in:** Rust, single static binary
+
+## Design principles
+
+1. **Lightweight** — a thin unifying layer, not a replacement for native runners.
+2. **Delegate, don't reimplement** — execution is handed to native runners;
+   caching is handed to Turbo/Nx.
+3. **Polyglot** — one entry point across every ecosystem in the repo.
+4. **Predictable by default** — sequential execution unless parallelism is
+   explicitly requested; fail fast.
+5. **Hand-edit-safe** — the config stays valid and legible when edited by hand,
+   and unknown keys survive a round-trip.
+
+## Explicitly out of scope
+
+Content-hash caching, remote caching, and inputs/outputs tracking are **never**
+implemented in `tsr` — they are ceded to delegated backends (Turbo, Nx). Adding
+them would contradict the "lightweight, delegate" principle.
+
+## Where to go next
+
+- **[Getting started](/docs/getting-started)** — install, scaffold, run.
+- **[Configuration](/docs/configuration)** — `tasks.toml`, workspace root, `[env]`.
+- **[Task forms](/docs/task-forms)** — `delegate` → `run` → auto-detect.
+- **[run & the mini-shell](/docs/run-and-shell)** — direct spawn vs the mini-shell.
+- **[Environment](/docs/environment)** — the four-source merge and `.env`.
+- **[Graph & parallelism](/docs/graph)** — `deps`, `parallel`, fail-fast.
+- **[Monorepo & packages](/docs/monorepo)** — fan-out and manifest-name matching.
+- **[CLI reference](/docs/cli)** — every command and flag.
+- **[Exit codes](/docs/exit-codes)** — `0` / child code / `64`.

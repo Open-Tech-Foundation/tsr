@@ -1,0 +1,72 @@
+---
+title: Graph & parallelism
+description: The deps DAG, sequential-by-default execution, opt-in parallelism, and fail-fast.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Graph & parallelism
+
+## The dependency graph
+
+`deps` lists the tasks that must complete before a task runs — these edges form a
+DAG. Each task runs its `deps` first, then itself.
+
+```toml
+[tasks.ci]
+deps = ["lint", "test", "build"]
+
+[tasks."web#build"]
+run = "vite build"
+dir = "apps/web"
+deps = ["ui#build"]          # explicit cross-package edge
+```
+
+- **Explicit cross-package edges** (`pkg#task`, e.g. `ui#build`) ship in v1 — they
+  require no graph inference.
+- Shared dependencies are de-duplicated: in a diamond (`ci → a → base`,
+  `ci → b → base`), `base` runs **once**.
+- A dependency **cycle** is a config error, caught before execution, exit `64`.
+
+<Callout type="info" title="Topological deps are v1.1">
+  The upstream marker <code>^task</code> ("run this task in the package's
+  dependencies first") is deferred to v1.1, because it requires reading each
+  package's manifest to build the package dependency graph.
+</Callout>
+
+## Sequential by default
+
+Execution is **sequential by default**. Concurrency is opt-in via
+`parallel = true`, and the rule is uniform:
+
+- a `deps` list runs one at a time unless `parallel = true`;
+- a `packages` fan-out runs one at a time unless `parallel = true`.
+
+Nothing runs concurrently unless a task explicitly sets `parallel = true`. This
+keeps default behaviour predictable and race-free.
+
+```toml
+[tasks.ci]
+deps = ["lint", "test", "build"]
+parallel = true              # opt into concurrency
+```
+
+## Fail-fast
+
+On any failure within a task's batch, `tsr` **fails fast**: it stops launching
+new work and kills still-running siblings, then prints a summary and exits.
+
+```text
+✗ ci failed
+
+  ✓ lint     ok        1.2s
+  ✗ test     exit 1    3.4s   ← failed
+  ⊘ build    skipped          (killed: sibling failed)
+
+exit code: 1
+```
+
+In a parallel batch, "the failure" is whichever child exits non-zero first in
+wall-clock time; this is non-deterministic across runs and is expected.
+Fail-fast guarantees at most one failing child's code is reported — and that
+[exact code](/docs/exit-codes) is what `tsr` propagates.

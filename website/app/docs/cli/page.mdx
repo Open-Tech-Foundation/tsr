@@ -1,0 +1,67 @@
+---
+title: CLI reference
+description: Every tsr command and flag — running tasks, passthrough, list, and --init.
+---
+
+# CLI reference
+
+```text
+tsr <task> [-- <args>...]   run a task; args after -- are forwarded
+tsr list                    list the tasks defined in tasks.toml
+tsr --init                  create a starter tasks.toml here
+tsr --help | --version
+```
+
+## `tsr <task>`
+
+Runs the named task. `tsr` finds the workspace root by walking up to the nearest
+`tasks.toml`, validates the config and the dependency subgraph, then executes.
+
+```sh
+tsr dev
+tsr build:prod
+tsr web#build          # the 'build' task in package 'web'
+```
+
+## Argument passthrough
+
+Everything after `--` is forwarded to the resolved command. If the task defines
+`args`, they are prepended **before** the passthrough:
+
+```toml
+[tasks.test]
+run = "vitest"
+args = ["--color"]
+```
+
+```sh
+tsr test -- --watch    # → vitest --color --watch
+```
+
+## `tsr list`
+
+Prints the tasks defined in `tasks.toml`, each with a one-line form descriptor.
+
+```text
+Available tasks:
+  build  delegate: turbo
+  ci     deps: lint, test, build  ·  parallel
+  dev    run: vite  ·  dir: apps/web
+  test   packages: apps/*
+```
+
+## `tsr --init`
+
+Scaffolds a commented starter `tasks.toml` in the current directory, showcasing
+all three task forms plus the graph. It refuses to overwrite an existing file, so
+it is always safe to run. (`tsr init` works too.)
+
+## `tsr --help` · `tsr --version`
+
+Print usage and the binary version, respectively.
+
+## Exit status
+
+`tsr` follows a precise [exit-code contract](/docs/exit-codes): `0` on success,
+the failing child's exact code on task failure, or `64` for any runner-level
+error.
