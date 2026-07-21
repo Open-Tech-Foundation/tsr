@@ -12,7 +12,7 @@
 //! inside a `run` string is expanded later, against this fully-merged map.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::{Config, Task};
 use crate::error::{Result, TsrError};
@@ -20,6 +20,39 @@ use crate::shell;
 
 /// The `.env` file loaded from the workspace root (SPEC §7.2).
 pub const DOTENV_FILE: &str = ".env";
+
+/// Prepend `node_modules/.bin` directories to `PATH` so locally-installed
+/// binaries (`vite`, `eslint`, `tsc`, …) resolve when a `run` string names them
+/// directly — the same lookup npm/bun/yarn/pnpm perform, and what makes tsr a
+/// real `npm run` replacement (SPEC §9.2).
+///
+/// Directories are collected walking up from the task's working directory to the
+/// workspace `root` (inclusive), nearest first, so a package's own `.bin` wins
+/// over a hoisted root one. Only directories that exist are added.
+pub fn prepend_node_bin(env: &mut HashMap<String, String>, dir: &Path, root: &Path) {
+    let mut bins: Vec<PathBuf> = Vec::new();
+    let mut cur = Some(dir);
+    while let Some(d) = cur {
+        let bin = d.join("node_modules").join(".bin");
+        if bin.is_dir() {
+            bins.push(bin);
+        }
+        if d == root {
+            break; // don't climb above the workspace root
+        }
+        cur = d.parent();
+    }
+    if bins.is_empty() {
+        return;
+    }
+    // Prepend the discovered bin dirs (nearest first) ahead of the existing PATH.
+    let existing = env.get("PATH").cloned().unwrap_or_default();
+    let mut parts = bins;
+    parts.extend(std::env::split_paths(&existing));
+    if let Ok(joined) = std::env::join_paths(parts) {
+        env.insert("PATH".to_string(), joined.to_string_lossy().into_owned());
+    }
+}
 
 /// Build the merged, fully-expanded environment for `task` (SPEC §7.1), reading
 /// the real process env and the root `.env`.
@@ -214,6 +247,35 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn prepends_node_bin_dirs_nearest_first() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let id = N.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("tsr-nbin-{}-{id}", std::process::id()));
+        let pkg = root.join("apps/web");
+        std::fs::create_dir_all(pkg.join("node_modules/.bin")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
+
+        let mut env = proc(&[("PATH", "/usr/bin")]);
+        prepend_node_bin(&mut env, &pkg, &root);
+
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let parts: Vec<&str> = env["PATH"].split(sep).collect();
+        // Package .bin first, then hoisted root .bin, then the original PATH.
+        assert_eq!(parts[0], pkg.join("node_modules/.bin").to_str().unwrap());
+        assert_eq!(parts[1], root.join("node_modules/.bin").to_str().unwrap());
+        assert_eq!(*parts.last().unwrap(), "/usr/bin");
+    }
+
+    #[test]
+    fn node_bin_noop_when_absent() {
+        let dir = std::env::temp_dir();
+        let mut env = proc(&[("PATH", "/usr/bin")]);
+        prepend_node_bin(&mut env, &dir, &dir);
+        assert_eq!(env["PATH"], "/usr/bin");
     }
 
     #[test]

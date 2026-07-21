@@ -291,6 +291,12 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 
 `packages` entries match against **either** a path glob (`apps/*`) **or** an exact manifest name (`@opentf/workeros-web`). Matching against manifest names is what allows faithful conversion of `bun run --filter <name>` style scripts.
 
+### 9.2 Local binary resolution (`node_modules/.bin`)
+
+For `run = "vite"` to genuinely replace `npm run dev`, a directly-spawned command must resolve **locally-installed** binaries. Before spawning, `tsr` prepends `node_modules/.bin` to `PATH` — collected by walking up from the task's working directory to the workspace root (inclusive), **nearest first**, so a package's own `.bin` wins over a hoisted root one. This is the same lookup npm/bun/yarn/pnpm perform.
+
+Only existing directories are added, so it is a no-op in non-JS packages. The command itself is still spawned directly (`execvp`-style) — this only fixes *where* the binary is found, and pays no Node startup tax.
+
 ---
 
 ## 10. Exit codes

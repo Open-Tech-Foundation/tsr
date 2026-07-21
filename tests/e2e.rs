@@ -253,6 +253,25 @@ fn packages_fan_out_across_matching_packages() {
     assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
 }
 
+#[cfg(unix)]
+#[test]
+fn resolves_local_node_modules_bin() {
+    // A `run` string naming a locally-installed binary must resolve from
+    // node_modules/.bin — the same lookup npm/bun do — so `run = "vite"` works.
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace();
+    let bindir = ws.join("node_modules/.bin");
+    fs::create_dir_all(&bindir).unwrap();
+    let bin = bindir.join("mytool");
+    fs::write(&bin, "#!/bin/sh\necho ran-local-tool\n").unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+
+    write(&ws, "tasks.toml", "[tasks.lint]\nrun = \"mytool\"\n");
+    let out = tsr(&ws, &["lint"]);
+    assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("ran-local-tool"), "{}", stdout(&out));
+}
+
 #[test]
 fn init_scaffolds_a_runnable_config() {
     let ws = workspace();

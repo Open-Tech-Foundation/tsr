@@ -296,7 +296,10 @@ impl<'a> Ctx<'a> {
         label: String,
         passthrough: &[String],
     ) -> std::result::Result<Job, String> {
-        let env = env::build(self.cfg, task);
+        let mut env = env::build(self.cfg, task);
+        // Resolve locally-installed binaries (`vite`, `eslint`, …) the way
+        // npm/bun do, so `run = "vite"` is a real `npm run` replacement (SPEC §9.2).
+        env::prepend_node_bin(&mut env, dir, &self.cfg.root);
         let extra = |base: Vec<String>| -> Vec<String> {
             // args (SPEC §6) then CLI passthrough, appended to the resolved args.
             let mut v = base;

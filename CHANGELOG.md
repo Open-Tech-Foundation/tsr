@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `run` strings now resolve locally-installed binaries: `tsr` prepends
+  `node_modules/.bin` to `PATH` (walking up from the task's directory to the
+  workspace root, nearest first), the same lookup npm/bun/yarn/pnpm do. Without
+  this, `run = "vite"` / `run = "eslint"` could not find a project-local tool, so
+  tsr was not actually a drop-in `npm run` replacement (SPEC §9.2).
 - Execution: the fixed 15 ms child-poll interval added a full tick of latency to
   every fast task (a no-op measured ~16 ms). Replaced with adaptive backoff
   (`POLL_MIN` 100 µs → `POLL_MAX` 20 ms): fast tasks now finish in ~1.6 ms while

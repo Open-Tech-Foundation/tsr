@@ -16,6 +16,15 @@ metacharacters:
 2. **Supported metacharacters present** → the string runs through `tsr`'s own
    **minimal shell**.
 
+## Local binaries (`node_modules/.bin`)
+
+For `run = "vite"` to actually replace `npm run dev`, a directly-spawned command
+must find **locally-installed** binaries. Before spawning, `tsr` prepends
+`node_modules/.bin` to `PATH` — walking up from the task's directory to the
+workspace root, nearest first — exactly the lookup npm/bun/yarn/pnpm do. So
+`run = "eslint ."` or `run = "vite build"` resolves the local tool, with no Node
+startup tax. In a non-JS package it's a no-op.
+
 ## Supported — the entire feature set
 
 - **`$VAR` / `${VAR}`** — expansion from the [merged env](/docs/environment).
