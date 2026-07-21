@@ -280,9 +280,27 @@ impl Config {
             for dep in &task.deps {
                 validate_dep_ref(&task.key, dep)?;
             }
+
+            // Reject unsupported mini-shell metacharacters at load time (SPEC
+            // §8.2/§8.4). `$VAR` resolution is checked later, once the env is
+            // merged (SPEC §7.3).
+            if let Some(run) = &task.run {
+                crate::shell::parse(run).map_err(|e| {
+                    TsrError::config(format!("task '{}': {}", task.key, strip_prefix(&e)))
+                })?;
+            }
         }
         Ok(())
     }
+}
+
+/// Strip the leading "✗ config error: " that `Display` adds, so a wrapped
+/// message doesn't repeat the banner.
+fn strip_prefix(e: &TsrError) -> String {
+    let s = e.to_string();
+    s.strip_prefix("✗ config error: ")
+        .map(str::to_string)
+        .unwrap_or(s)
 }
 
 /// A task table key: an optional `pkg#` prefix, then a task name. Both segments
@@ -463,6 +481,21 @@ mod tests {
     fn rejects_invalid_toml() {
         let err = load("[tasks.dev\nrun = ").unwrap_err();
         assert_eq!(err.exit_code(), crate::error::EXIT_RUNNER_ERROR);
+    }
+
+    #[test]
+    fn rejects_unsupported_run_metachar_at_load() {
+        let err = load("[tasks.x]\nrun = \"cat a | grep b\"\n").unwrap_err();
+        assert!(matches!(err, TsrError::Config(_)));
+        assert!(err.to_string().contains("task 'x'"));
+        assert!(err.to_string().contains("pipe"));
+    }
+
+    #[test]
+    fn accepts_supported_run_metachars_at_load() {
+        // `&&` and `$VAR` are supported; they must not be rejected at load.
+        assert!(load("[tasks.x]\nrun = \"lint && test\"\n").is_ok());
+        assert!(load("[tasks.x]\nrun = \"deploy $TARGET\"\n").is_ok());
     }
 
     #[test]

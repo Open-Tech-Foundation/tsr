@@ -20,3 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`package.json` → npm/bun, `Cargo.toml`, `go.mod`, `pyproject.toml`) and map a
   bare task to its native runner convention (`npm run <task>`, `cargo <task>`, …).
 - Task-form resolution honouring precedence `delegate` → `run` → auto-detect.
+- Mini-shell for `run` strings (SPEC §8): quote-aware lexing classifies a string
+  as a direct spawn (no metacharacters) or a mini-shell program supporting
+  `$VAR`/`${VAR}` expansion, `&&`/`||`/`;` sequencing, and single/double quoting.
+  Unsupported constructs (`|`, `>`/`<`, globs, `$(...)`/backticks, bare `&`,
+  subshells) are rejected at load time with exit code `64`.
