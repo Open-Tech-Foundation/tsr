@@ -53,11 +53,8 @@ export default function Home() {
               reinventing it.
             </p>
             <div class="cta-row">
-              <Link class="btn btn-primary" href="/docs/getting-started">
+              <Link class="btn btn-primary" href="/docs">
                 Get started →
-              </Link>
-              <Link class="btn btn-ghost" href="/docs">
-                Read the docs
               </Link>
             </div>
           </div>
