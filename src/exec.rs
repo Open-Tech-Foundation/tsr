@@ -24,8 +24,12 @@ use crate::resolve::{self, Invocation};
 use crate::shell::{self, ExecPlan, RunPlan, Sep};
 use crate::workspace;
 
-/// How often a running child is polled for completion / abort (SPEC §5.2).
-const POLL_INTERVAL: Duration = Duration::from_millis(15);
+/// Adaptive poll backoff while waiting on a child (SPEC §5.2). Starting small
+/// keeps fast tasks (`true`, `echo`) near their true cost — a fixed interval
+/// would add a full tick of latency to every quick command — while the cap keeps
+/// fail-fast kill latency bounded for long-running ones.
+const POLL_MIN: Duration = Duration::from_micros(100);
+const POLL_MAX: Duration = Duration::from_millis(20);
 
 /// Run `root` and its dependency tree, owning all failure reporting. Returns the
 /// process exit code to propagate (SPEC §10): `0` on success, the first failing
@@ -489,6 +493,7 @@ impl<'a> Ctx<'a> {
             }
         };
 
+        let mut backoff = POLL_MIN;
         loop {
             if self.aborted() {
                 let _ = child.kill();
@@ -497,7 +502,10 @@ impl<'a> Ctx<'a> {
             }
             match child.try_wait() {
                 Ok(Some(status)) => return LeafWait::Exited(exit_code_of(status)),
-                Ok(None) => std::thread::sleep(POLL_INTERVAL),
+                Ok(None) => {
+                    std::thread::sleep(backoff);
+                    backoff = (backoff * 2).min(POLL_MAX);
+                }
                 Err(e) => return LeafWait::SpawnFailed(e.to_string()),
             }
         }

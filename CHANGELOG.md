@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs section (overview, getting started, configuration, task forms, mini-shell,
   environment, graph/parallelism, monorepo, CLI reference, exit codes). Builds to
   a static site with search via `bun run build`.
+- Cross-tool benchmark harness under `benches/`: equivalent `noop`/`hello` tasks
+  for tsr, npm, bun, just, go-task, and make, driven by hyperfine, with committed
+  reference results. On the reference machine tsr runs a no-op in ~1.6 ms —
+  tied with native runners and ~60–75× faster than `npm run` / `task`.
+
+### Fixed
+
+- Execution: the fixed 15 ms child-poll interval added a full tick of latency to
+  every fast task (a no-op measured ~16 ms). Replaced with adaptive backoff
+  (`POLL_MIN` 100 µs → `POLL_MAX` 20 ms): fast tasks now finish in ~1.6 ms while
+  fail-fast kill latency for long-running siblings stays bounded.
 
 - Config layer: parse `tasks.toml` via `toml_edit` (comments and unknown keys
   survive a round-trip), discover the workspace root by walking up to the

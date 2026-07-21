@@ -1,0 +1,10 @@
+# tsr task definitions for the cross-tool benchmark.
+# `noop` isolates the runner's own per-invocation overhead (spawn `true`);
+# `hello` is a trivial real command. tsr spawns both directly — no shell, no
+# language runtime — which is the overhead this benchmark measures.
+
+[tasks.noop]
+run = "true"
+
+[tasks.hello]
+run = "echo hello"

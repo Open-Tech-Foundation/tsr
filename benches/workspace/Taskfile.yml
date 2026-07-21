@@ -1,0 +1,13 @@
+# go-task (Taskfile) definitions for the cross-tool benchmark.
+version: "3"
+
+tasks:
+  noop:
+    silent: true
+    cmds:
+      - "true"
+
+  hello:
+    silent: true
+    cmds:
+      - echo hello

@@ -1,0 +1,7 @@
+# just recipe definitions for the cross-tool benchmark.
+
+noop:
+    @true
+
+hello:
+    @echo hello
