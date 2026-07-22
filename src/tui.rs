@@ -2,17 +2,22 @@
 //! "TUI-primary, hand-edit-safe" principle).
 //!
 //! The TUI is the intended way to author tasks with all their options, instead
-//! of hand-editing TOML. Edits go through the `toml_edit` document, so comments
-//! and unknown keys in an existing file survive a round-trip, and every change is
-//! validated (`config::validate_str`) before it is committed in memory or written
-//! to disk.
+//! of hand-editing TOML. It opens on a menu of workflows (add / edit / delegate /
+//! delete / graph) rather than a bare list, so there is always an obvious next
+//! step. Edits go through the `toml_edit` document, so comments and unknown keys
+//! in an existing file survive a round-trip.
+//!
+//! Changes **autosave**: a committed form or delete is written to disk straight
+//! away, so there is no dirty state and no discard prompt. Every change is
+//! validated (`config::validate_str`) *before* it is committed, so an autosave
+//! can never write a broken config; a failed validation keeps the form open.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
@@ -61,11 +66,56 @@ pub fn run(path: &Path) -> Result<()> {
 
 /// UI mode.
 enum Mode {
-    List,
+    /// The home screen: a menu of workflows to launch.
+    Menu,
+    /// A task picker — the task list opened to pick one for `purpose`.
+    List(ListPurpose),
     Form(FormState),
     /// The read-only dependency-graph / dry-run preview.
     Graph(GraphView),
-    ConfirmQuit,
+    /// Confirm removing the named task.
+    ConfirmDelete(String),
+}
+
+/// Why the task list (picker) is open — decides what selecting a task does.
+#[derive(Clone, Copy, PartialEq)]
+enum ListPurpose {
+    Edit,
+    Delete,
+}
+
+/// Home-menu entries, in display order. Each opens a dedicated workflow.
+#[derive(Clone, Copy)]
+enum MenuItem {
+    Add,
+    Edit,
+    Delegate,
+    Delete,
+    Graph,
+    Quit,
+}
+
+impl MenuItem {
+    const ALL: [MenuItem; 6] = [
+        MenuItem::Add,
+        MenuItem::Edit,
+        MenuItem::Delegate,
+        MenuItem::Delete,
+        MenuItem::Graph,
+        MenuItem::Quit,
+    ];
+
+    /// The label and a one-line hint shown in the menu.
+    fn label_hint(self) -> (&'static str, &'static str) {
+        match self {
+            MenuItem::Add => ("Add a task", "create a run / auto-detect task"),
+            MenuItem::Edit => ("Edit a task", "pick a task and change its options"),
+            MenuItem::Delegate => ("Delegate a task", "hand a task to turbo / make / nx / …"),
+            MenuItem::Delete => ("Delete a task", "pick a task and remove it"),
+            MenuItem::Graph => ("Preview graph", "dependency tree & dry-run commands"),
+            MenuItem::Quit => ("Quit", "every change is already saved"),
+        }
+    }
 }
 
 /// State for the graph/dry-run view: which task is focused (`None` = every task),
@@ -81,9 +131,9 @@ struct App {
     doc: DocumentMut,
     tasks: Vec<String>,
     list: ListState,
+    menu: ListState,
     mode: Mode,
     status: String,
-    dirty: bool,
     quit: bool,
 }
 
@@ -92,14 +142,16 @@ impl App {
         let tasks = task_keys(&doc);
         let mut list = ListState::default();
         list.select(Some(0));
+        let mut menu = ListState::default();
+        menu.select(Some(0));
         App {
             path,
             doc,
             tasks,
             list,
-            mode: Mode::List,
+            menu,
+            mode: Mode::Menu,
             status: String::new(),
-            dirty: false,
             quit: false,
         }
     }
@@ -124,14 +176,11 @@ impl App {
             .select(Some(sel.min(self.tasks.len().saturating_sub(1))));
     }
 
-    fn save_file(&mut self) {
-        match fs::write(&self.path, self.doc.to_string()) {
-            Ok(()) => {
-                self.dirty = false;
-                self.status = format!("saved {}", self.path.display());
-            }
-            Err(e) => self.status = format!("write failed: {e}"),
-        }
+    /// Write the document to disk. Every committed change calls this, so
+    /// `tasks.toml` always matches what the UI shows — there is no unsaved state.
+    fn write_file(&self) -> std::result::Result<(), String> {
+        fs::write(&self.path, self.doc.to_string())
+            .map_err(|e| format!("write failed: {} — {e}", self.path.display()))
     }
 
     // --- input ---
@@ -139,68 +188,97 @@ impl App {
     fn on_key(&mut self, key: ratatui::crossterm::event::KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match &mut self.mode {
-            Mode::List => self.on_key_list(key.code, ctrl),
+            Mode::Menu => self.on_key_menu(key.code),
+            Mode::List(_) => self.on_key_list(key.code),
             Mode::Form(_) => self.on_key_form(key.code, ctrl),
             Mode::Graph(_) => self.on_key_graph(key.code),
-            Mode::ConfirmQuit => self.on_key_confirm(key.code),
+            Mode::ConfirmDelete(_) => self.on_key_confirm_delete(key.code),
         }
     }
 
-    fn on_key_list(&mut self, code: KeyCode, ctrl: bool) {
+    /// The home menu: move between actions and launch the selected workflow.
+    fn on_key_menu(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                if self.dirty {
-                    self.mode = Mode::ConfirmQuit;
-                } else {
-                    self.quit = true;
-                }
-            }
-            KeyCode::Char('s') if ctrl => self.save_file(),
-            KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
-            KeyCode::Char('a') => {
-                self.status.clear();
-                self.mode = Mode::Form(FormState::new_task());
-            }
-            KeyCode::Enter | KeyCode::Char('e') => {
-                if let Some(key) = self.selected_task() {
-                    self.status.clear();
-                    self.mode = Mode::Form(FormState::from_doc(&self.doc, &key));
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(key) = self.selected_task()
-                    && let Some(tasks) = self.doc.get_mut("tasks").and_then(Item::as_table_mut)
-                {
-                    tasks.remove(&key);
-                    self.dirty = true;
-                    self.status = format!("removed '{key}' (unsaved)");
-                    self.refresh_tasks();
-                }
-            }
-            // 'g' previews the selected task's graph; 'G' previews every task.
-            KeyCode::Char('g') => {
-                self.status.clear();
-                let focus = self.selected_task();
-                self.mode = Mode::Graph(GraphView { focus, scroll: 0 });
-            }
-            KeyCode::Char('G') => {
-                self.status.clear();
-                self.mode = Mode::Graph(GraphView {
-                    focus: None,
-                    scroll: 0,
-                });
+            // Nothing to confirm: every change is already on disk.
+            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Down | KeyCode::Char('j') => self.move_menu(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_menu(-1),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let i = self.menu.selected().unwrap_or(0);
+                self.activate_menu(MenuItem::ALL[i]);
             }
             _ => {}
         }
     }
 
-    fn on_key_graph(&mut self, code: KeyCode) {
-        let Mode::Graph(mut view) = std::mem::replace(&mut self.mode, Mode::List) else {
+    /// Launch the workflow for a menu item.
+    fn activate_menu(&mut self, item: MenuItem) {
+        self.status.clear();
+        match item {
+            MenuItem::Add => self.mode = Mode::Form(FormState::new_task()),
+            MenuItem::Delegate => self.mode = Mode::Form(FormState::new_delegate()),
+            MenuItem::Edit => self.open_picker(ListPurpose::Edit),
+            MenuItem::Delete => self.open_picker(ListPurpose::Delete),
+            MenuItem::Graph => {
+                self.mode = Mode::Graph(GraphView {
+                    focus: None,
+                    scroll: 0,
+                })
+            }
+            MenuItem::Quit => self.quit = true,
+        }
+    }
+
+    /// Open the task picker for `purpose`, or bounce back to the menu with a hint
+    /// when there is nothing to pick.
+    fn open_picker(&mut self, purpose: ListPurpose) {
+        if self.tasks.is_empty() {
+            self.status = "no tasks yet — choose \"Add a task\" first".into();
+            return;
+        }
+        self.list.select(Some(0));
+        self.mode = Mode::List(purpose);
+    }
+
+    /// The task picker (opened from Edit or Delete). Enter acts on the selection;
+    /// Esc returns to the menu.
+    fn on_key_list(&mut self, code: KeyCode) {
+        let Mode::List(purpose) = self.mode else {
             return;
         };
         match code {
-            // Back to the list.
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Menu,
+            KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
+            // 'g' previews the selected task's graph from either picker.
+            KeyCode::Char('g') => {
+                self.status.clear();
+                let focus = self.selected_task();
+                self.mode = Mode::Graph(GraphView { focus, scroll: 0 });
+            }
+            KeyCode::Enter => match purpose {
+                ListPurpose::Edit => {
+                    if let Some(key) = self.selected_task() {
+                        self.status.clear();
+                        self.mode = Mode::Form(FormState::from_doc(&self.doc, &key));
+                    }
+                }
+                ListPurpose::Delete => {
+                    if let Some(key) = self.selected_task() {
+                        self.mode = Mode::ConfirmDelete(key);
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    fn on_key_graph(&mut self, code: KeyCode) {
+        let Mode::Graph(mut view) = std::mem::replace(&mut self.mode, Mode::Menu) else {
+            return;
+        };
+        match code {
+            // Back to the menu.
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('g') => return,
             // Widen to all tasks.
             KeyCode::Char('a') | KeyCode::Char('G') => {
@@ -214,25 +292,54 @@ impl App {
         self.mode = Mode::Graph(view);
     }
 
-    fn on_key_form(&mut self, code: KeyCode, ctrl: bool) {
-        // Extract the form; put it back at the end (avoids borrow tangles).
-        let Mode::Form(mut form) = std::mem::replace(&mut self.mode, Mode::List) else {
+    fn on_key_confirm_delete(&mut self, code: KeyCode) {
+        let Mode::ConfirmDelete(key) = std::mem::replace(&mut self.mode, Mode::Menu) else {
             return;
         };
         match code {
+            KeyCode::Char('y') => {
+                if let Some(tasks) = self.doc.get_mut("tasks").and_then(Item::as_table_mut) {
+                    tasks.remove(&key);
+                    self.refresh_tasks();
+                    self.status = match self.write_file() {
+                        Ok(()) => format!("deleted '{key}'"),
+                        Err(e) => e,
+                    };
+                }
+                // Stay in the delete picker if tasks remain, else back to the menu.
+                if !self.tasks.is_empty() {
+                    self.mode = Mode::List(ListPurpose::Delete);
+                }
+            }
+            // Cancel: back to the delete picker.
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::List(ListPurpose::Delete),
+            _ => {}
+        }
+    }
+
+    fn on_key_form(&mut self, code: KeyCode, ctrl: bool) {
+        // Extract the form; put it back at the end (avoids borrow tangles).
+        let Mode::Form(mut form) = std::mem::replace(&mut self.mode, Mode::Menu) else {
+            return;
+        };
+        // Enter saves the form. No text field consumes Enter, and unlike Ctrl+S it
+        // survives editor/IDE terminals, which grab that for "save file" (and it
+        // is XOFF where terminal flow control is on). Ctrl+S stays an alias.
+        if code == KeyCode::Enter || (ctrl && code == KeyCode::Char('s')) {
+            match self.commit_form(&form) {
+                Ok(name) => {
+                    self.status = format!("saved task '{name}' to {}", self.path.display());
+                    return; // back to Menu
+                }
+                Err(e) => form.error = Some(e),
+            }
+            self.mode = Mode::Form(form);
+            return;
+        }
+        match code {
             KeyCode::Esc => {
                 self.status = "edit cancelled".into();
-                return; // mode already reset to List
-            }
-            KeyCode::Char('s') if ctrl => {
-                match self.commit_form(&form) {
-                    Ok(name) => {
-                        self.status =
-                            format!("task '{name}' updated (unsaved — ^S in list writes)");
-                        return; // back to List
-                    }
-                    Err(e) => form.error = Some(e),
-                }
+                return; // mode already reset to Menu
             }
             KeyCode::Up => form.focus_prev(),
             KeyCode::Down | KeyCode::Tab => form.focus_next(),
@@ -246,27 +353,17 @@ impl App {
         self.mode = Mode::Form(form);
     }
 
-    fn on_key_confirm(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Char('y') => {
-                self.save_file();
-                self.quit = true;
-            }
-            KeyCode::Char('n') => self.quit = true,
-            KeyCode::Esc | KeyCode::Char('c') => self.mode = Mode::List,
-            _ => {}
-        }
-    }
-
     /// Validate `form` against a clone of the document; commit only if the whole
-    /// resulting config still validates.
+    /// resulting config still validates, then write it straight to disk. A failed
+    /// write surfaces as a form error, so the user is never told a task was saved
+    /// when it was not.
     fn commit_form(&mut self, form: &FormState) -> std::result::Result<String, String> {
         let mut candidate = self.doc.clone();
         let name = apply_form(&mut candidate, form)?;
         config::validate_str(&candidate.to_string()).map_err(|e| strip_banner(&e))?;
         self.doc = candidate;
-        self.dirty = true;
         self.refresh_tasks();
+        self.write_file()?;
         Ok(name)
     }
 
@@ -277,6 +374,12 @@ impl App {
         let n = self.tasks.len() as i32;
         let cur = self.list.selected().unwrap_or(0) as i32;
         self.list.select(Some((cur + delta).rem_euclid(n) as usize));
+    }
+
+    fn move_menu(&mut self, delta: i32) {
+        let n = MenuItem::ALL.len() as i32;
+        let cur = self.menu.selected().unwrap_or(0) as i32;
+        self.menu.select(Some((cur + delta).rem_euclid(n) as usize));
     }
 
     fn selected_task(&self) -> Option<String> {
@@ -303,28 +406,45 @@ impl App {
                 self.path.display().to_string(),
                 Style::default().fg(Color::DarkGray),
             ),
-            if self.dirty {
-                Span::styled("  ●", Style::default().fg(Color::Yellow))
-            } else {
-                Span::raw("")
-            },
+            // No dirty marker: changes are written as they are made.
+            Span::styled("  · autosaves", Style::default().fg(Color::DarkGray)),
         ]);
         frame.render_widget(Paragraph::new(title), chunks[0]);
 
-        match &self.mode {
-            Mode::List => self.render_list(frame, chunks[1]),
-            Mode::Form(form) => render_form(frame, chunks[1], form),
-            Mode::Graph(view) => render_graph(frame, chunks[1], &self.doc, &self.path, view),
-            Mode::ConfirmQuit => render_confirm(frame, chunks[1]),
+        // `List` needs `&mut self` (list state), so copy its purpose out and
+        // render it after the borrow of `self.mode` ends.
+        let list_purpose = match &self.mode {
+            Mode::Menu => {
+                render_menu(frame, chunks[1], &mut self.menu);
+                None
+            }
+            Mode::Form(form) => {
+                render_form(frame, chunks[1], form);
+                None
+            }
+            Mode::Graph(view) => {
+                render_graph(frame, chunks[1], &self.doc, &self.path, view);
+                None
+            }
+            Mode::ConfirmDelete(key) => {
+                render_confirm_delete(frame, chunks[1], key);
+                None
+            }
+            Mode::List(purpose) => Some(*purpose),
+        };
+        if let Some(purpose) = list_purpose {
+            self.render_list(frame, chunks[1], purpose);
         }
 
         let help = match &self.mode {
-            Mode::List => "↑↓ move · a add · e edit · d delete · g graph · ^S save · q quit",
+            Mode::Menu => "↑↓ move · Enter select · q quit",
+            Mode::List(ListPurpose::Edit) => "↑↓ move · Enter edit · g graph · Esc back",
+            Mode::List(ListPurpose::Delete) => "↑↓ move · Enter delete · g graph · Esc back",
             Mode::Form(_) => {
-                "↑↓/Tab field · ←→/Space change · type to edit · ^S apply · Esc cancel"
+                "↑↓/Tab field · ←→/Space change · type to edit · Enter save · Esc cancel"
             }
-            Mode::Graph(_) => "↑↓ scroll · a all tasks · Esc/g back to list",
-            Mode::ConfirmQuit => "unsaved changes — y save & quit · n discard · Esc cancel",
+            Mode::Graph(_) => "↑↓ scroll · a all tasks · Esc/g back to menu",
+            Mode::ConfirmDelete(_) => "delete task? — y delete · n/Esc cancel",
         };
         let status = if self.status.is_empty() {
             Span::styled(help, Style::default().fg(Color::DarkGray))
@@ -337,42 +457,66 @@ impl App {
         frame.render_widget(Paragraph::new(Line::from(status)), chunks[2]);
     }
 
-    fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = if self.tasks.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                "  (no tasks yet — press 'a' to add one)",
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            self.tasks
-                .iter()
-                .map(|k| {
-                    let desc = describe(&self.doc, k);
-                    ListItem::new(Line::from(vec![
-                        Span::styled(format!("{k:<18}"), Style::default().fg(ACCENT)),
-                        Span::styled(desc, Style::default().fg(Color::Gray)),
-                    ]))
-                })
-                .collect()
+    fn render_list(&mut self, frame: &mut Frame, area: Rect, purpose: ListPurpose) {
+        let items: Vec<ListItem> = self
+            .tasks
+            .iter()
+            .map(|k| {
+                let desc = describe(&self.doc, k);
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{k:<18}"), Style::default().fg(ACCENT)),
+                    Span::styled(desc, Style::default().fg(Color::Gray)),
+                ]))
+            })
+            .collect();
+        let title = match purpose {
+            ListPurpose::Edit => " select a task to edit ",
+            ListPurpose::Delete => " select a task to delete ",
         };
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(" tasks "))
+            .block(Block::default().borders(Borders::ALL).title(title))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol("▌ ");
         frame.render_stateful_widget(list, area, &mut self.list);
     }
 }
 
-fn render_confirm(frame: &mut Frame, area: Rect) {
+/// The home menu: a selectable list of workflows with one-line hints.
+fn render_menu(frame: &mut Frame, area: Rect, state: &mut ListState) {
+    let items: Vec<ListItem> = MenuItem::ALL
+        .iter()
+        .map(|item| {
+            let (label, hint) = item.label_hint();
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{label:<18}"), Style::default().fg(ACCENT).bold()),
+                Span::styled(hint, Style::default().fg(Color::DarkGray)),
+            ]))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" what do you want to do? "),
+        )
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("▌ ");
+    frame.render_stateful_widget(list, area, state);
+}
+
+fn render_confirm_delete(frame: &mut Frame, area: Rect, key: &str) {
     let text = Paragraph::new(vec![
         Line::from(""),
-        Line::from("  You have unsaved changes.").yellow(),
+        Line::from(vec![
+            Span::raw("  Delete task "),
+            Span::styled(format!("'{key}'"), Style::default().fg(ACCENT).bold()),
+            Span::raw("?"),
+        ]),
         Line::from(""),
-        Line::from("  y  save and quit"),
-        Line::from("  n  discard and quit"),
-        Line::from("  Esc  keep editing"),
+        Line::from("  y  delete it"),
+        Line::from("  n  keep it"),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" quit "));
+    .block(Block::default().borders(Borders::ALL).title(" delete "));
     frame.render_widget(text, area);
 }
 
@@ -423,7 +567,7 @@ fn build_graph_lines(cfg: &config::Config, focus: Option<&str>) -> Vec<Line<'sta
     };
     if roots.is_empty() {
         return vec![Line::from(Span::styled(
-            "  (no tasks yet — press Esc, then 'a' to add one)",
+            "  (no tasks yet — press Esc, then choose \"Add a task\")",
             Style::default().fg(Color::DarkGray),
         ))];
     }
@@ -736,6 +880,14 @@ impl FormState {
             focus: 0,
             error: None,
         }
+    }
+
+    /// A blank task form pre-set to the `delegate` type, for the "Delegate a
+    /// task" workflow.
+    fn new_delegate() -> FormState {
+        let mut form = Self::new_task();
+        form.set_choice(F_TYPE, 1); // delegate (string)
+        form
     }
 
     /// Populate a form from an existing task table in the document.
@@ -1375,6 +1527,119 @@ mod tests {
         // a → b → a is a cycle; the tree must break it, not recurse forever.
         let cyclic = preview_cfg("[tasks.a]\ndeps = [\"b\"]\n[tasks.b]\ndeps = [\"a\"]\n");
         assert!(all_text(&build_graph_lines(&cyclic, Some("a"))).contains("(cycle)"));
+    }
+
+    #[test]
+    fn delegate_workflow_preselects_delegate_type() {
+        // "Delegate a task" opens the form already on the delegate type, so the
+        // user lands on the delegate-bin field rather than the run command.
+        let form = FormState::new_delegate();
+        assert_eq!(form.choice(F_TYPE), 1);
+
+        // And it serializes as a delegate task once a bin is filled in.
+        let mut f = form;
+        f.set_text(F_NAME, "build");
+        f.set_text(F_DBIN, "turbo");
+        let mut doc = DocumentMut::new();
+        apply_form(&mut doc, &f).unwrap();
+        config::validate_str(&doc.to_string()).unwrap();
+        assert!(doc.to_string().contains("delegate = \"turbo\""));
+    }
+
+    /// An App over a scratch `tasks.toml` path that is never pre-created.
+    fn app_at(tag: &str, src: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("tsr-tui-keys-{}-{tag}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tasks.toml");
+        let _ = std::fs::remove_file(&path);
+        App::new(path, src.parse::<DocumentMut>().unwrap())
+    }
+
+    #[test]
+    fn enter_writes_the_task_straight_to_disk() {
+        let mut app = app_at("form-enter", "");
+        let mut form = FormState::new_task();
+        form.set_text(F_NAME, "dev");
+        form.set_text(F_RUN, "vite");
+        app.mode = Mode::Form(form);
+
+        // Enter (no Ctrl, no second save step) commits *and* writes the file.
+        app.on_key_form(KeyCode::Enter, false);
+        assert!(matches!(app.mode, Mode::Menu));
+        assert_eq!(app.tasks, vec!["dev"]);
+        assert!(app.path.is_file(), "the form must autosave on apply");
+        let on_disk = std::fs::read_to_string(&app.path).unwrap();
+        assert!(on_disk.contains("run = \"vite\""), "{on_disk}");
+    }
+
+    #[test]
+    fn deleting_a_task_writes_the_file() {
+        let mut app = app_at(
+            "del-save",
+            "[tasks.dev]\nrun = \"vite\"\n[tasks.ci]\nrun = \"x\"\n",
+        );
+        app.mode = Mode::ConfirmDelete("dev".into());
+        app.on_key_confirm_delete(KeyCode::Char('y'));
+        assert_eq!(app.tasks, vec!["ci"]);
+        let on_disk = std::fs::read_to_string(&app.path).unwrap();
+        assert!(!on_disk.contains("[tasks.dev]"), "{on_disk}");
+        assert!(on_disk.contains("[tasks.ci]"), "{on_disk}");
+    }
+
+    #[test]
+    fn cancelling_a_delete_leaves_the_file_alone() {
+        let mut app = app_at("del-cancel", "[tasks.dev]\nrun = \"vite\"\n");
+        app.mode = Mode::ConfirmDelete("dev".into());
+        app.on_key_confirm_delete(KeyCode::Char('n'));
+        assert_eq!(app.tasks, vec!["dev"]);
+        assert!(!app.path.is_file(), "cancelling must not write anything");
+    }
+
+    #[test]
+    fn form_enter_keeps_the_form_open_on_a_validation_error() {
+        let mut app = app_at("form-err", "");
+        // No name → invalid; the form must stay open and show the error.
+        app.mode = Mode::Form(FormState::new_task());
+        app.on_key_form(KeyCode::Enter, false);
+        match &app.mode {
+            Mode::Form(f) => assert!(f.error.is_some(), "expected an inline error"),
+            _ => panic!("form should stay open on an invalid apply"),
+        }
+        // An invalid form is never written — autosave only follows a valid commit.
+        assert!(!app.path.is_file());
+    }
+
+    #[test]
+    fn typing_in_a_form_field_does_not_write() {
+        // Plain letters are text input; only Enter commits and autosaves.
+        let mut app = app_at("form-typing", "");
+        app.mode = Mode::Form(FormState::new_task());
+        for c in "start".chars() {
+            app.on_key_form(KeyCode::Char(c), false);
+        }
+        match &app.mode {
+            Mode::Form(f) => assert_eq!(f.text(F_NAME), "start"),
+            _ => panic!("form should still be open"),
+        }
+        assert!(!app.path.is_file(), "typing must not have written the file");
+    }
+
+    #[test]
+    fn quitting_needs_no_confirmation() {
+        // Autosave means there is never unsaved work to warn about.
+        let mut app = app_at("quit", "[tasks.dev]\nrun = \"vite\"\n");
+        app.on_key_menu(KeyCode::Char('q'));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn menu_has_a_hint_for_every_item() {
+        // Every home-menu entry carries a non-empty label and hint.
+        for item in MenuItem::ALL {
+            let (label, hint) = item.label_hint();
+            assert!(!label.is_empty());
+            assert!(!hint.is_empty());
+        }
     }
 
     #[test]

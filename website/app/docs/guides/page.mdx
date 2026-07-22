@@ -223,6 +223,11 @@ Instead of hand-editing TOML, open the terminal UI:
 tsr --config
 ```
 
+It opens on a menu — **Add a task**, **Edit a task**, **Delegate a task**,
+**Delete a task**, **Preview graph** — so you never face a blank screen. Changes
+**autosave**: press `⏎` in the form and the task is validated and written to
+`tasks.toml` right away, with no separate save step.
+
 It edits through the same format-preserving parser used everywhere else, so
 **comments and unknown keys survive**, and every change is validated before it is
 written. The full key map is in the [CLI reference](/docs/cli).

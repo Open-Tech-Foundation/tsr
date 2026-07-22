@@ -37,10 +37,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a task named `list` or `init` is never shadowed.
 - `tsr --config`: an interactive TUI (ratatui) for authoring tasks with every
   option (form, `dir`/`packages`, `deps`, `parallel`, `args`, `env`) instead of
-  hand-editing TOML. Add/edit/delete tasks in a list + form UI; edits go through
-  the format-preserving `toml_edit` document (comments and unknown keys survive)
-  and are validated before being committed or written. Starts a new file if none
-  exists.
+  hand-editing TOML. It opens on a **home menu** of workflows — Add a task, Edit
+  a task, Delegate a task, Delete a task, Preview graph, Quit — so there is
+  always an obvious next step instead of a blank list; each entry launches its
+  own screen and `Esc` returns to the menu. Add/Delegate open the task form
+  (Delegate pre-selects the `delegate` type); Edit/Delete open a task picker;
+  delete asks for a `y`/`n` confirmation. Changes **autosave**: applying a form
+  or confirming a delete writes `tasks.toml` immediately, so there is no unsaved
+  state, no dirty marker, and no discard prompt on quit — and because a change is
+  validated *before* it is committed, an autosave can never write a broken config
+  (an invalid form stays open with the error inline). `⏎` saves a form rather than
+  `Ctrl+S`, which editor/IDE terminals grab for "save file" and which is XOFF
+  where terminal flow control is on; `Ctrl+S` remains an alias. Edits go through
+  the format-preserving `toml_edit` document, so comments and unknown keys
+  survive. Starts a new file if none exists.
 - `tsr --config` graph/dry-run view (`g` for the selected task, `G`/`a` for all):
   a read-only, connected dependency tree rendered with box connectors, showing
   each task's **dry-run** command — what `tsr` would execute, resolved by the real

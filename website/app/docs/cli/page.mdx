@@ -82,25 +82,43 @@ reports the detected package and reminds you that scripts run directly (e.g.
 Opens an interactive terminal UI for editing `tasks.toml` — the intended way to
 author tasks with all their options instead of hand-editing TOML.
 
-- **List view** — every defined task with its form. `a` add, `e`/`⏎` edit, `d`
-  delete, `g` graph, `^S` write to disk, `q` quit.
+It **autosaves**: there is no separate write step, no unsaved state, and no
+"discard changes?" prompt. Applying a task in the form (or confirming a delete)
+validates the whole config and writes `tasks.toml` immediately — and since an
+invalid form is never committed, an autosave can never leave a broken file.
+
+- **Menu (home)** — the TUI opens on a menu of workflows rather than a blank
+  list, so there is always an obvious next step: **Add a task**, **Edit a task**,
+  **Delegate a task**, **Delete a task**, **Preview graph**, and **Quit**.
+  `↑↓` move, `⏎` opens the selected workflow, `q` quits. Every sub-screen returns
+  here with `Esc`.
+- **Add / Delegate** — open the form for a new task. **Delegate** starts already
+  on the `delegate` type so you land on the backend-bin field.
+- **Edit / Delete** — open a task picker (the list of defined tasks). `↑↓` move,
+  `⏎` edits (or deletes, with a `y`/`n` confirm) the selected task, `g` previews
+  its graph, `Esc` goes back to the menu.
 - **Form view** — fields for the full task model: name, form
   (`run` / `delegate` / `delegate(table)` / auto-detect), `dir` **or** `packages`,
   `deps`, `args`, `parallel`, `env`, and `env_file`. Irrelevant fields are hidden
   based on the chosen form. `↑↓`/`Tab` move, `←→`/`Space` change a choice/toggle,
-  `^S` applies the task, `Esc` cancels.
+  `⏎` saves the task, `Esc` cancels. A validation error keeps the form open and
+  shows the problem inline, so nothing is written until it is fixed.
+
+  `⏎` is the save key rather than `Ctrl+S` deliberately: editor and IDE terminals
+  grab `Ctrl+S` for "save file", and it is XOFF on terminals with flow control
+  on. `Ctrl+S` still works as an alias where the terminal lets it through.
 - **Graph view** — a read-only, connected dependency tree with each task's
   **dry-run** command (what `tsr` would actually execute, resolved by the same
   precedence: `delegate` → `run` → auto-detect; a deps-only task shows "runs its
-  deps only"). `g` previews the selected task's subtree; `G` shows every task
-  (rooted at the tasks nothing depends on). Parallel vs. sequential `deps` are
-  tagged, and undefined deps or cycles in a mid-edit config are flagged inline.
-  `↑↓` scroll, `a` widen to all, `Esc`/`g` back to the list.
+  deps only"). It shows every task rooted at the tasks nothing depends on, or a
+  single task's subtree when opened from a picker. Parallel vs. sequential `deps`
+  are tagged, and undefined deps or cycles in a mid-edit config are flagged
+  inline. `↑↓` scroll, `a` widen to all, `Esc`/`g` back to the menu.
 
 Edits go through the same format-preserving parser used everywhere else, so
-**comments and unknown keys survive**, and every change is validated before it is
-committed or written. If no `tasks.toml` exists yet, `--config` starts a new one
-in the current directory.
+**comments and unknown keys survive** each autosave, and every change is
+validated before it is written. If no `tasks.toml` exists yet, `--config` starts
+a new one in the current directory — the file appears on your first saved task.
 
 ## `tsr --init`
 

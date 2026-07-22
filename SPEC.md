@@ -208,9 +208,13 @@ so a task named `list` or `init` is never shadowed — `tsr list` runs the user'
 tasks/scripts, which is the point of the tool.
 
 `--config` opens a TUI for authoring tasks with every option (form, `dir`/
-`packages`, `deps`, `parallel`, `args`, `env`, `env_file`). It edits through the
-`toml_edit` document, so comments and unknown keys survive (§1.5), and validates
-each change before writing. It also offers a read-only graph/dry-run preview.
+`packages`, `deps`, `parallel`, `args`, `env`, `env_file`). It opens on a menu of
+workflows (add / edit / delegate / delete / graph), not a bare list. It edits
+through the `toml_edit` document, so comments and unknown keys survive (§1.5),
+and validates each change before writing. Changes autosave — a committed form or
+delete is written immediately, so there is no unsaved state; since validation
+precedes the commit, an autosave never writes a broken config. It also offers a
+read-only graph/dry-run preview.
 
 ---
 
