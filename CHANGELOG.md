@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Installation scripts & website: added platform-native install scripts (`install.sh` for Linux/macOS/FreeBSD and `install.ps1` for Windows) supporting SHA-256 checksum verification and updated the website docs installation guide (`website/app/docs/page.mdx`).
+- Website: set site version badge (`version: "v0.1.0"`) in `website/otfw.config.js` and added Cloudflare Workers deployment config (`website/wrangler.jsonc`) for static assets hosting.
 - CI/CD: added release workflow (`.github/workflows/release.yml`) and release configuration (`release.toml`) using `otf-release`.
 - Website: integrated OTF org site footer (`SiteFooter`, `BuiltWithBadge`, OTF logo mark) with dark background, MIT license, OTF logo favicon, and custom OTF (black) / Web (brand orange `rgb(255, 133, 27)`) badge styling.
 - Benchmark suite & website: added Deno (`deno task`) to the cross-runner benchmark harness (`benches/gen-workspace.sh`, `benches/run.sh`), updated benchmark docs, landing page comparison table, and synced snapshot data on website.
