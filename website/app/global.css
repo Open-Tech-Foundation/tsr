@@ -360,6 +360,84 @@ h1.title .grad {
   color: var(--cyan);
 }
 
+/* --- comparison table --- */
+.compare-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  min-width: 640px;
+}
+.compare th,
+.compare td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: center;
+}
+.compare tbody tr:last-child th,
+.compare tbody tr:last-child td {
+  border-bottom: 0;
+}
+.compare thead th {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.compare thead th:first-child {
+  text-align: left;
+}
+.compare th[scope="row"] {
+  text-align: left;
+  font-weight: 500;
+}
+.compare .cmp-label {
+  display: block;
+  color: var(--text);
+}
+.compare .cmp-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.compare .cmp-self {
+  background: var(--accent-glow);
+}
+.compare thead th.cmp-self {
+  color: var(--accent);
+  font-weight: 700;
+}
+.cmp-y {
+  color: var(--accent);
+  font-weight: 700;
+}
+.cmp-p {
+  color: var(--amber);
+  font-weight: 700;
+}
+.cmp-d {
+  color: var(--cyan);
+  font-weight: 700;
+}
+.cmp-n {
+  color: var(--text-faint);
+}
+.cmp-legend {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.cmp-legend a {
+  color: var(--accent);
+}
+
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;

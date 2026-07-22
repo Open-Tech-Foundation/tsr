@@ -28,6 +28,56 @@ tsr dev
 tsr test -- --watch
 `;
 
+// Capability comparison against the other runners people reach for. Each cell is
+// "y" (has it), "p" (partial / needs a plugin or extra tool), or "n" (no). Kept
+// deliberately factual — the benchmark page has the speed numbers.
+const COMPARE_TOOLS = ["tsr", "npm", "just", "go-task", "mise", "Turbo/Nx"];
+const COMPARE_ROWS = [
+  {
+    label: "Auto-detects each package's runner",
+    hint: "cargo / go / npm / bun / uv from a bare task",
+    cells: ["y", "n", "n", "n", "n", "n"],
+  },
+  {
+    label: "Dependency graph (DAG)",
+    cells: ["y", "n", "y", "y", "y", "y"],
+  },
+  {
+    label: "Opt-in parallelism",
+    cells: ["y", "p", "n", "y", "y", "y"],
+  },
+  {
+    label: "Monorepo workspace fan-out",
+    hint: "run one task across every package",
+    cells: ["y", "p", "n", "n", "n", "y"],
+  },
+  {
+    label: "Resolves node_modules/.bin",
+    hint: "call vite / eslint like npm run",
+    cells: ["y", "y", "n", "n", "n", "y"],
+  },
+  {
+    label: "Native speed, no runtime boot",
+    cells: ["y", "n", "y", "p", "p", "n"],
+  },
+  {
+    label: "Single static binary",
+    cells: ["y", "n", "y", "y", "y", "n"],
+  },
+  {
+    label: "Content-hash / remote caching",
+    hint: "tsr delegates this to Turbo/Nx by design",
+    cells: ["d", "n", "n", "p", "n", "y"],
+  },
+];
+
+const COMPARE_MARK = {
+  y: { sym: "✓", cls: "cmp-y", label: "yes" },
+  p: { sym: "~", cls: "cmp-p", label: "partial" },
+  n: { sym: "✕", cls: "cmp-n", label: "no" },
+  d: { sym: "→", cls: "cmp-d", label: "delegated by design" },
+};
+
 // The marketing landing page. Static (no client state) — the live chrome (navbar,
 // theme toggle) comes from RootLayout. Internal links use <Link> for client-side
 // navigation; the docs section owns its own layout.
@@ -147,6 +197,59 @@ export default function Home() {
               </p>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* --- comparison --- */}
+      <section class="section">
+        <div class="container">
+          <h2>How it compares</h2>
+          <p class="sub">
+            tsr is a command runner, not a build system — it unifies the runners you have
+            and cedes caching to the tools built for it. Here's where it lands next to the
+            usual suspects.
+          </p>
+          <div class="compare-wrap">
+            <table class="compare">
+              <thead>
+                <tr>
+                  <th scope="col">Capability</th>
+                  {COMPARE_TOOLS.map((t) => (
+                    <th scope="col" class={t === "tsr" ? "cmp-self" : ""}>
+                      {t}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {COMPARE_ROWS.map((row) => (
+                  <tr>
+                    <th scope="row">
+                      <span class="cmp-label">{row.label}</span>
+                      {row.hint ? <span class="cmp-hint">{row.hint}</span> : null}
+                    </th>
+                    {row.cells.map((c, i) => {
+                      const m = COMPARE_MARK[c];
+                      return (
+                        <td class={COMPARE_TOOLS[i] === "tsr" ? "cmp-self" : ""}>
+                          <span class={m.cls} title={m.label} aria-label={m.label}>
+                            {m.sym}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class="cmp-legend">
+            <span class="cmp-y">✓</span> yes&nbsp;&nbsp;
+            <span class="cmp-p">~</span> partial / needs a plugin&nbsp;&nbsp;
+            <span class="cmp-d">→</span> delegated by design&nbsp;&nbsp;
+            <span class="cmp-n">✕</span> no&nbsp;&nbsp;·&nbsp;&nbsp;
+            <Link href="/docs/benchmarks">see the speed numbers →</Link>
+          </p>
         </div>
       </section>
 
