@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the format-preserving `toml_edit` document (comments and unknown keys survive)
   and are validated before being committed or written. Starts a new file if none
   exists.
+- `tsr --config` graph/dry-run view (`g` for the selected task, `G`/`a` for all):
+  a read-only, connected dependency tree rendered with box connectors, showing
+  each task's **dry-run** command — what `tsr` would execute, resolved by the real
+  precedence (`delegate` → `run` → auto-detect; a deps-only task shows "runs its
+  deps only" and a `packages` task is annotated with its fan-out). Parallel vs.
+  sequential batches are tagged, roots are the tasks nothing depends on, and
+  undefined deps or dependency cycles in a mid-edit config are flagged inline.
 - Landing page: a "How it compares" capability table (tsr vs npm, bun, just,
   go-task, mise, Turbo/Nx) covering auto-detection, dependency graph, parallelism,
   monorepo fan-out, `node_modules/.bin` resolution, declarative env vars & `.env`,

@@ -20,6 +20,7 @@ use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::config;
 use crate::error::{Result, TsrError};
+use crate::resolve::{self, Invocation};
 
 // Form field indices (fixed order).
 const F_NAME: usize = 0;
@@ -61,7 +62,16 @@ pub fn run(path: &Path) -> Result<()> {
 enum Mode {
     List,
     Form(FormState),
+    /// The read-only dependency-graph / dry-run preview.
+    Graph(GraphView),
     ConfirmQuit,
+}
+
+/// State for the graph/dry-run view: which task is focused (`None` = every task),
+/// and a vertical scroll offset for tall graphs.
+struct GraphView {
+    focus: Option<String>,
+    scroll: u16,
 }
 
 /// The application state.
@@ -130,6 +140,7 @@ impl App {
         match &mut self.mode {
             Mode::List => self.on_key_list(key.code, ctrl),
             Mode::Form(_) => self.on_key_form(key.code, ctrl),
+            Mode::Graph(_) => self.on_key_graph(key.code),
             Mode::ConfirmQuit => self.on_key_confirm(key.code),
         }
     }
@@ -166,8 +177,40 @@ impl App {
                     self.refresh_tasks();
                 }
             }
+            // 'g' previews the selected task's graph; 'G' previews every task.
+            KeyCode::Char('g') => {
+                self.status.clear();
+                let focus = self.selected_task();
+                self.mode = Mode::Graph(GraphView { focus, scroll: 0 });
+            }
+            KeyCode::Char('G') => {
+                self.status.clear();
+                self.mode = Mode::Graph(GraphView {
+                    focus: None,
+                    scroll: 0,
+                });
+            }
             _ => {}
         }
+    }
+
+    fn on_key_graph(&mut self, code: KeyCode) {
+        let Mode::Graph(mut view) = std::mem::replace(&mut self.mode, Mode::List) else {
+            return;
+        };
+        match code {
+            // Back to the list.
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('g') => return,
+            // Widen to all tasks.
+            KeyCode::Char('a') | KeyCode::Char('G') => {
+                view.focus = None;
+                view.scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
+            KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
+            _ => {}
+        }
+        self.mode = Mode::Graph(view);
     }
 
     fn on_key_form(&mut self, code: KeyCode, ctrl: bool) {
@@ -270,14 +313,16 @@ impl App {
         match &self.mode {
             Mode::List => self.render_list(frame, chunks[1]),
             Mode::Form(form) => render_form(frame, chunks[1], form),
+            Mode::Graph(view) => render_graph(frame, chunks[1], &self.doc, &self.path, view),
             Mode::ConfirmQuit => render_confirm(frame, chunks[1]),
         }
 
         let help = match &self.mode {
-            Mode::List => "↑↓ move · a add · e/⏎ edit · d delete · ^S save file · q quit",
+            Mode::List => "↑↓ move · a add · e edit · d delete · g graph · ^S save · q quit",
             Mode::Form(_) => {
                 "↑↓/Tab field · ←→/Space change · type to edit · ^S apply · Esc cancel"
             }
+            Mode::Graph(_) => "↑↓ scroll · a all tasks · Esc/g back to list",
             Mode::ConfirmQuit => "unsaved changes — y save & quit · n discard · Esc cancel",
         };
         let status = if self.status.is_empty() {
@@ -328,6 +373,215 @@ fn render_confirm(frame: &mut Frame, area: Rect) {
     ])
     .block(Block::default().borders(Borders::ALL).title(" quit "));
     frame.render_widget(text, area);
+}
+
+// --- graph / dry-run preview ---
+
+/// Which tree connector a node draws before its label.
+#[derive(Clone, Copy)]
+enum Branch {
+    Root,
+    Mid,
+    Last,
+}
+
+fn render_graph(frame: &mut Frame, area: Rect, doc: &DocumentMut, path: &Path, view: &GraphView) {
+    let title = match &view.focus {
+        Some(k) => format!(" graph · {k} "),
+        None => " graph · all tasks ".to_string(),
+    };
+
+    // Resolve auto-detect against the config's own directory, mirroring a real run.
+    let root = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let lines = match config::parse_str(&doc.to_string(), root) {
+        Ok(cfg) => build_graph_lines(&cfg, view.focus.as_deref()),
+        Err(e) => vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  cannot preview — {}", strip_banner(&e)),
+                Style::default().fg(Color::Red),
+            )),
+        ],
+    };
+
+    let para = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .scroll((view.scroll, 0));
+    frame.render_widget(para, area);
+}
+
+/// Build the connected dependency tree as styled lines: each task node shows its
+/// resolved (dry-run) command; `deps` are drawn as children with box connectors.
+fn build_graph_lines(cfg: &config::Config, focus: Option<&str>) -> Vec<Line<'static>> {
+    let roots: Vec<String> = match focus {
+        Some(k) => vec![k.to_string()],
+        None => root_tasks(cfg),
+    };
+    if roots.is_empty() {
+        return vec![Line::from(Span::styled(
+            "  (no tasks yet — press Esc, then 'a' to add one)",
+            Style::default().fg(Color::DarkGray),
+        ))];
+    }
+
+    let mut out = vec![Line::from("")];
+    for (i, r) in roots.iter().enumerate() {
+        let mut ancestors: Vec<String> = Vec::new();
+        node_lines(
+            cfg,
+            r,
+            String::new(),
+            Branch::Root,
+            &mut ancestors,
+            &mut out,
+        );
+        if i + 1 < roots.len() {
+            out.push(Line::from(""));
+        }
+    }
+    out
+}
+
+/// Tasks that nothing else depends on — the natural roots of the graph. Falls
+/// back to every task if a cycle leaves none (the tree renderer breaks cycles).
+fn root_tasks(cfg: &config::Config) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut depended: BTreeSet<&str> = BTreeSet::new();
+    for t in cfg.tasks.values() {
+        for d in &t.deps {
+            depended.insert(d.as_str());
+        }
+    }
+    let roots: Vec<String> = cfg
+        .tasks
+        .keys()
+        .filter(|k| !depended.contains(k.as_str()))
+        .cloned()
+        .collect();
+    if roots.is_empty() {
+        cfg.tasks.keys().cloned().collect()
+    } else {
+        roots
+    }
+}
+
+/// Recursively append one node and its `deps` subtree. `prefix` is the accumulated
+/// indentation; `ancestors` guards against cycles in a mid-edit config.
+fn node_lines(
+    cfg: &config::Config,
+    key: &str,
+    prefix: String,
+    branch: Branch,
+    ancestors: &mut Vec<String>,
+    out: &mut Vec<Line<'static>>,
+) {
+    let connector = match branch {
+        Branch::Root => "",
+        Branch::Mid => "├─ ",
+        Branch::Last => "└─ ",
+    };
+    let mut spans = vec![Span::styled(
+        format!("  {prefix}{connector}"),
+        Style::default().fg(Color::DarkGray),
+    )];
+
+    let Some(task) = cfg.task(key) else {
+        // A dep that names no defined task.
+        spans.push(Span::styled(
+            format!("● {key}"),
+            Style::default().fg(Color::Red),
+        ));
+        spans.push(Span::styled(
+            "  (undefined task)",
+            Style::default().fg(Color::Red),
+        ));
+        out.push(Line::from(spans));
+        return;
+    };
+
+    spans.push(Span::styled(
+        format!("● {key}"),
+        Style::default().fg(ACCENT).bold(),
+    ));
+    if !task.deps.is_empty() {
+        let tag = if task.parallel {
+            "  ⇉ parallel"
+        } else {
+            "  → sequential"
+        };
+        spans.push(Span::styled(tag, Style::default().fg(Color::Yellow)));
+    }
+    spans.push(Span::styled(
+        format!("   {}", dry_run(cfg, task)),
+        Style::default().fg(Color::Gray),
+    ));
+    out.push(Line::from(spans));
+
+    let child_prefix = match branch {
+        Branch::Root => String::new(),
+        Branch::Mid => format!("{prefix}│  "),
+        Branch::Last => format!("{prefix}   "),
+    };
+    ancestors.push(key.to_string());
+    let n = task.deps.len();
+    for (i, dep) in task.deps.iter().enumerate() {
+        let last = i + 1 == n;
+        if ancestors.contains(dep) {
+            let conn = if last { "└─ " } else { "├─ " };
+            out.push(Line::from(vec![
+                Span::styled(
+                    format!("  {child_prefix}{conn}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("↺ {dep}"), Style::default().fg(Color::Red)),
+                Span::styled("  (cycle)", Style::default().fg(Color::Red)),
+            ]));
+        } else {
+            let b = if last { Branch::Last } else { Branch::Mid };
+            node_lines(cfg, dep, child_prefix.clone(), b, ancestors, out);
+        }
+    }
+    ancestors.pop();
+}
+
+/// The command `tsr` would run for a task, computed from the config alone — the
+/// same precedence the executor uses (SPEC §3.1, §5): a deps-only task is a pure
+/// aggregator; otherwise resolve `delegate` / `run` / auto-detect.
+fn dry_run(cfg: &config::Config, task: &config::Task) -> String {
+    if task.run.is_none()
+        && task.delegate.is_none()
+        && task.packages.is_none()
+        && !task.deps.is_empty()
+    {
+        return "runs its deps only".to_string();
+    }
+
+    let dir = match &task.dir {
+        Some(d) => cfg.root.join(d),
+        None => cfg.root.clone(),
+    };
+    let base = match resolve::resolve(task, &dir) {
+        Ok(Invocation::Direct { program, args }) => std::iter::once(program)
+            .chain(args)
+            .collect::<Vec<_>>()
+            .join(" "),
+        Ok(Invocation::Run(s)) => s,
+        // Auto-detect with no ecosystem marker in `dir` — can't name the runner.
+        Err(_) => "auto-detect (native runner)".to_string(),
+    };
+
+    let mut cmd = format!("→ {base}");
+    if !task.args.is_empty() {
+        cmd.push(' ');
+        cmd.push_str(&task.args.join(" "));
+    }
+    match &task.packages {
+        Some(p) if !p.is_empty() => format!("{cmd}   × packages [{}]", p.join(", ")),
+        _ => cmd,
+    }
 }
 
 fn render_form(frame: &mut Frame, area: Rect, form: &FormState) {
@@ -961,6 +1215,108 @@ mod tests {
         let f = form_with(&[(F_NAME, "bad name"), (F_RUN, "true")], &[(F_TYPE, 0)]);
         let mut doc = DocumentMut::new();
         assert!(apply_form(&mut doc, &f).is_err());
+    }
+
+    // --- graph / dry-run preview ---
+
+    /// Parse a config for the preview, rooted at a marker-free temp dir so
+    /// auto-detect resolves deterministically to "native runner" (no ecosystem).
+    fn preview_cfg(text: &str) -> config::Config {
+        let dir = std::env::temp_dir().join(format!(
+            "tsr-tui-graph-{}-{}",
+            std::process::id(),
+            text.len()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        config::parse_str(text, dir).unwrap()
+    }
+
+    fn all_text(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn dry_run_resolves_each_form() {
+        let cfg = preview_cfg(
+            "[tasks.dev]\nrun = \"vite\"\nargs = [\"--host\"]\n\
+             [tasks.build]\ndelegate = \"turbo\"\n\
+             [tasks.bundle]\ndelegate = { bin = \"make\", args = [\"bundle\"] }\n\
+             [tasks.ci]\ndeps = [\"build\"]\n\
+             [tasks.detect]\n",
+        );
+        assert_eq!(dry_run(&cfg, cfg.task("dev").unwrap()), "→ vite --host");
+        assert_eq!(
+            dry_run(&cfg, cfg.task("build").unwrap()),
+            "→ turbo run build"
+        );
+        assert_eq!(dry_run(&cfg, cfg.task("bundle").unwrap()), "→ make bundle");
+        assert_eq!(dry_run(&cfg, cfg.task("ci").unwrap()), "runs its deps only");
+        assert_eq!(
+            dry_run(&cfg, cfg.task("detect").unwrap()),
+            "→ auto-detect (native runner)"
+        );
+    }
+
+    #[test]
+    fn dry_run_annotates_packages_fan_out() {
+        let cfg = preview_cfg(
+            "[workspace]\nmembers = [\"apps/*\"]\n\
+             [tasks.test]\nrun = \"vitest\"\npackages = [\"apps/*\"]\n",
+        );
+        assert_eq!(
+            dry_run(&cfg, cfg.task("test").unwrap()),
+            "→ vitest   × packages [apps/*]"
+        );
+    }
+
+    #[test]
+    fn roots_exclude_depended_on_tasks() {
+        let cfg = preview_cfg(
+            "[tasks.ci]\ndeps = [\"lint\", \"test\"]\n\
+             [tasks.lint]\nrun = \"true\"\n[tasks.test]\nrun = \"true\"\n\
+             [tasks.standalone]\nrun = \"true\"\n",
+        );
+        // lint/test are depended on by ci, so only ci + standalone are roots.
+        assert_eq!(root_tasks(&cfg), vec!["ci", "standalone"]);
+    }
+
+    #[test]
+    fn graph_lines_draw_connected_tree() {
+        let cfg = preview_cfg(
+            "[tasks.ci]\ndeps = [\"lint\", \"build\"]\nparallel = true\n\
+             [tasks.lint]\nrun = \"eslint .\"\n\
+             [tasks.build]\ndelegate = \"turbo\"\n",
+        );
+        let text = all_text(&build_graph_lines(&cfg, Some("ci")));
+        assert!(text.contains("● ci"), "{text}");
+        assert!(text.contains("⇉ parallel"), "{text}");
+        assert!(
+            text.contains("├─ ● lint") && text.contains("→ eslint ."),
+            "{text}"
+        );
+        assert!(
+            text.contains("└─ ● build") && text.contains("→ turbo run build"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn graph_marks_undefined_deps_and_cycles() {
+        let missing = preview_cfg("[tasks.a]\ndeps = [\"ghost\"]\n[tasks.b]\nrun = \"true\"\n");
+        assert!(all_text(&build_graph_lines(&missing, Some("a"))).contains("(undefined task)"));
+
+        // a → b → a is a cycle; the tree must break it, not recurse forever.
+        let cyclic = preview_cfg("[tasks.a]\ndeps = [\"b\"]\n[tasks.b]\ndeps = [\"a\"]\n");
+        assert!(all_text(&build_graph_lines(&cyclic, Some("a"))).contains("(cycle)"));
     }
 
     #[test]

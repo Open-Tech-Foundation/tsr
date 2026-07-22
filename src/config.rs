@@ -112,8 +112,16 @@ pub fn locate(start: &Path) -> Option<PathBuf> {
 /// system — parse then run the structural checks. Used by the `--config` TUI to
 /// reject an edit before it is written.
 pub(crate) fn validate_str(text: &str) -> Result<()> {
-    let cfg = parse(text, PathBuf::from("."))?;
-    cfg.validate()
+    parse_str(text, PathBuf::from(".")).map(|_| ())
+}
+
+/// Parse and validate a config document from text, resolving auto-detect against
+/// `root`. Used by the `--config` TUI's graph/dry-run preview, which needs the
+/// typed [`Task`] model (not just a yes/no validation).
+pub(crate) fn parse_str(text: &str, root: PathBuf) -> Result<Config> {
+    let cfg = parse(text, root)?;
+    cfg.validate()?;
+    Ok(cfg)
 }
 
 /// Validate a single task-name/key against the grammar (SPEC §4.1). Exposed for
