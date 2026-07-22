@@ -4,6 +4,7 @@ description: What tsr is, what it deliberately is not, and how to run your first
 ---
 
 import { Callout, Steps } from "@opentf/web-docs";
+import InstallTabs from "./InstallTabs.jsx";
 
 # tsr
 
@@ -48,12 +49,9 @@ From an empty repo to a running task in four steps.
 
 ### Install
 
-`tsr` is a single static binary. Build it from source with Cargo, then put it on
-your `PATH`:
+`tsr` is a single static binary. Install it using the official installer or build from source:
 
-```sh
-cargo build --release       # → target/release/tsr
-```
+<InstallTabs />
 
 ### Scaffold a config
 
