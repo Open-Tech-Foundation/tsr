@@ -5,7 +5,7 @@ noop:
 	@true
 
 shell:
-	@echo $$HOME && echo done
+	@echo $$HOME && echo ok
 
 steps5:
 	@true

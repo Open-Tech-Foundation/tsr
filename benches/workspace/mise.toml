@@ -2,7 +2,7 @@
 [tasks.noop]
 run = "true"
 [tasks.shell]
-run = "echo $HOME && echo done"
+run = "echo $HOME && echo ok"
 [tasks.steps5]
 run = ["true","true","true","true","true"]
 [tasks.s1]

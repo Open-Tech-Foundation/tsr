@@ -37,7 +37,7 @@ run = "true"
 run = "true"
 
 [tasks.shell]
-run = "echo $HOME && echo done"
+run = "echo $HOME && echo ok"
 
 [tasks.cli]
 run = "localcli"

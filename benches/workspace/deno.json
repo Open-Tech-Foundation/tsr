@@ -1,8 +1,5 @@
 {
-  "name": "tsr-bench-workspace",
-  "private": true,
-  "version": "0.0.0",
-  "scripts": {
+  "tasks": {
     "noop": "true",
     "shell": "echo $HOME && echo ok",
     "cli": "localcli",

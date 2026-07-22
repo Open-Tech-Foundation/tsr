@@ -63,9 +63,11 @@ bench() {
   if [[ "$graph_n" -gt 0 ]]; then
     has npm && args+=(-n npm "$(chain 'npm run --silent' "$graph_n")")
     has bun && args+=(-n bun "$(chain 'bun run' "$graph_n")")
+    has deno && args+=(-n deno "$(chain 'deno task --quiet' "$graph_n")")
   else
     has npm && args+=(-n npm "npm run --silent $target")
     has bun && args+=(-n bun "bun run $target")
+    has deno && args+=(-n deno "deno task --quiet $target")
   fi
   if [[ "$tools" != "js" ]]; then
     has just && args+=(-n just "just $target")

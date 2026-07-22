@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Benchmark suite: added Deno (`deno task`) to the cross-runner benchmark harness (`benches/gen-workspace.sh`, `benches/run.sh`), updated benchmark docs and synced snapshot data on website.
+
 - Per-task `env_file`: a task may load one or more `.env`-style files (a string
   or an array), e.g. `env_file = [".env.local", ".env.test"]`. Files are resolved
   relative to the task's `dir` (or the workspace root) and layered into the merge

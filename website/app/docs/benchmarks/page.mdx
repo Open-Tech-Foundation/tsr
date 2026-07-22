@@ -1,6 +1,6 @@
 ---
 title: Benchmarks
-description: How tsr's overhead compares to npm, bun, just, go-task, and make — for a single task and across a dependency graph.
+description: How tsr's overhead compares to npm, bun, deno, just, go-task, and make — for a single task and across a dependency graph.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -14,7 +14,7 @@ the **runners themselves**, these scenarios run tasks that do almost nothing and
 measure what's left: process startup, config parsing, and the cost of reaching
 the child commands.
 
-The same task definitions are generated for every tool (`tsr`, `npm`, `bun`,
+The same task definitions are generated for every tool (`tsr`, `npm`, `bun`, `deno`,
 `just`, go-task, `make`, and `mise`) — see [`benches/`](https://github.com/Open-Tech-Foundation/tsr/tree/main/benches)
 — and timed with [hyperfine](https://github.com/sharkdp/hyperfine). The numbers
 below are loaded directly from the benchmark's JSON export.
@@ -42,10 +42,10 @@ those use a `delegate` to `sh -c` as an escape hatch, not measured here.)
 The real "`npm run` replacement" case: a task that calls a project-local tool
 like `vite` or `eslint`. These are Node programs, so every runner ultimately
 spawns Node; what differs is the runner's *own* startup on top. Only the runners
-that resolve `node_modules/.bin` can do this — `tsr`, `npm`, and `bun` — so this
-is a three-way comparison (`just`/`make`/go-task/`mise` don't resolve project-local
+that resolve `node_modules/.bin` can do this — `tsr`, `npm`, `bun`, and `deno` — so this
+is a four-way comparison (`just`/`make`/go-task/`mise` don't resolve project-local
 binaries, so a bare recipe wouldn't find the tool at all). `tsr` prepends
-`node_modules/.bin` to `PATH` like npm/bun, then spawns the tool directly —
+`node_modules/.bin` to `PATH` like npm/bun/deno, then spawns the tool directly —
 skipping npm's extra Node startup.
 
 <BenchChart scenario={data.scenarios.localbin} />

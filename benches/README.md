@@ -23,20 +23,20 @@ The `shell` scenario exercises the mini-shell tsr supports natively (`$VAR`,
 `sh -c` or a script file, so they aren't part of this comparison.
 
 The `localbin` scenario resolves a binary from `node_modules/.bin` — the lookup
-`tsr`, `npm`, and `bun` perform but `just`/`make`/go-task/`mise` do not — so it
-compares only those three. The stand-in binary is a trivial Node script, because
+`tsr`, `npm`, `bun`, and `deno` perform but `just`/`make`/go-task/`mise` do not — so it
+compares only those four. The stand-in binary is a trivial Node script, because
 the real tools it represents (`vite`, `eslint`) are Node programs; every runner
 pays Node's startup once, and the delta is the runner's own overhead on top.
 
 The task definitions are generated for every tool by
 [`gen-workspace.sh`](gen-workspace.sh) into [`workspace/`](workspace/):
 [`tasks.toml`](workspace/tasks.toml) (tsr), [`package.json`](workspace/package.json)
-(npm/bun), [`justfile`](workspace/justfile) (just),
+(npm/bun), [`deno.json`](workspace/deno.json) (deno), [`justfile`](workspace/justfile) (just),
 [`Taskfile.yml`](workspace/Taskfile.yml) (go-task), [`Makefile`](workspace/Makefile)
 (make), and [`mise.toml`](workspace/mise.toml) (mise).
 
 `tsr`, `just`, go-task, `make`, and `mise` express a dependency graph natively —
-one launch resolves the whole graph. `npm` and `bun` have **no** dependency graph,
+one launch resolves the whole graph. `npm`, `bun`, and `deno` have **no** dependency graph,
 so the graph scenarios chain the tasks with `&&` (`npm run s1 && npm run s2 && …`),
 exactly as their users do — which is why the per-invocation cost compounds for
 them. That contrast is the point of the benchmark, not a handicap.
