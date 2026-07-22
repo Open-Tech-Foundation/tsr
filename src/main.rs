@@ -53,12 +53,22 @@ fn run() -> error::Result<i32> {
             Ok(0)
         }
         Cli::List => {
-            let cfg = discover()?;
-            cli::list(&cfg);
+            let cwd = cwd()?;
+            match config::locate(&cwd) {
+                Some(path) => cli::list(&Config::load(&path)?),
+                None => cli::list_configless(&cwd),
+            }
             Ok(0)
         }
         Cli::Run { task, passthrough } => {
-            let cfg = discover()?;
+            // A `tasks.toml` is optional: with one, load it; without one, run the
+            // task repo-aware via auto-detection (configless mode) so `tsr dev`
+            // maps to `npm run dev` / `cargo dev` / … (SPEC §3.1 form 3).
+            let cwd = cwd()?;
+            let cfg = match config::locate(&cwd) {
+                Some(path) => Config::load(&path)?,
+                None => implicit_config(&cwd, &task)?,
+            };
             // Unknown-task and dependency-cycle checks (SPEC §5) → exit 64.
             graph::validate(&cfg, &task)?;
             // Load-time undefined-$VAR check over the tasks that will run,
@@ -71,7 +81,29 @@ fn run() -> error::Result<i32> {
     }
 }
 
-fn discover() -> error::Result<Config> {
-    let cwd = std::env::current_dir().map_err(|e| TsrError::runtime(e.to_string()))?;
-    Config::discover(&cwd)
+fn cwd() -> error::Result<std::path::PathBuf> {
+    std::env::current_dir().map_err(|e| TsrError::runtime(e.to_string()))
+}
+
+/// Synthesize a configless single-task config anchored at the nearest package
+/// marker. Errors (exit `64`) when neither a `tasks.toml` nor an ecosystem marker
+/// exists to run against.
+fn implicit_config(cwd: &std::path::Path, task: &str) -> error::Result<Config> {
+    if task.contains('#') {
+        return Err(TsrError::config(format!(
+            "package-qualified task '{task}' needs a tasks.toml with a [workspace]; \
+             none was found in '{}' or any parent",
+            cwd.display()
+        )));
+    }
+    let root = config::nearest_package_root(cwd).ok_or_else(|| {
+        TsrError::config(format!(
+            "no '{}' found in '{}' or any parent, and no package.json / Cargo.toml / \
+             go.mod / pyproject.toml to detect a runner from — run `tsr --init` to \
+             create a config, or cd into a package",
+            config::CONFIG_FILE,
+            cwd.display()
+        ))
+    })?;
+    Ok(config::implicit(root, task))
 }

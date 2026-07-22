@@ -21,6 +21,10 @@ USAGE:
 The first argument is always a task name — every builtin is a flag, so a task
 named `list` or `init` is never shadowed.
 
+tasks.toml is optional: with no config, `tsr <task>` runs the package's native
+script (e.g. `tsr dev` → `npm run dev` / `cargo dev`) by auto-detecting the
+ecosystem in the current directory or a parent.
+
 EXAMPLES:
     tsr dev
     tsr test -- --watch
@@ -151,6 +155,39 @@ pub fn list(cfg: &Config) {
     println!("Available tasks:");
     for (key, task) in &cfg.tasks {
         println!("  {key:width$}  {}", describe(task));
+    }
+}
+
+/// `tsr --list` when there is no `tasks.toml`: nothing is declared, but tasks
+/// still run repo-aware via auto-detection — point the user at how that works.
+pub fn list_configless(cwd: &std::path::Path) {
+    match crate::config::nearest_package_root(cwd) {
+        Some(root) => {
+            let runner = crate::detect::detect(&root)
+                .map(ecosystem_label)
+                .unwrap_or("a native runner");
+            println!("No tasks.toml — tsr runs your package scripts directly.");
+            println!("Detected {runner} at {}.", root.display());
+            println!("Run one with:  tsr <script>   (e.g. tsr dev, tsr build)");
+        }
+        None => {
+            println!(
+                "No tasks.toml, and no package.json / Cargo.toml / go.mod / pyproject.toml here."
+            );
+            println!("Run `tsr --init` to create a config, or cd into a package.");
+        }
+    }
+}
+
+/// Human label for a detected ecosystem, for the configless `--list` hint.
+fn ecosystem_label(eco: crate::detect::Ecosystem) -> &'static str {
+    use crate::detect::Ecosystem::*;
+    match eco {
+        Npm => "an npm package (package.json)",
+        Bun => "a bun package (package.json + bun lockfile)",
+        Cargo => "a Cargo crate (Cargo.toml)",
+        Go => "a Go module (go.mod)",
+        Python => "a Python project (pyproject.toml)",
     }
 }
 

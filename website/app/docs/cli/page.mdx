@@ -27,6 +27,25 @@ tsr build:prod
 tsr web#build          # the 'build' task in package 'web'
 ```
 
+### No config? It still runs
+
+`tasks.toml` is **optional**. With no config file, `tsr <task>` runs repo-aware by
+auto-detecting the ecosystem in the current directory (or a parent) and mapping the
+task to its native runner — so `tsr dev` becomes `npm run dev`, `tsr build` becomes
+`cargo build`, and so on, with `--` passthrough working as usual.
+
+```sh
+# in a repo that only has a package.json — no tasks.toml
+tsr dev                # → npm run dev
+tsr test -- --watch    # → npm run test --watch
+```
+
+If neither a `tasks.toml` nor an ecosystem marker (`package.json`, `Cargo.toml`,
+`go.mod`, `pyproject.toml`) is found, `tsr` exits `64` and points you at
+`tsr --init`. A `tasks.toml`, when present, always wins — there's no fall-through
+from a defined config to auto-detection, so a mistyped task name stays an error.
+Package-qualified names (`web#build`) and the dependency graph need a `tasks.toml`.
+
 ## Argument passthrough
 
 Everything after `--` is forwarded to the resolved command. If the task defines
@@ -53,6 +72,10 @@ Available tasks:
   dev    run: vite  ·  dir: apps/web
   test   packages: apps/*
 ```
+
+With no `tasks.toml`, there is nothing declared to list, so `--list` instead
+reports the detected package and reminds you that scripts run directly (e.g.
+`tsr dev`).
 
 ## `tsr --config`
 

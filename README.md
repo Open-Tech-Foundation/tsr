@@ -29,6 +29,12 @@ tsr --help
 first argument is always a task name — every builtin is a flag, so a task named
 `list` or `init` is never shadowed.
 
+**No config required.** `tasks.toml` is optional: in a repo that only has a
+`package.json` (or `Cargo.toml`, `go.mod`, `pyproject.toml`), `tsr dev` runs
+`npm run dev` / `cargo dev` / … by auto-detecting the ecosystem. Add a
+`tasks.toml` when you want a dependency graph, monorepo fan-out, or `delegate`; a
+present config always takes precedence over auto-detection.
+
 ## `tasks.toml`
 
 ```toml

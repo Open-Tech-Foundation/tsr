@@ -70,18 +70,6 @@ impl Task {
 }
 
 impl Config {
-    /// Discover the workspace root by walking up from `start` to the nearest
-    /// directory containing `tasks.toml`, then load and validate it.
-    pub fn discover(start: &Path) -> Result<Config> {
-        let path = find_config(start).ok_or_else(|| {
-            TsrError::config(format!(
-                "no '{CONFIG_FILE}' found in '{}' or any parent directory",
-                start.display()
-            ))
-        })?;
-        Config::load(&path)
-    }
-
     /// Load and validate a specific `tasks.toml` file.
     pub fn load(path: &Path) -> Result<Config> {
         let text = fs::read_to_string(path)
@@ -106,6 +94,47 @@ impl Config {
 /// file in the current directory.
 pub fn locate(start: &Path) -> Option<PathBuf> {
     find_config(start)
+}
+
+/// Walk up from `start` to the nearest directory carrying a recognised ecosystem
+/// marker (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`). Anchors
+/// **configless** mode: when there is no `tasks.toml`, this is where `tsr <task>`
+/// auto-detects the native runner from.
+pub fn nearest_package_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = if start.is_dir() {
+        Some(start.to_path_buf())
+    } else {
+        start.parent().map(Path::to_path_buf)
+    };
+    while let Some(d) = dir {
+        if crate::detect::detect(&d).is_some() {
+            return Some(d);
+        }
+        dir = d.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
+/// Build a synthetic single-task config for **configless** mode (SPEC §3.1,
+/// form 3). With no `tasks.toml`, `tsr <task>` still works repo-aware: `task` is
+/// treated as a bare auto-detect task rooted at `root`, so `tsr dev` in a
+/// `package.json` repo runs `npm run dev`, in a Cargo repo `cargo dev`, and so on.
+pub fn implicit(root: PathBuf, task: &str) -> Config {
+    let mut tasks = BTreeMap::new();
+    tasks.insert(
+        task.to_string(),
+        Task {
+            key: task.to_string(),
+            ..Task::default()
+        },
+    );
+    Config {
+        root,
+        members: Vec::new(),
+        env: Vec::new(),
+        tasks,
+        doc: DocumentMut::new(),
+    }
 }
 
 /// Validate a full config document given as text, without touching the file
@@ -530,13 +559,42 @@ mod tests {
     }
 
     #[test]
-    fn discovers_root_by_walking_up() {
+    fn locates_root_by_walking_up() {
         let path = write_config("[tasks.dev]\nrun = \"vite\"\n");
         let root = path.parent().unwrap();
         let nested = root.join("a").join("b");
         fs::create_dir_all(&nested).unwrap();
-        let cfg = Config::discover(&nested).unwrap();
+        let found = locate(&nested).expect("should find tasks.toml in a parent");
+        assert_eq!(found.parent().unwrap(), root);
+        let cfg = Config::load(&found).unwrap();
         assert_eq!(cfg.root, root);
         assert!(cfg.task("dev").is_some());
+    }
+
+    #[test]
+    fn nearest_package_root_walks_up_to_a_marker() {
+        let dir = std::env::temp_dir().join(format!("tsr-nearest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let nested = dir.join("src").join("inner");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(dir.join("package.json"), "{}").unwrap();
+        assert_eq!(
+            nearest_package_root(&nested).as_deref(),
+            Some(dir.as_path())
+        );
+
+        // No marker anywhere up to a bare temp subtree → None.
+        let bare = std::env::temp_dir().join(format!("tsr-bare-{}-xyz", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        assert_eq!(nearest_package_root(&bare), None);
+    }
+
+    #[test]
+    fn implicit_config_has_one_bare_autodetect_task() {
+        let cfg = implicit(PathBuf::from("/tmp/x"), "dev");
+        let task = cfg.task("dev").expect("implicit task present");
+        assert!(task.run.is_none() && task.delegate.is_none() && task.packages.is_none());
+        assert!(task.deps.is_empty());
     }
 }

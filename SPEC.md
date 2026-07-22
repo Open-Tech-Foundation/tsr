@@ -40,6 +40,15 @@ NODE_ENV = "development"
 - `members` — glob patterns identifying the packages in a monorepo. Omit for a single-package repo.
 - `[env]` — workspace-wide environment variables inherited by every task (see §7).
 
+### 2.1 Configless mode
+
+`tasks.toml` is **optional**. When none is found (walking up from the current directory), `tsr <task>` still runs repo-aware by treating `<task>` as a bare form-3 auto-detect task (§3.1) anchored at the nearest directory holding an ecosystem marker (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`). So in a plain npm repo, `tsr dev` runs `npm run dev`; in a Cargo crate, `tsr build` runs `cargo build` — no config to write.
+
+- Argument passthrough (§6) works as usual: `tsr test -- --watch`.
+- Package-qualified names (`web#build`) and the dependency graph require a `tasks.toml`; configless mode is single-task only.
+- When neither a `tasks.toml` nor any ecosystem marker exists, `tsr <task>` is a runner error (exit `64`) with a message pointing at `tsr --init`.
+- A present `tasks.toml` always takes precedence — there is no fall-through from a defined config to auto-detection, so a mistyped task name is still an error, not a silent `npm run <typo>`.
+
 ---
 
 ## 3. Tasks

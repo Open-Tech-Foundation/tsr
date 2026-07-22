@@ -465,3 +465,71 @@ fn bare_task_without_a_marker_is_runner_error_64() {
         stderr(&out)
     );
 }
+
+#[test]
+fn configless_runs_the_package_native_script() {
+    // No tasks.toml at all: `tsr dev` still works repo-aware, mapping to the
+    // package's native runner — here `npm run dev` — and forwards passthrough.
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "npm");
+    write(&ws, "package.json", "{}");
+    // deliberately NO tasks.toml
+    let out = tsr_with_path(&ws, &["dev", "--", "--host"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED npm run dev --host"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn configless_walks_up_to_the_nearest_package() {
+    // Run from a nested directory: tsr finds the package marker in a parent, just
+    // like npm walking up to package.json.
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "cargo");
+    write(&ws, "Cargo.toml", "[package]\nname = \"c\"\n");
+    let nested = ws.join("src/deep");
+    fs::create_dir_all(&nested).unwrap();
+    let out = tsr_with_path(&nested, &["build"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED cargo build"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn configless_without_any_marker_is_error_64() {
+    // No tasks.toml and no ecosystem marker: a clear error, not a silent success.
+    let ws = workspace();
+    let out = tsr(&ws, &["dev"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no 'tasks.toml' found") && stderr(&out).contains("--init"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn tasks_toml_takes_precedence_over_configless() {
+    // With a tasks.toml present, its definition wins over auto-detection even when
+    // a package.json exists — no accidental fall-through.
+    let ws = workspace();
+    write(&ws, "package.json", "{}");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.dev]\nrun = \"echo from-config\"\n",
+    );
+    let out = tsr(&ws, &["dev"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("from-config"), "{}", stdout(&out));
+}

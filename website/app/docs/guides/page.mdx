@@ -10,6 +10,23 @@ import { Callout } from "@opentf/web-docs";
 Practical recipes for everyday work. Each is self-contained; follow the links for
 the full reference on any concept.
 
+## Run without a config file
+
+You don't need a `tasks.toml` to start. In any repo with a recognised marker
+(`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`), `tsr <task>` runs the
+package's native script by auto-detecting the ecosystem:
+
+```sh
+tsr dev                # → npm run dev   (in a package.json repo)
+tsr build              # → cargo build   (in a Cargo crate)
+tsr test -- --watch    # passthrough works too → npm run test --watch
+```
+
+`tsr` walks up from the current directory to find the nearest package, just like
+`npm`. Add a `tasks.toml` (via [`tsr --init`](/docs/cli)) when you want a
+[dependency graph](/docs/graph), [monorepo fan-out](/docs/monorepo), or a
+[`delegate`](/docs/task-forms) — a present config always takes precedence.
+
 ## Forward arguments to a task
 
 Everything after `--` is forwarded to the resolved command. If the task defines

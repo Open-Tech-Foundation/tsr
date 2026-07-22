@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Configless mode: `tasks.toml` is now **optional**. With no config file,
+  `tsr <task>` runs repo-aware by treating the task as a bare form-3 auto-detect
+  anchored at the nearest ecosystem marker (`package.json`, `Cargo.toml`,
+  `go.mod`, `pyproject.toml`) found by walking up — so `tsr dev` runs `npm run dev`,
+  `tsr build` runs `cargo build`, etc., with `--` passthrough intact. A present
+  `tasks.toml` always takes precedence (no fall-through from a defined config to
+  auto-detection, so a mistyped task stays an error); package-qualified names and
+  the dependency graph still require a config. When neither a `tasks.toml` nor a
+  marker exists, `tsr` exits `64` with a message pointing at `tsr --init`, and
+  `tsr --list` reports the detected package instead of erroring (SPEC §2.1).
 - `tsr --init`: scaffold a commented starter `tasks.toml` in the current
   directory, showcasing all three task forms plus the graph. Refuses to overwrite
   an existing file (exit `64`); the generated file is immediately valid and
