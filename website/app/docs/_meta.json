@@ -1,12 +1,12 @@
 {
   "index": "Overview",
-  "getting-started": "Getting started",
   "configuration": "Configuration",
   "task-forms": "Task forms",
   "run-and-shell": "run & the mini-shell",
   "environment": "Environment",
   "graph": "Graph & parallelism",
   "monorepo": "Monorepo & packages",
+  "guides": "Guides",
   "cli": "CLI reference",
   "exit-codes": "Exit codes",
   "benchmarks": "Benchmarks"

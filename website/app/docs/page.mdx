@@ -1,7 +1,9 @@
 ---
 title: Overview
-description: What tsr is, what it deliberately is not, and how the docs are organized.
+description: What tsr is, what it deliberately is not, and how to run your first task.
 ---
+
+import { Callout, Steps } from "@opentf/web-docs";
 
 # tsr
 
@@ -38,14 +40,54 @@ Content-hash caching, remote caching, and inputs/outputs tracking are **never**
 implemented in `tsr` — they are ceded to delegated backends (Turbo, Nx). Adding
 them would contradict the "lightweight, delegate" principle.
 
-## Where to go next
+## Run your first task
 
-- **[Getting started](/docs/getting-started)** — install, scaffold, run.
-- **[Configuration](/docs/configuration)** — `tasks.toml`, workspace root, `[env]`.
-- **[Task forms](/docs/task-forms)** — `delegate` → `run` → auto-detect.
-- **[run & the mini-shell](/docs/run-and-shell)** — direct spawn vs the mini-shell.
-- **[Environment](/docs/environment)** — the four-source merge and `.env`.
-- **[Graph & parallelism](/docs/graph)** — `deps`, `parallel`, fail-fast.
-- **[Monorepo & packages](/docs/monorepo)** — fan-out and manifest-name matching.
-- **[CLI reference](/docs/cli)** — every command and flag.
-- **[Exit codes](/docs/exit-codes)** — `0` / child code / `64`.
+From an empty repo to a running task in four steps.
+
+<Steps>
+
+### Install
+
+`tsr` is a single static binary. Build it from source with Cargo, then put it on
+your `PATH`:
+
+```sh
+cargo build --release       # → target/release/tsr
+```
+
+### Scaffold a config
+
+From your repo root, generate a commented starter `tasks.toml` showcasing all
+three task forms. It refuses to overwrite an existing file, so it is always safe
+to run:
+
+```sh
+tsr --init
+```
+
+### Define a task
+
+Open `tasks.toml` and add a task — or author it interactively with `tsr --config`:
+
+```toml
+[tasks.dev]
+run = "vite"
+dir = "apps/web"
+```
+
+### Run it
+
+```sh
+tsr dev
+```
+
+Because `run = "vite"` has no shell metacharacters, `tsr` splits it and spawns
+`vite` directly — no `npm run` / Node startup tax.
+
+</Steps>
+
+<Callout type="info" title="tasks.toml is the workspace anchor">
+  The location of `tasks.toml` defines your workspace root. `tsr` finds it by
+  walking up from the current directory to the nearest `tasks.toml`, so you can
+  run tasks from anywhere in the repo.
+</Callout>

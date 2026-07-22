@@ -1,0 +1,181 @@
+---
+title: Guides
+description: Practical, task-oriented recipes — passthrough args, listing tasks, migrating npm scripts, local tools, env, and delegating caching.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Guides
+
+Practical recipes for everyday work. Each is self-contained; follow the links for
+the full reference on any concept.
+
+## Forward arguments to a task
+
+Everything after `--` is forwarded to the resolved command. If the task defines
+`args`, those are prepended **before** the passthrough:
+
+```toml
+[tasks.test]
+run = "vitest"
+args = ["--color"]
+```
+
+```sh
+tsr test -- --watch        # → vitest --color --watch
+```
+
+This is how you pass ad-hoc flags (`--watch`, `--filter`, a file path) without
+editing `tasks.toml`. See the [CLI reference](/docs/cli) for the full grammar.
+
+## List what's defined
+
+```sh
+tsr --list
+```
+
+```text
+Available tasks:
+  build  delegate: turbo
+  dev    run: vite  ·  dir: apps/web
+  test   packages: apps/*
+```
+
+Each line shows the task's form at a glance — `run`, `delegate`, `packages`, or
+`deps` — so you can see how a task resolves without opening the file.
+
+## Run a task from anywhere in the repo
+
+`tasks.toml` is the workspace-root anchor. `tsr` walks up from the current
+directory to the nearest `tasks.toml`, so the same command works from any
+subdirectory:
+
+```sh
+cd apps/web/src
+tsr dev                    # still resolves the root tasks.toml
+```
+
+## Migrate your npm scripts
+
+A `package.json` script maps almost one-to-one to a `run` task — but without the
+`npm run` / Node startup tax on the common path, because a metacharacter-free
+`run` string is spawned directly.
+
+```jsonc
+// package.json
+{ "scripts": { "dev": "vite", "test": "vitest --run" } }
+```
+
+```toml
+# tasks.toml
+[tasks.dev]
+run = "vite"
+
+[tasks.test]
+run = "vitest --run"
+```
+
+`tsr` resolves project-local binaries from `node_modules/.bin` exactly like
+`npm`/`bun`, so `run = "vite"` finds `./node_modules/.bin/vite`. See
+[run & the mini-shell](/docs/run-and-shell) for what the mini-shell supports
+(`$VAR`, `&&`/`||`/`;`, quoting) and what it rejects (pipes, redirects, globs).
+
+<Callout type="info" title="Keep a bare task when the runner is obvious">
+  For a package whose ecosystem `tsr` can detect, a bare `[tasks.test]` with no
+  `run`/`delegate` auto-detects the native runner (`npm run test`, `cargo test`,
+  `go test`, `uv run …`). See [task forms](/docs/task-forms).
+</Callout>
+
+## Chain tasks with a dependency graph
+
+Declare `deps` to build a DAG. It runs sequentially by default; opt into
+concurrency with `parallel = true`. Execution is always fail-fast.
+
+```toml
+[tasks.ci]
+deps = ["lint", "test", "build"]
+parallel = true
+```
+
+```sh
+tsr ci                     # lint, test, build — concurrently, fail-fast
+```
+
+Dependencies are de-duplicated (a diamond runs each task once). Full details in
+[graph & parallelism](/docs/graph).
+
+## Run one task across every package
+
+Fan a single task out across a monorepo with `packages` — matched by path glob or
+exact manifest name:
+
+```toml
+[workspace]
+members = ["apps/*", "packages/*"]
+
+[tasks.test]
+packages = ["apps/*"]      # auto-detect each package's runner
+```
+
+```sh
+tsr test                   # runs the detected test task in every apps/* package
+tsr web#build              # or target one package's task directly
+```
+
+See [monorepo & packages](/docs/monorepo) for matching rules and manifest names.
+
+## Call a project-local tool (vite, eslint, …)
+
+No wrapper needed — `tsr` prepends `node_modules/.bin` to `PATH` (walking up to
+the workspace root, nearest first), the same lookup npm/bun/yarn/pnpm do:
+
+```toml
+[tasks.lint]
+run = "eslint ."
+
+[tasks.dev]
+run = "vite"
+dir = "apps/web"           # resolves apps/web/node_modules/.bin first
+```
+
+## Set environment variables
+
+Env is merged from four sources — `task > workspace [env] > root .env > process` —
+and each value is `$VAR`-expanded after the merge:
+
+```toml
+[env]                      # applies to every task
+NODE_ENV = "development"
+
+[tasks.build.env]          # task-scoped, wins over [env]
+NODE_ENV = "production"
+```
+
+A root `.env` is auto-loaded. Full precedence and expansion rules in
+[environment](/docs/environment).
+
+## Delegate caching to Turbo or Nx
+
+`tsr` never implements content-hash or remote caching — it hands the whole task
+to a backend that does:
+
+```toml
+[tasks.build]
+delegate = "turbo"         # → turbo run build
+```
+
+The task name is passed through, so `tsr build` becomes `turbo run build` and
+Turbo's cache does its job. See [task forms](/docs/task-forms) for the `delegate`
+table form and how precedence works.
+
+## Author tasks interactively
+
+Instead of hand-editing TOML, open the terminal UI:
+
+```sh
+tsr --config
+```
+
+It edits through the same format-preserving parser used everywhere else, so
+**comments and unknown keys survive**, and every change is validated before it is
+written. The full key map is in the [CLI reference](/docs/cli).
