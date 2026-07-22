@@ -19,15 +19,6 @@ deps = ["lint", "test", "build"]
 parallel = true
 `;
 
-const INSTALL_SH = `# build the binary
-cargo build --release   # → target/release/tsr
-
-# scaffold a config and run
-tsr --init
-tsr dev
-tsr test -- --watch
-`;
-
 // Capability comparison against the other runners people reach for. Each cell is
 // "y" (has it), "p" (partial / needs a plugin or extra tool), or "n" (no). Kept
 // deliberately factual — the benchmark page has the speed numbers.
@@ -72,10 +63,10 @@ const COMPARE_ROWS = [
 ];
 
 const COMPARE_MARK = {
-  y: { sym: "✓", cls: "cmp-y", label: "yes" },
-  p: { sym: "~", cls: "cmp-p", label: "partial" },
-  n: { sym: "✕", cls: "cmp-n", label: "no" },
-  d: { sym: "→", cls: "cmp-d", label: "delegated by design" },
+  y: { sym: "✅", cls: "cmp-y", label: "yes" },
+  p: { sym: "🟡", cls: "cmp-p", label: "partial" },
+  n: { sym: "❌", cls: "cmp-n", label: "no" },
+  d: { sym: "🔀", cls: "cmp-d", label: "delegated by design" },
 };
 
 // The marketing landing page. Static (no client state) — the live chrome (navbar,
@@ -244,10 +235,10 @@ export default function Home() {
             </table>
           </div>
           <p class="cmp-legend">
-            <span class="cmp-y">✓</span> yes&nbsp;&nbsp;
-            <span class="cmp-p">~</span> partial / needs a plugin&nbsp;&nbsp;
-            <span class="cmp-d">→</span> delegated by design&nbsp;&nbsp;
-            <span class="cmp-n">✕</span> no&nbsp;&nbsp;·&nbsp;&nbsp;
+            ✅ yes&nbsp;&nbsp;
+            🟡 partial / needs a plugin&nbsp;&nbsp;
+            🔀 delegated by design&nbsp;&nbsp;
+            ❌ no&nbsp;&nbsp;·&nbsp;&nbsp;
             <Link href="/docs/benchmarks">see the speed numbers →</Link>
           </p>
         </div>
@@ -289,16 +280,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* --- install --- */}
-      <section class="section">
-        <div class="container">
-          <h2>Install</h2>
-          <p class="sub">A single static binary. Build from source with Cargo.</p>
-          <div class="codeblock">
-            <pre>{INSTALL_SH}</pre>
-          </div>
-        </div>
-      </section>
     </>
   );
 }
