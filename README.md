@@ -6,9 +6,24 @@ a build system: one unified interface over the native runners already in a repo
 parallelism. Caching is delegated to specialist tools (Turbo, Nx), never
 reimplemented.
 
-See [`SPEC.md`](SPEC.md) for the full v1 specification.
+Website & Documentation: [https://tsr.opentechf.org](https://tsr.opentechf.org)  
+Specification: [`SPEC.md`](SPEC.md)
 
 ## Install
+
+### Linux / macOS / FreeBSD
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/tsr/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/Open-Tech-Foundation/tsr/main/install.ps1 | iex
+```
+
+### From Source
 
 ```sh
 cargo build --release   # binary at target/release/tsr
