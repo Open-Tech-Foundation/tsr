@@ -1042,7 +1042,38 @@ impl FormState {
 /// Apply a form to `doc`, returning the task name. Validates field consistency;
 /// full config validation is the caller's job.
 fn apply_form(doc: &mut DocumentMut, form: &FormState) -> std::result::Result<String, String> {
-    let (name, table) = build_task_table(form)?;
+    let (name, mut table) = build_task_table(form)?;
+
+    // The table this one replaces: the edited key, or the old key on a rename.
+    let prior_key = form.original.clone().unwrap_or_else(|| name.clone());
+    let prior = doc
+        .get("tasks")
+        .and_then(|t| t.get(&prior_key))
+        .and_then(Item::as_table)
+        .map(|t| (t.decor().clone(), t.position()));
+
+    match prior {
+        // Editing in place: keep where the task sits in the file and the comment
+        // written above it — `build_task_table` starts from a bare table, so both
+        // would otherwise be dropped and the task would drift to the end.
+        Some((decor, position)) => {
+            *table.decor_mut() = decor;
+            table.set_position(position);
+        }
+        // A brand-new task is appended. In a comment-only file (the `--init`
+        // scaffold) every line is document *trailing* trivia, which renders after
+        // the body — so an inserted table would land above all of it. Hand that
+        // text to the new table as its prefix so the task follows the comments.
+        None => {
+            let trailing = doc.trailing().as_str().unwrap_or_default().to_string();
+            if !trailing.trim().is_empty() {
+                doc.set_trailing("");
+                table
+                    .decor_mut()
+                    .set_prefix(format!("{}\n\n", trailing.trim_end()));
+            }
+        }
+    }
 
     if doc.get("tasks").and_then(Item::as_table).is_none() {
         let mut parent = Table::new();
@@ -1054,11 +1085,9 @@ fn apply_form(doc: &mut DocumentMut, form: &FormState) -> std::result::Result<St
         .ok_or_else(|| "`tasks` is not a table".to_string())?;
     tasks.set_implicit(true);
 
-    // On rename, drop the old key.
-    if let Some(old) = &form.original
-        && old != &name
-    {
-        tasks.remove(old);
+    // On rename, drop the old key (its decor/position moved onto the new table).
+    if prior_key != name {
+        tasks.remove(&prior_key);
     }
     tasks.insert(&name, Item::Table(table));
     Ok(name)
@@ -1393,6 +1422,55 @@ mod tests {
         assert!(doc2.to_string().contains("env_file = \".env.test\""));
         let back = FormState::from_doc(&doc2, "t");
         assert_eq!(back.text(F_ENV_FILE), ".env.test");
+    }
+
+    #[test]
+    fn a_new_task_is_appended_below_a_comment_only_file() {
+        // The `--init` scaffold is pure comments, which toml_edit keeps as
+        // document trailing trivia — a naively inserted table renders above it.
+        let mut doc = crate::cli::INIT_TEMPLATE.parse::<DocumentMut>().unwrap();
+        let f = form_with(&[(F_NAME, "test"), (F_RUN, "cargo test")], &[(F_TYPE, 0)]);
+        apply_form(&mut doc, &f).unwrap();
+        let s = doc.to_string();
+        let header = s.find("# tasks.toml — the workspace root").unwrap();
+        let task = s.find("[tasks.test]").unwrap();
+        assert!(header < task, "new task must land below the comments:\n{s}");
+        // The scaffold's own text must survive intact.
+        assert!(s.contains("https://tsr.opentechf.org/docs"), "{s}");
+        config::validate_str(&s).unwrap();
+    }
+
+    #[test]
+    fn a_new_task_is_appended_after_existing_tasks() {
+        let src = "[tasks.a]\nrun = \"a\"\n\n[tasks.b]\nrun = \"b\"\n";
+        let mut doc = src.parse::<DocumentMut>().unwrap();
+        let f = form_with(&[(F_NAME, "c"), (F_RUN, "c")], &[(F_TYPE, 0)]);
+        apply_form(&mut doc, &f).unwrap();
+        let s = doc.to_string();
+        let (a, b, c) = (
+            s.find("[tasks.a]").unwrap(),
+            s.find("[tasks.b]").unwrap(),
+            s.find("[tasks.c]").unwrap(),
+        );
+        assert!(a < b && b < c, "new task must be appended last:\n{s}");
+    }
+
+    #[test]
+    fn editing_a_task_keeps_its_position_and_comment() {
+        let src = "[tasks.a]\nrun = \"a\"\n\n# keep me\n[tasks.b]\nrun = \"b\"\n\n[tasks.c]\nrun = \"c\"\n";
+        let mut doc = src.parse::<DocumentMut>().unwrap();
+        let mut f = FormState::from_doc(&doc, "b");
+        f.set_text(F_RUN, "b-edited");
+        apply_form(&mut doc, &f).unwrap();
+        let s = doc.to_string();
+        let (a, b, c) = (
+            s.find("[tasks.a]").unwrap(),
+            s.find("[tasks.b]").unwrap(),
+            s.find("[tasks.c]").unwrap(),
+        );
+        assert!(a < b && b < c, "editing must not move the task:\n{s}");
+        assert!(s.contains("run = \"b-edited\""), "{s}");
+        assert!(s.contains("# keep me"), "the task's comment was lost:\n{s}");
     }
 
     #[test]

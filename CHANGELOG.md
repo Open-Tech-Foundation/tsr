@@ -53,7 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Ctrl+S`, which editor/IDE terminals grab for "save file" and which is XOFF
   where terminal flow control is on; `Ctrl+S` remains an alias. Edits go through
   the format-preserving `toml_edit` document, so comments and unknown keys
-  survive. Starts a new file if none exists.
+  survive: a **new** task is appended below everything the file already holds
+  (including a comment-only `--init` scaffold, whose text is document trailing
+  trivia and would otherwise end up *below* the inserted table), and **editing**
+  a task leaves it exactly where it sits, keeping the comment written above it.
+  Starts a new file if none exists.
 - `tsr --config` graph/dry-run view (`g` for the selected task, `G`/`a` for all):
   a read-only, connected dependency tree rendered with box connectors, showing
   each task's **dry-run** command — what `tsr` would execute, resolved by the real
