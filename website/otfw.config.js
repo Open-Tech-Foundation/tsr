@@ -20,6 +20,9 @@ export default defineDocsConfig({
     // Top-level navbar links — shared by the marketing shell (RootLayout) and the
     // docs chrome (DocsLayout), so the whole site carries one navbar. GitHub is
     // omitted here: the navbar already renders a GitHub icon from `github` above.
-    nav: [{ label: "Docs", href: "/docs" }],
+    nav: [
+      { label: "Home", href: "/" },
+      { label: "Docs", href: "/docs" },
+    ],
   },
 });
