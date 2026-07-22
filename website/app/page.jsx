@@ -22,43 +22,43 @@ parallel = true
 // Capability comparison against the other runners people reach for. Each cell is
 // "y" (has it), "p" (partial / needs a plugin or extra tool), or "n" (no). Kept
 // deliberately factual — the benchmark page has the speed numbers.
-const COMPARE_TOOLS = ["tsr", "npm", "just", "go-task", "mise", "Turbo/Nx"];
+const COMPARE_TOOLS = ["tsr", "npm", "bun", "just", "go-task", "mise", "Turbo/Nx"];
 const COMPARE_ROWS = [
   {
     label: "Auto-detects each package's runner",
     hint: "cargo / go / npm / bun / uv from a bare task",
-    cells: ["y", "n", "n", "n", "n", "n"],
+    cells: ["y", "n", "n", "n", "n", "n", "n"],
   },
   {
     label: "Dependency graph (DAG)",
-    cells: ["y", "n", "y", "y", "y", "y"],
+    cells: ["y", "n", "n", "y", "y", "y", "y"],
   },
   {
     label: "Opt-in parallelism",
-    cells: ["y", "p", "n", "y", "y", "y"],
+    cells: ["y", "p", "p", "n", "y", "y", "y"],
   },
   {
     label: "Monorepo workspace fan-out",
     hint: "run one task across every package",
-    cells: ["y", "p", "n", "n", "n", "y"],
+    cells: ["y", "p", "p", "n", "n", "n", "y"],
   },
   {
     label: "Resolves node_modules/.bin",
     hint: "call vite / eslint like npm run",
-    cells: ["y", "y", "n", "n", "n", "y"],
+    cells: ["y", "y", "y", "n", "n", "n", "y"],
   },
   {
     label: "Native speed, no runtime boot",
-    cells: ["y", "n", "y", "p", "p", "n"],
+    cells: ["y", "n", "p", "y", "p", "p", "n"],
   },
   {
     label: "Single static binary",
-    cells: ["y", "n", "y", "y", "y", "n"],
+    cells: ["y", "n", "y", "y", "y", "y", "n"],
   },
   {
     label: "Content-hash / remote caching",
     hint: "tsr delegates this to Turbo/Nx by design",
-    cells: ["d", "n", "n", "p", "n", "y"],
+    cells: ["d", "n", "n", "n", "p", "n", "y"],
   },
 ];
 
