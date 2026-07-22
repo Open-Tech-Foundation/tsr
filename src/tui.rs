@@ -298,8 +298,7 @@ impl App {
         };
         match code {
             KeyCode::Char('y') => {
-                if let Some(tasks) = self.doc.get_mut("tasks").and_then(Item::as_table_mut) {
-                    tasks.remove(&key);
+                if remove_task(&mut self.doc, &key) {
                     self.refresh_tasks();
                     self.status = match self.write_file() {
                         Ok(()) => format!("deleted '{key}'"),
@@ -1093,6 +1092,73 @@ fn apply_form(doc: &mut DocumentMut, form: &FormState) -> std::result::Result<St
     Ok(name)
 }
 
+/// Remove task `key`, keeping any file-level text that sat above it. Returns
+/// whether the task was there to remove.
+///
+/// A table's leading comments live in its prefix decor, so a plain `remove` would
+/// delete them too — and for the first task that prefix is the whole file header
+/// (SPEC §1.5: hand-edits must survive). The prefix is therefore split at the last
+/// blank line: the comment block written directly above the task is the task's own
+/// and goes with it, while anything before it is file-level and is handed to
+/// whichever task now renders in its place, or back to the document if none does.
+fn remove_task(doc: &mut DocumentMut, key: &str) -> bool {
+    let Some(tasks) = doc.get_mut("tasks").and_then(Item::as_table_mut) else {
+        return false;
+    };
+    let Some(table) = tasks.get(key).and_then(Item::as_table) else {
+        return false;
+    };
+    let kept = file_level_prefix(
+        table
+            .decor()
+            .prefix()
+            .and_then(|p| p.as_str())
+            .unwrap_or_default(),
+    );
+    // The task rendered next, in document order.
+    let successor = tasks
+        .iter()
+        .skip_while(|(k, _)| *k != key)
+        .nth(1)
+        .map(|(k, _)| k.to_string());
+
+    tasks.remove(key);
+    if kept.is_empty() {
+        return true;
+    }
+
+    match successor.and_then(|k| tasks.get_mut(&k).and_then(Item::as_table_mut)) {
+        Some(next) => {
+            let own = next
+                .decor()
+                .prefix()
+                .and_then(|p| p.as_str())
+                .unwrap_or_default()
+                .to_string();
+            next.decor_mut().set_prefix(format!("{kept}{own}"));
+        }
+        // Nothing follows: the text becomes the document's trailing trivia again,
+        // which is exactly where a comment-only file keeps it.
+        None => {
+            let rest = doc.trailing().as_str().unwrap_or_default().to_string();
+            doc.set_trailing(format!("{kept}{rest}"));
+        }
+    }
+    true
+}
+
+/// The part of a table's prefix that belongs to the *file* rather than the table:
+/// everything up to and including the last blank line. A comment block with no
+/// blank line between it and the table is that table's own, so it is excluded.
+fn file_level_prefix(prefix: &str) -> String {
+    match prefix.rfind("\n\n") {
+        Some(i) => prefix[..i + 2].to_string(),
+        // No blank line: the whole prefix is either the task's own comment
+        // (dropped) or pure whitespace (nothing worth keeping).
+        None => String::new(),
+    }
+}
+
 /// Serialize a form into a task name and a `toml_edit` table.
 fn build_task_table(form: &FormState) -> std::result::Result<(String, Table), String> {
     let name = form.text(F_NAME).trim().to_string();
@@ -1662,6 +1728,64 @@ mod tests {
         let on_disk = std::fs::read_to_string(&app.path).unwrap();
         assert!(!on_disk.contains("[tasks.dev]"), "{on_disk}");
         assert!(on_disk.contains("[tasks.ci]"), "{on_disk}");
+    }
+
+    #[test]
+    fn deleting_a_task_keeps_the_others_in_place() {
+        let src = "[tasks.a]\nrun = \"a\"\n\n# about b\n[tasks.b]\nrun = \"b\"\n\n\
+                   # about c\n[tasks.c]\nrun = \"c\"\n";
+        let mut app = app_at("del-order", src);
+        app.mode = Mode::ConfirmDelete("b".into());
+        app.on_key_confirm_delete(KeyCode::Char('y'));
+
+        let s = std::fs::read_to_string(&app.path).unwrap();
+        assert!(!s.contains("[tasks.b]"), "{s}");
+        let (a, c) = (s.find("[tasks.a]").unwrap(), s.find("[tasks.c]").unwrap());
+        assert!(a < c, "surviving tasks must keep their order:\n{s}");
+        assert!(
+            s.contains("run = \"a\"") && s.contains("run = \"c\""),
+            "{s}"
+        );
+        // c's comment belongs to c, not to the deleted b.
+        assert!(s.contains("# about c"), "unrelated comment lost:\n{s}");
+        assert!(
+            !s.contains("# about b"),
+            "deleted task's comment kept:\n{s}"
+        );
+    }
+
+    #[test]
+    fn deleting_the_first_task_keeps_the_file_header() {
+        // The header sits in the *prefix decor* of the first table, so a naive
+        // remove takes the whole scaffold's documentation with it.
+        let mut doc = crate::cli::INIT_TEMPLATE.parse::<DocumentMut>().unwrap();
+        let f = form_with(&[(F_NAME, "test"), (F_RUN, "cargo test")], &[(F_TYPE, 0)]);
+        apply_form(&mut doc, &f).unwrap();
+
+        let mut app = app_at("del-header", &doc.to_string());
+        app.mode = Mode::ConfirmDelete("test".into());
+        app.on_key_confirm_delete(KeyCode::Char('y'));
+
+        let s = std::fs::read_to_string(&app.path).unwrap();
+        // The scaffold keeps a *commented* `# [tasks.test]` example, so match on
+        // a live table header rather than the bare substring.
+        assert!(
+            !s.lines().any(|l| l.trim_start().starts_with("[tasks.")),
+            "the task was not removed:\n{s}"
+        );
+        assert!(!s.contains("cargo test"), "{s}");
+        assert!(
+            s.contains("# tasks.toml — the workspace root"),
+            "the file header was deleted with the task:\n{s}"
+        );
+        assert!(s.contains("https://tsr.opentechf.org/docs"), "{s}");
+        // Still a usable scaffold: it parses and defines nothing.
+        assert!(
+            config::parse_str(&s, PathBuf::from("."))
+                .unwrap()
+                .tasks
+                .is_empty()
+        );
     }
 
     #[test]

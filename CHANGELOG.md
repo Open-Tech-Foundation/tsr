@@ -55,9 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the format-preserving `toml_edit` document, so comments and unknown keys
   survive: a **new** task is appended below everything the file already holds
   (including a comment-only `--init` scaffold, whose text is document trailing
-  trivia and would otherwise end up *below* the inserted table), and **editing**
-  a task leaves it exactly where it sits, keeping the comment written above it.
-  Starts a new file if none exists.
+  trivia and would otherwise end up *below* the inserted table), **editing** a
+  task leaves it exactly where it sits, keeping the comment written above it,
+  and **deleting** one leaves every other task in place. Deletion splits the
+  removed table's leading comments at the last blank line: the block written
+  directly above the task goes with it, while file-level text above that (for
+  the first task, the entire file header) is handed to whichever task now
+  renders in its place, or back to the document if none does. Starts a new file
+  if none exists.
 - `tsr --config` graph/dry-run view (`g` for the selected task, `G`/`a` for all):
   a read-only, connected dependency tree rendered with box connectors, showing
   each task's **dry-run** command — what `tsr` would execute, resolved by the real
