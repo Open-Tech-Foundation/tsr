@@ -354,3 +354,114 @@ fn packages_pattern_matching_nothing_is_error_64() {
     assert_eq!(code(&out), 64);
     assert!(stderr(&out).contains("matched no"));
 }
+
+/// Write a fake runner that prints exactly how it was invoked, so tests can
+/// assert what `tsr` spawned without needing the real toolchain installed.
+fn shim(dir: &Path, name: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join(name);
+    fs::write(&p, format!("#!/bin/sh\necho INVOKED {name} \"$@\"\n")).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Run `tsr` with `prepend` at the front of `PATH` (so shims shadow real tools).
+fn tsr_with_path(dir: &Path, args: &[&str], prepend: &Path) -> Output {
+    let path = std::env::var("PATH").unwrap_or_default();
+    Command::new(BIN)
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", format!("{}:{path}", prepend.display()))
+        .output()
+        .expect("failed to spawn tsr")
+}
+
+#[test]
+fn bare_task_autodetects_each_ecosystem() {
+    // The "auto-detects each package's runner" claim (SPEC §3.1, form 3): a bare
+    // [tasks.<name>] with no run/delegate resolves to the package's native runner.
+    // Shim runners on PATH report exactly what tsr invoked.
+    // Each case: (ecosystem label, marker files to write, expected shim invocation).
+    type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+    let cases: &[Case] = &[
+        ("npm", &[("package.json", "{}")], "INVOKED npm run build"),
+        (
+            "bun",
+            &[("package.json", "{}"), ("bun.lock", "")],
+            "INVOKED bun run build",
+        ),
+        (
+            "cargo",
+            &[("Cargo.toml", "[package]\nname=\"c\"\n")],
+            "INVOKED cargo build",
+        ),
+        ("go", &[("go.mod", "module ex\n")], "INVOKED go build"),
+        (
+            "uv",
+            &[("pyproject.toml", "[project]\nname=\"p\"\n")],
+            "INVOKED uv run build",
+        ),
+    ];
+    for (label, markers, expected) in cases {
+        let ws = workspace();
+        let bin = ws.join("shims");
+        fs::create_dir_all(&bin).unwrap();
+        for r in ["npm", "bun", "cargo", "go", "uv"] {
+            shim(&bin, r);
+        }
+        for (name, contents) in *markers {
+            write(&ws, name, contents);
+        }
+        write(&ws, "tasks.toml", "[tasks.build]\n");
+        let out = tsr_with_path(&ws, &["build"], &bin);
+        assert_eq!(code(&out), 0, "{label}: stderr {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(expected),
+            "{label}: expected `{expected}`, stdout {:?} stderr {:?}",
+            stdout(&out),
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn deps_only_task_is_an_aggregator_not_autodetected() {
+    // A bare task WITH deps is a pure aggregator (SPEC §5.2): it runs its deps and
+    // nothing of its own — it must NOT auto-detect `npm run ci` after them.
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "npm");
+    write(&ws, "package.json", "{}");
+    let marker = ws.join("dep-ran");
+    write(
+        &ws,
+        "tasks.toml",
+        &format!(
+            "[tasks.ci]\ndeps = [\"a\"]\n[tasks.a]\nrun = \"touch {}\"\n",
+            marker.display()
+        ),
+    );
+    let out = tsr_with_path(&ws, &["ci"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(marker.exists(), "dependency 'a' should have run");
+    assert!(
+        !stdout(&out).contains("INVOKED npm"),
+        "aggregator must not auto-detect a native runner: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn bare_task_without_a_marker_is_runner_error_64() {
+    // Form 3 with no detectable ecosystem: a clear runner error (exit 64), never a
+    // silent no-op.
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.build]\n");
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no recognised ecosystem"),
+        "{}",
+        stderr(&out)
+    );
+}

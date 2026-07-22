@@ -54,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Auto-detect (form 3) is now actually executed for a **single** bare task. A
+  bare `[tasks.<name>]` with no `run`/`delegate`/`packages` and no `deps` was
+  wrongly treated as a deps-only aggregator and silently did nothing (exit `0`),
+  even though `--list` labelled it `auto` — so `npm run <name>` / `cargo <name>` /
+  `go <name>` / `uv run <name>` never ran. It now resolves and spawns the native
+  runner (SPEC §3.1). A bare task that still has `deps` remains a pure aggregator
+  (SPEC §5.2), and a bare task with no detectable ecosystem is a clear runner
+  error (exit `64`) rather than a no-op. Verified end-to-end against shimmed
+  npm/bun/cargo/go/uv runners.
 - `run` strings now resolve locally-installed binaries: `tsr` prepends
   `node_modules/.bin` to `PATH` (walking up from the task's directory to the
   workspace root, nearest first), the same lookup npm/bun/yarn/pnpm do. Without

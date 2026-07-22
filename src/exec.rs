@@ -236,13 +236,18 @@ impl<'a> Ctx<'a> {
             return Status::Skipped;
         }
 
-        // 2. The task's own command.
-        let has_own = task.run.is_some() || task.delegate.is_some() || task.packages.is_some();
-
+        // 2. The task's own command, by precedence:
+        //    - `packages` → fan out (each package resolves its own form).
+        //    - deps present, but no `run`/`delegate` → a pure aggregator (e.g.
+        //      `ci`): its dependencies *are* its work, so it runs nothing of its
+        //      own and does NOT auto-detect (which would attempt `npm run ci` /
+        //      `cargo ci`). SPEC §5.2 shows such a task running only its deps.
+        //    - otherwise → form 1 (`delegate`), form 2 (`run`), or form 3: a bare
+        //      task with no deps auto-detects the package's native runner
+        //      (SPEC §3.1) — a bare `[tasks.test]` becomes `npm run test`, etc.
         if let Some(patterns) = &task.packages {
             self.run_packages(task, patterns, passthrough)
-        } else if !has_own {
-            // A deps-only task is a pure aggregator: nothing of its own to run.
+        } else if task.run.is_none() && task.delegate.is_none() && !task.deps.is_empty() {
             Status::Ok
         } else {
             let dir = self.task_dir(task);
