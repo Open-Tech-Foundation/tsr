@@ -48,6 +48,11 @@ const COMPARE_ROWS = [
     cells: ["y", "y", "y", "n", "n", "n", "y"],
   },
   {
+    label: "Declarative env vars & .env",
+    hint: "[env] blocks + auto-loaded .env",
+    cells: ["y", "p", "p", "y", "y", "y", "y"],
+  },
+  {
     label: "Native speed, no runtime boot",
     cells: ["y", "n", "p", "y", "p", "p", "n"],
   },

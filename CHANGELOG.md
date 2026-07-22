@@ -22,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the format-preserving `toml_edit` document (comments and unknown keys survive)
   and are validated before being committed or written. Starts a new file if none
   exists.
-- Landing page: a "How it compares" capability table (tsr vs npm, just, go-task,
-  mise, Turbo/Nx) covering auto-detection, dependency graph, parallelism, monorepo
-  fan-out, `node_modules/.bin` resolution, native speed, static binary, and caching
-  (marked delegated-by-design for tsr), with a link through to the benchmark numbers.
+- Landing page: a "How it compares" capability table (tsr vs npm, bun, just,
+  go-task, mise, Turbo/Nx) covering auto-detection, dependency graph, parallelism,
+  monorepo fan-out, `node_modules/.bin` resolution, declarative env vars & `.env`,
+  native speed, static binary, and caching (marked delegated-by-design for tsr),
+  with a link through to the benchmark numbers.
 - Website + documentation under `website/`, built with the OTF Web framework and
   `@opentf/web-docs` (`DocsLayout`): a marketing landing page plus a docs section
   (overview with a first-task walkthrough, configuration, task forms, mini-shell,
