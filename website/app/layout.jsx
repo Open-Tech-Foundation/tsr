@@ -2,6 +2,7 @@ import "@opentf/web-docs";
 import { router } from "@opentf/web";
 import { Navbar } from "@opentf/web-docs";
 import config from "../otfw.config.js";
+import SiteFooter from "../components/SiteFooter.jsx";
 
 export default function RootLayout({ children }) {
   // /docs supplies its own full chrome via DocsLayout (its own navbar, sidebar,
@@ -19,21 +20,7 @@ export default function RootLayout({ children }) {
 
       <main class="main">{children}</main>
 
-      <footer class="footer">
-        <div class="container footer-inner">
-          <span>
-            <a href="https://opentechf.org" target="_blank" rel="noreferrer">
-              Open Tech Foundation
-            </a>
-          </span>
-          <span>
-            Built with{" "}
-            <a href="https://web.opentechf.org/" target="_blank" rel="noreferrer">
-              OTF Web
-            </a>
-          </span>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

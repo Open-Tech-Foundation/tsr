@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Website: integrated OTF org site footer (`SiteFooter`, `BuiltWithBadge`, OTF logo mark) with dark background, MIT license, OTF logo favicon, and custom OTF (black) / Web (brand orange `rgb(255, 133, 27)`) badge styling.
 - Benchmark suite & website: added Deno (`deno task`) to the cross-runner benchmark harness (`benches/gen-workspace.sh`, `benches/run.sh`), updated benchmark docs, landing page comparison table, and synced snapshot data on website.
 
 - Per-task `env_file`: a task may load one or more `.env`-style files (a string
