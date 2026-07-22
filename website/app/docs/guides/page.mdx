@@ -1,14 +1,29 @@
 ---
 title: Guides
-description: Practical, task-oriented recipes — passthrough args, listing tasks, migrating npm scripts, local tools, env, and delegating caching.
+description: A recipe index for everyday tsr work — zero-config runs, passthrough args, npm-script migration, dependency graphs, monorepo fan-out, local tools, env & .env files, and delegating caching.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout, Cards, Card } from "@opentf/web-docs";
 
 # Guides
 
-Practical recipes for everyday work. Each is self-contained; follow the links for
-the full reference on any concept.
+Practical recipes for everyday work. Each is self-contained; pick one below, or
+follow the links inside for the full reference on any concept.
+
+<Cards>
+  <Card title="Run without a config" href="/docs/guides#run-without-a-config-file" desc="Run package scripts with no tasks.toml." />
+  <Card title="Forward arguments" href="/docs/guides#forward-arguments-to-a-task" desc="Pass ad-hoc flags through with --." />
+  <Card title="List tasks" href="/docs/guides#list-what-s-defined" desc="See every task and how it resolves." />
+  <Card title="Run from anywhere" href="/docs/guides#run-a-task-from-anywhere-in-the-repo" desc="Invoke tasks from any subdirectory." />
+  <Card title="Migrate npm scripts" href="/docs/guides#migrate-your-npm-scripts" desc="Move package.json scripts to tasks.toml." />
+  <Card title="Dependency graph" href="/docs/guides#chain-tasks-with-a-dependency-graph" desc="Chain tasks with deps and parallelism." />
+  <Card title="Monorepo fan-out" href="/docs/guides#run-one-task-across-every-package" desc="Run one task across every package." />
+  <Card title="Local tools" href="/docs/guides#call-a-project-local-tool-vite-eslint" desc="Call vite / eslint from node_modules/.bin." />
+  <Card title="Environment variables" href="/docs/guides#set-environment-variables" desc="Merge and expand env across sources." />
+  <Card title="Per-task .env files" href="/docs/guides#load-a-specific-env-file-per-task" desc="Layer .env.test over the default .env." />
+  <Card title="Delegate caching" href="/docs/guides#delegate-caching-to-turbo-or-nx" desc="Hand build caching to Turbo / Nx." />
+  <Card title="Author in the TUI" href="/docs/guides#author-tasks-interactively" desc="Edit tasks with tsr --config." />
+</Cards>
 
 ## Run without a config file
 
