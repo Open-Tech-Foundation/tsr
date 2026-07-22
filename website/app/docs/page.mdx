@@ -92,7 +92,7 @@ Because `run = "vite"` has no shell metacharacters, `tsr` splits it and spawns
   run tasks from anywhere in the repo.
 </Callout>
 
-<Callout type="info" title="No config? tsr still runs your scripts">
+<Callout type="tip" title="No config? tsr still runs your scripts">
   `tasks.toml` is optional. In a repo that only has a `package.json` (or
   `Cargo.toml`, `go.mod`, `pyproject.toml`), `tsr dev` just runs `npm run dev` /
   `cargo dev` / … by auto-detecting the ecosystem — no config to write. Add a
