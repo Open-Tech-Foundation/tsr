@@ -30,32 +30,44 @@ EXAMPLES:
     tsr test -- --watch
     tsr ci";
 
-/// The starter config written by `tsr --init`. Kept valid and legible for hand
-/// editing (SPEC §1.5); it showcases all three task forms plus the graph.
+/// The starter config written by `tsr --init`: reference comments only, no live
+/// tasks. Defining nothing keeps the scaffold from shadowing what the repo
+/// already does — a present `tasks.toml` takes full precedence over auto-detection
+/// (SPEC §2.1), so a placeholder task would hide the real `npm run dev`.
 pub const INIT_TEMPLATE: &str = "\
 # tasks.toml — the workspace root anchor and config for `tsr`.
+#
+# No tasks are defined yet. Uncomment an example below, or run `tsr --config`
+# to author tasks interactively.
+#
+# Heads up: now that this file exists, only the tasks defined here run —
+# `tsr <task>` no longer falls back to auto-detecting `npm run <task>` & co.
+# A bare `[tasks.<name>]` (form 3, below) brings that auto-detection back.
+#
+# Docs: https://tsr.opentechf.org/docs
 #
 # Task names: [A-Za-z0-9_:-]+   ·   `#` = pkg#task   ·   quote keys containing `:`.
 # Precedence when a task runs: delegate → run → auto-detect the native runner.
 
+# Monorepo: glob the packages that `packages = [...]` can fan a task out across.
 # [workspace]
-# members = [\"apps/*\", \"packages/*\"]   # uncomment for a monorepo
+# members = [\"apps/*\", \"packages/*\"]
 
-[env]
 # Shared environment inherited by every task (task `env` overrides these).
+# [env]
 # NODE_ENV = \"development\"
-
-# Form 2 — spawn a command directly (no `npm run` startup tax).
-[tasks.dev]
-run = \"echo 'edit tasks.toml to set your dev command'\"
-
-# Form 3 — no `run`/`delegate`: auto-detect the ecosystem and use its runner
-# (npm/bun run <task>, cargo <task>, go <task>, uv run <task>).
-# [tasks.test]
 
 # Form 1 — delegate (and hand caching) to a specialist backend.
 # [tasks.build]
 # delegate = \"turbo\"                       # → `turbo run build`
+
+# Form 2 — spawn a command directly (no `npm run` startup tax).
+# [tasks.dev]
+# run = \"vite --host\"
+
+# Form 3 — no `run`/`delegate`: auto-detect the ecosystem and use its runner
+# (npm/bun run <task>, cargo <task>, go <task>, uv run <task>).
+# [tasks.test]
 
 # Dependency graph + opt-in parallelism (sequential by default).
 # [tasks.ci]
@@ -339,15 +351,45 @@ mod tests {
     }
 
     #[test]
-    fn init_template_is_a_valid_runnable_config() {
-        // The scaffold must load cleanly and expose the uncommented `dev` task,
-        // so `tsr --init` immediately followed by `tsr dev` works.
+    fn init_template_is_valid_and_defines_no_tasks() {
+        // The scaffold must load cleanly, and must define nothing: a live task
+        // would shadow what the repo already runs via auto-detection.
         let dir = std::env::temp_dir().join(format!("tsr-inittmpl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(CONFIG_FILE), INIT_TEMPLATE).unwrap();
         let cfg = Config::load(&dir.join(CONFIG_FILE)).unwrap();
-        assert!(cfg.task("dev").and_then(|t| t.run.as_deref()).is_some());
+        assert!(cfg.tasks.is_empty(), "scaffold must not define tasks");
+    }
+
+    #[test]
+    fn init_template_points_at_the_docs() {
+        // The scaffold is the main discovery surface for the docs site.
+        assert!(INIT_TEMPLATE.contains("https://tsr.opentechf.org/docs"));
+    }
+
+    /// `key ` before an `=` — i.e. this line is a TOML assignment, not prose.
+    fn is_bare_key(s: &str) -> bool {
+        let k = s.trim();
+        !k.is_empty()
+            && k.len() < s.len() // there was an `=` after it
+            && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    }
+
+    #[test]
+    fn init_template_examples_uncomment_into_a_valid_config() {
+        // Every commented example must be real, working TOML — uncommenting the
+        // task blocks (not the prose header) has to produce a config that loads.
+        let body = INIT_TEMPLATE
+            .lines()
+            .filter_map(|l| l.strip_prefix("# "))
+            // Keep only the commented TOML — a table header or a `key = value`
+            // — and drop the surrounding prose.
+            .filter(|l| l.starts_with('[') || l.split('=').next().is_some_and(is_bare_key))
+            .collect::<Vec<_>>()
+            .join("\n");
+        crate::config::validate_str(&body)
+            .unwrap_or_else(|e| panic!("uncommented scaffold is invalid: {e}\n---\n{body}"));
     }
 
     #[test]

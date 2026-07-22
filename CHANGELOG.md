@@ -28,10 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dependency graph still require a config. When neither a `tasks.toml` nor a
   marker exists, `tsr` exits `64` with a message pointing at `tsr --init`, and
   `tsr --list` reports the detected package instead of erroring (SPEC §2.1).
-- `tsr --init`: scaffold a commented starter `tasks.toml` in the current
-  directory, showcasing all three task forms plus the graph. Refuses to overwrite
-  an existing file (exit `64`); the generated file is immediately valid and
-  runnable.
+- `tsr --init`: scaffold a starter `tasks.toml` in the current directory —
+  reference comments only, showcasing all three task forms, `[workspace]`,
+  `[env]` and the graph, and linking to <https://tsr.opentechf.org/docs>. It
+  defines **no** live tasks on purpose: since a present `tasks.toml` takes full
+  precedence over auto-detection (SPEC §2.1), a placeholder task would shadow
+  what the repo already runs (e.g. hide the real `npm run dev`). Refuses to
+  overwrite an existing file (exit `64`).
 - Builtins (`--list`, `--config`, `--init`, `--help`, `--version`) are flags only,
   never bare subcommands: the first positional argument is always a task name, so
   a task named `list` or `init` is never shadowed.

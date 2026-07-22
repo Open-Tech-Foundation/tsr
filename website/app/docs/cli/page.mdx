@@ -122,9 +122,17 @@ a new one in the current directory — the file appears on your first saved task
 
 ## `tsr --init`
 
-Scaffolds a commented starter `tasks.toml` in the current directory, showcasing
-all three task forms plus the graph. It refuses to overwrite an existing file, so
-it is always safe to run.
+Scaffolds a starter `tasks.toml` in the current directory: reference comments
+only, showcasing all three task forms, `[workspace]`, `[env]` and the dependency
+graph, with a link back to these docs. It refuses to overwrite an existing file,
+so it is always safe to run.
+
+It deliberately defines **no** tasks. Because a present `tasks.toml` always wins
+over auto-detection, a scaffolded placeholder task would shadow what your repo
+already does — `tsr dev` would stop running your real `npm run dev`. Uncomment
+the example you want, or run [`tsr --config`](#tsr---config) to add tasks
+interactively. A bare `[tasks.<name>]` (form 3) re-enables auto-detection for
+that task.
 
 ## `tsr --help` · `tsr --version`
 

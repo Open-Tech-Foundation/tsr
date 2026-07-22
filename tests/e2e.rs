@@ -382,7 +382,7 @@ fn nested_package_bin_wins_over_hoisted_root_bin() {
 }
 
 #[test]
-fn init_scaffolds_a_runnable_config() {
+fn init_scaffolds_a_reference_config_with_no_tasks() {
     let ws = workspace();
     // No tasks.toml yet.
     let out = tsr(&ws, &["--init"]);
@@ -390,9 +390,17 @@ fn init_scaffolds_a_runnable_config() {
     assert!(ws.join("tasks.toml").exists());
     assert!(stdout(&out).contains("Created"));
 
-    // The scaffolded `dev` task runs.
-    let dev = tsr(&ws, &["dev"]);
-    assert_eq!(code(&dev), 0, "stderr: {}", stderr(&dev));
+    // The scaffold is reference comments only — it defines nothing, and points
+    // at the docs so the examples are followable.
+    let text = std::fs::read_to_string(ws.join("tasks.toml")).unwrap();
+    assert!(text.contains("https://tsr.opentechf.org/docs"), "{text}");
+    let list = tsr(&ws, &["--list"]);
+    assert_eq!(code(&list), 0, "stderr: {}", stderr(&list));
+    assert!(
+        stdout(&list).contains("No tasks defined"),
+        "{}",
+        stdout(&list)
+    );
 
     // Re-running --init must not overwrite.
     let again = tsr(&ws, &["--init"]);
