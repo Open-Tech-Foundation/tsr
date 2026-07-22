@@ -111,6 +111,7 @@ deps = ["ui#build"]
 | `parallel` | bool | Run `deps` / `packages` concurrently. Default `false` (sequential). |
 | `args` | array | Default args prepended to the resolved command, before CLI passthrough. |
 | `env` | table | Per-task env; overrides `[env]` (see §7). |
+| `env_file` | string \| array | `.env`-style file(s) to load for this task (see §7.2). Listed order = increasing precedence (later overrides earlier). |
 
 `dir` and `packages` are mutually exclusive; setting both is a config error (exit `64`).
 
@@ -207,9 +208,9 @@ so a task named `list` or `init` is never shadowed — `tsr list` runs the user'
 tasks/scripts, which is the point of the tool.
 
 `--config` opens a TUI for authoring tasks with every option (form, `dir`/
-`packages`, `deps`, `parallel`, `args`, `env`). It edits through the `toml_edit`
-document, so comments and unknown keys survive (§1.5), and validates each change
-before writing.
+`packages`, `deps`, `parallel`, `args`, `env`, `env_file`). It edits through the
+`toml_edit` document, so comments and unknown keys survive (§1.5), and validates
+each change before writing. It also offers a read-only graph/dry-run preview.
 
 ---
 
@@ -217,17 +218,31 @@ before writing.
 
 ### 7.1 Sources & precedence
 
-Four sources, merged (never replaced — a task's `env` adds to and overrides the inherited set, it does not wipe `PATH` etc.). Highest wins:
+Sources, merged (never replaced — a task's `env` adds to and overrides the inherited set, it does not wipe `PATH` etc.). Highest wins:
 
 ```
-task env  >  workspace [env]  >  root .env file  >  process env
+task env  >  task env_file(s)  >  workspace [env]  >  root .env file  >  process env
 ```
 
 ### 7.2 `.env` loading
 
-- Only the **workspace-root** `.env` is loaded (next to `tasks.toml`).
-- It is **auto-loaded if present** — no flag.
-- Per-package `.env` files are **ignored** in v1. This is by design: frameworks (Next, Vite, …) load their own app-level `.env` at runtime; `tsr` owns only the shared, workspace-level vars. A `.env` placed inside a package is silently not loaded by `tsr`.
+- Only the **workspace-root** `.env` is auto-loaded (next to `tasks.toml`) — no flag.
+- Per-package `.env` files are **not** auto-loaded. This is by design: frameworks (Next, Vite, …) load their own app-level `.env` at runtime; `tsr` owns only the shared, workspace-level vars.
+
+#### `env_file` (per-task)
+
+A task may declare additional `.env`-style files to load, as a string or an array:
+
+```toml
+[tasks.test]
+run = "vitest"
+env_file = [".env.local", ".env.test"]   # loaded in order; .env.test overrides .env.local
+```
+
+- **Resolution:** paths are relative to the task's `dir` (or the workspace root when `dir` is unset).
+- **Precedence:** `env_file` values layer **above** the root `.env` and workspace `[env]`, and **below** the inline task `env`. So `env_file` is how a task overrides the default `.env` (e.g. `.env.test` for a test task).
+- **Order:** the list is applied left-to-right; **later files override earlier** ones. A single string is equivalent to a one-element list.
+- **Missing files are skipped** (like the root `.env`), so an optional `.env.local` need not exist — handy in CI. Values honour §7.3 expansion.
 
 ### 7.3 Expansion
 
@@ -239,7 +254,7 @@ task env  >  workspace [env]  >  root .env file  >  process env
 ✗ config error: task 'deploy'
   run = "deploy --target $TARGET"
                           ^^^^^^^
-  '$TARGET' is not defined in task env, workspace [env], or .env
+  '$TARGET' is not defined in task env, env_file, workspace [env], or .env
 
 exit code: 64
 ```

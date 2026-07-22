@@ -89,6 +89,65 @@ fn loads_root_dotenv() {
 }
 
 #[test]
+fn env_file_list_overrides_default_dotenv_last_wins() {
+    // env_file layers over the root .env; within the list, the later file wins.
+    let ws = workspace();
+    write(&ws, ".env", "FOO=from-default\nSHARED=base\n");
+    write(&ws, ".env.local", "FOO=from-local\nONLY_LOCAL=1\n");
+    write(&ws, ".env.test", "FOO=from-test\n");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.test]\n\
+         run = \"sh -c 'echo FOO=$FOO SHARED=$SHARED LOCAL=$ONLY_LOCAL'\"\n\
+         env_file = [\".env.local\", \".env.test\"]\n",
+    );
+    let out = tsr(&ws, &["test"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    // .env.test overrides .env.local overrides .env; base-only keys survive.
+    assert!(
+        stdout(&out).contains("FOO=from-test SHARED=base LOCAL=1"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn env_file_is_scoped_per_task() {
+    // A task without env_file sees only the root .env — no leakage from a sibling.
+    let ws = workspace();
+    write(&ws, ".env", "FOO=default\n");
+    write(&ws, ".env.test", "FOO=test\n");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.a]\nrun = \"sh -c 'echo a=$FOO'\"\nenv_file = \".env.test\"\n\
+         [tasks.b]\nrun = \"sh -c 'echo b=$FOO'\"\n",
+    );
+    assert!(stdout(&tsr(&ws, &["a"])).contains("a=test"));
+    assert!(stdout(&tsr(&ws, &["b"])).contains("b=default"));
+}
+
+#[test]
+fn env_file_satisfies_the_load_time_run_var_check() {
+    // A $VAR defined only in an env_file must not trip the undefined-var check.
+    let ws = workspace();
+    write(&ws, ".env.test", "TARGET=prod\n");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.deploy]\nrun = \"echo deploying-to $TARGET\"\nenv_file = \".env.test\"\n",
+    );
+    let out = tsr(&ws, &["deploy"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("deploying-to prod"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn forwards_passthrough_after_double_dash() {
     let ws = workspace();
     write(

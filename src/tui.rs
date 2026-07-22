@@ -35,6 +35,7 @@ const F_DEPS: usize = 8;
 const F_ARGS: usize = 9;
 const F_PARALLEL: usize = 10;
 const F_ENV: usize = 11;
+const F_ENV_FILE: usize = 12;
 
 const ACCENT: Color = Color::Green;
 
@@ -661,6 +662,7 @@ fn field_hint(i: usize) -> Option<&'static str> {
         F_DARGS | F_ARGS => Some("space-separated"),
         F_PKGS | F_DEPS => Some("comma-separated"),
         F_ENV => Some("KEY=VALUE, comma-separated"),
+        F_ENV_FILE => Some(".env paths, comma-separated (later overrides earlier)"),
         _ => None,
     }
 }
@@ -723,6 +725,7 @@ impl FormState {
                 kind: FieldKind::Toggle(false),
             },
             t("env"),
+            t("env file"),
         ]
     }
 
@@ -781,6 +784,7 @@ impl FormState {
             form.set_toggle(F_PARALLEL, b);
         }
         form.set_text(F_ENV, &join_env(t.get("env")));
+        form.set_text(F_ENV_FILE, &join_env_file(t.get("env_file")));
         form
     }
 
@@ -983,6 +987,18 @@ fn build_task_table(form: &FormState) -> std::result::Result<(String, Table), St
         }
         t.insert("env", Item::Value(Value::InlineTable(it)));
     }
+    // env_file: a single path serializes as a string, several as an array — both
+    // parse back the same way (config::parse_string_or_array).
+    let env_files = split_csv(form.text(F_ENV_FILE));
+    match env_files.as_slice() {
+        [] => {}
+        [one] => {
+            t.insert("env_file", str_item(one));
+        }
+        many => {
+            t.insert("env_file", array_item(many));
+        }
+    }
 
     Ok((name, t))
 }
@@ -1050,6 +1066,15 @@ fn array_strings(item: Option<&Item>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+/// `env_file` may be a single string or an array of them; show both as a
+/// comma-separated list in the form.
+fn join_env_file(item: Option<&Item>) -> String {
+    match item {
+        Some(i) if i.is_str() => i.as_str().unwrap_or_default().to_string(),
+        Some(i) => join_csv(Some(i)),
+        None => String::new(),
+    }
 }
 fn join_env(item: Option<&Item>) -> String {
     let Some(tbl) = item.and_then(Item::as_table_like) else {
@@ -1183,6 +1208,39 @@ mod tests {
         assert!(s.contains("deps = [\"lint\", \"build\"]"), "{s}");
         assert!(s.contains("parallel = true"), "{s}");
         assert!(s.contains("CI = \"true\""), "{s}");
+    }
+
+    #[test]
+    fn env_file_serializes_string_or_array_and_round_trips() {
+        // Several paths → array.
+        let f = form_with(
+            &[
+                (F_NAME, "test"),
+                (F_RUN, "vitest"),
+                (F_ENV_FILE, ".env.local, .env.test"),
+            ],
+            &[(F_TYPE, 0)],
+        );
+        let mut doc = DocumentMut::new();
+        apply_form(&mut doc, &f).unwrap();
+        config::validate_str(&doc.to_string()).unwrap();
+        assert!(
+            doc.to_string()
+                .contains("env_file = [\".env.local\", \".env.test\"]"),
+            "{}",
+            doc.to_string()
+        );
+
+        // A single path → plain string, and it survives an edit round-trip.
+        let one = form_with(
+            &[(F_NAME, "t"), (F_RUN, "vitest"), (F_ENV_FILE, ".env.test")],
+            &[(F_TYPE, 0)],
+        );
+        let mut doc2 = DocumentMut::new();
+        apply_form(&mut doc2, &one).unwrap();
+        assert!(doc2.to_string().contains("env_file = \".env.test\""));
+        let back = FormState::from_doc(&doc2, "t");
+        assert_eq!(back.text(F_ENV_FILE), ".env.test");
     }
 
     #[test]

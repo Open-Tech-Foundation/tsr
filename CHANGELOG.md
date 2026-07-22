@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-task `env_file`: a task may load one or more `.env`-style files (a string
+  or an array), e.g. `env_file = [".env.local", ".env.test"]`. Files are resolved
+  relative to the task's `dir` (or the workspace root) and layered into the merge
+  **above** the root `.env` and workspace `[env]` but **below** the inline task
+  `env` — so it is the way to override the default `.env` for a task (e.g.
+  `.env.test` for a test task). Listed order is increasing precedence (later
+  overrides earlier); missing files are skipped, like the root `.env`, so an
+  optional `.env.local` need not exist. Values honour `$VAR` expansion and the
+  load-time undefined-`$VAR` check. Authorable in the `--config` TUI (SPEC §7.2).
 - Configless mode: `tasks.toml` is now **optional**. With no config file,
   `tsr <task>` runs repo-aware by treating the task as a bare form-3 auto-detect
   anchored at the nearest ecosystem marker (`package.json`, `Cargo.toml`,

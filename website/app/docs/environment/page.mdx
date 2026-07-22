@@ -1,6 +1,6 @@
 ---
 title: Environment
-description: The four-source environment merge, root .env loading, and variable expansion.
+description: The environment merge, root .env loading, per-task env_file, and variable expansion.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -9,11 +9,11 @@ import { Callout } from "@opentf/web-docs";
 
 ## Sources & precedence
 
-Four sources are **merged** — never replaced. A task's `env` adds to and
+Sources are **merged** — never replaced. A task's `env` adds to and
 overrides the inherited set; it does not wipe `PATH` and friends. Highest wins:
 
 ```text
-task env  >  workspace [env]  >  root .env file  >  process env
+task env  >  task env_file(s)  >  workspace [env]  >  root .env file  >  process env
 ```
 
 ```toml
@@ -26,11 +26,30 @@ env = { CI = "true" }        # adds CI, keeps everything else
 
 ## `.env` loading
 
-- Only the **workspace-root** `.env` is loaded (next to `tasks.toml`).
-- It is **auto-loaded if present** — no flag.
-- Per-package `.env` files are **ignored** in v1, by design: frameworks (Next,
+- Only the **workspace-root** `.env` is auto-loaded (next to `tasks.toml`) — no flag.
+- Per-package `.env` files are **not** auto-loaded, by design: frameworks (Next,
   Vite, …) load their own app-level `.env` at runtime; `tsr` owns only the
   shared, workspace-level vars.
+
+## `env_file` — per-task files
+
+A task can load its own `.env`-style files with `env_file`, as a single path or a
+list. This is how a task **overrides the default `.env`** — e.g. a test task that
+needs `.env.test`:
+
+```toml
+[tasks.test]
+run = "vitest"
+env_file = [".env.local", ".env.test"]   # .env.test overrides .env.local
+```
+
+- **Precedence:** `env_file` values layer **above** the root `.env` and
+  workspace `[env]`, and **below** the inline task `env`.
+- **Order:** applied left to right — **later files override earlier** ones. A
+  single string is a one-element list.
+- **Paths** are relative to the task's `dir` (or the workspace root when unset).
+- **Missing files are skipped** (like the root `.env`), so an optional
+  `.env.local` need not exist — convenient in CI.
 
 ## Expansion
 
@@ -47,8 +66,8 @@ LOGS = "$ROOT/logs"          # → /srv/app/logs
 
 <Callout type="warning" title="Undefined variables are a hard error">
   A <code>$VAR</code> referenced in a <code>run</code> string but defined nowhere
-  (task env, workspace <code>[env]</code>, or <code>.env</code>) is a config
-  error, caught at load time, exit <code>64</code>:
+  (task env, <code>env_file</code>, workspace <code>[env]</code>, or
+  <code>.env</code>) is a config error, caught at load time, exit <code>64</code>:
   <br />
   <br />
   <code>✗ config error: task 'deploy': '$TARGET' is not defined…</code>

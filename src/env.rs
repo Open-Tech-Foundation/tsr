@@ -1,15 +1,17 @@
 //! Environment-variable model (SPEC §7).
 //!
-//! Four sources are merged — never replaced — with this precedence (highest
-//! wins):
+//! Sources are merged — never replaced — with this precedence (highest wins):
 //!
 //! ```text
-//! task env  >  workspace [env]  >  root .env file  >  process env
+//! task env  >  task env_file(s)  >  workspace [env]  >  root .env file  >  process env
 //! ```
 //!
-//! Each `[env]`/task value is expanded as it is applied, so it may reference the
-//! process env and *earlier* keys, but never forward keys (SPEC §7.3). `$VAR`
-//! inside a `run` string is expanded later, against this fully-merged map.
+//! `env_file` loads one or more `.env`-style files declared on the task, in
+//! listed order (later files override earlier ones), resolved relative to the
+//! task's directory. Each `[env]`/task/file value is expanded as it is applied,
+//! so it may reference the process env and *earlier* keys, but never forward keys
+//! (SPEC §7.3). `$VAR` inside a `run` string is expanded later, against this
+//! fully-merged map.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,33 +57,56 @@ pub fn prepend_node_bin(env: &mut HashMap<String, String>, dir: &Path, root: &Pa
 }
 
 /// Build the merged, fully-expanded environment for `task` (SPEC §7.1), reading
-/// the real process env and the root `.env`.
+/// the real process env, the root `.env`, and the task's `env_file`(s).
 pub fn build(cfg: &Config, task: &Task) -> HashMap<String, String> {
     let process: HashMap<String, String> = std::env::vars().collect();
     let dotenv = load_dotenv(&cfg.root);
-    build_from(process, &dotenv, &cfg.env, &task.env)
+    let file_env = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
+    build_from(process, &dotenv, &cfg.env, &file_env, &task.env)
+}
+
+/// The directory a task's `env_file` paths resolve against: its `dir` (relative
+/// to the workspace root) or the workspace root itself. Kept consistent between
+/// execution and the load-time `$VAR` check.
+fn task_base_dir(root: &Path, task: &Task) -> PathBuf {
+    match &task.dir {
+        Some(d) => root.join(d),
+        None => root.to_path_buf(),
+    }
+}
+
+/// Load each of a task's `env_file`s (left → right), relative to `base`. Later
+/// files override earlier ones. A missing or unreadable file is skipped (so an
+/// optional `.env.local` need not exist), matching the root `.env`.
+fn load_env_files(base: &Path, files: &[String]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for f in files {
+        if let Ok(text) = std::fs::read_to_string(base.join(f)) {
+            out.extend(parse_dotenv(&text));
+        }
+    }
+    out
 }
 
 /// Core merge, with the process env and `.env` injected explicitly so tests need
-/// not mutate global state. Overlays are applied lowest-precedence first.
+/// not mutate global state. Overlays are applied lowest-precedence first:
+/// `.env` → workspace `[env]` → task `env_file`(s) → task `env`.
 fn build_from(
     process: HashMap<String, String>,
     dotenv: &[(String, String)],
     workspace_env: &[(String, String)],
+    file_env: &[(String, String)],
     task_env: &[(String, String)],
 ) -> HashMap<String, String> {
     let mut map = process;
-    // .env, then workspace [env], then task env — each value expanded against
-    // everything applied so far (process + earlier keys).
-    for (k, v) in dotenv {
-        let val = expand_value(v, &map);
-        map.insert(k.clone(), val);
-    }
-    for (k, v) in workspace_env {
-        let val = expand_value(v, &map);
-        map.insert(k.clone(), val);
-    }
-    for (k, v) in task_env {
+    // Each value is expanded against everything applied so far (process + earlier
+    // keys), lowest precedence first so higher sources overwrite.
+    for (k, v) in dotenv
+        .iter()
+        .chain(workspace_env)
+        .chain(file_env)
+        .chain(task_env)
+    {
         let val = expand_value(v, &map);
         map.insert(k.clone(), val);
     }
@@ -215,11 +240,12 @@ fn validate_run_vars_from(
         if vars.is_empty() {
             continue;
         }
-        let map = build_from(process.clone(), dotenv, &cfg.env, &task.env);
+        let file_env = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
+        let map = build_from(process.clone(), dotenv, &cfg.env, &file_env, &task.env);
         for var in vars {
             if !map.contains_key(&var) {
                 return Err(TsrError::config(format!(
-                    "task '{}': '${}' is not defined in task env, workspace [env], or .env\n  run = \"{}\"",
+                    "task '{}': '${}' is not defined in task env, env_file, workspace [env], or .env\n  run = \"{}\"",
                     task.key, var, run
                 )));
             }
@@ -247,6 +273,10 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    fn owned_paths(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
@@ -279,11 +309,12 @@ mod tests {
     }
 
     #[test]
-    fn precedence_task_beats_workspace_beats_dotenv_beats_process() {
+    fn precedence_task_beats_file_beats_workspace_beats_dotenv_beats_process() {
         let map = build_from(
             proc(&[("K", "process"), ("P", "keepme")]),
             &owned(&[("K", "dotenv")]),
             &owned(&[("K", "workspace")]),
+            &owned(&[("K", "file")]),
             &owned(&[("K", "task")]),
         );
         assert_eq!(map["K"], "task");
@@ -292,8 +323,38 @@ mod tests {
     }
 
     #[test]
+    fn env_file_overrides_dotenv_and_workspace_but_not_task_env() {
+        let map = build_from(
+            proc(&[]),
+            &owned(&[("K", "dotenv"), ("A", "base")]),
+            &owned(&[("K", "workspace")]),
+            &owned(&[("K", "file"), ("A", "fromfile")]),
+            &[],
+        );
+        // env_file beats .env and [env]…
+        assert_eq!(map["K"], "file");
+        assert_eq!(map["A"], "fromfile");
+
+        // …but an inline task env still wins over env_file.
+        let map2 = build_from(
+            proc(&[]),
+            &[],
+            &[],
+            &owned(&[("K", "file")]),
+            &owned(&[("K", "task")]),
+        );
+        assert_eq!(map2["K"], "task");
+    }
+
+    #[test]
     fn merge_never_wipes_lower_sources() {
-        let map = build_from(proc(&[("PATH", "/bin")]), &[], &owned(&[("X", "1")]), &[]);
+        let map = build_from(
+            proc(&[("PATH", "/bin")]),
+            &[],
+            &owned(&[("X", "1")]),
+            &[],
+            &[],
+        );
         assert_eq!(map["PATH"], "/bin");
         assert_eq!(map["X"], "1");
     }
@@ -305,6 +366,7 @@ mod tests {
             &[],
             &owned(&[("A", "$HOME/a"), ("B", "${A}/b")]),
             &[],
+            &[],
         );
         assert_eq!(map["A"], "/h/a");
         assert_eq!(map["B"], "/h/a/b");
@@ -312,8 +374,33 @@ mod tests {
 
     #[test]
     fn undefined_reference_in_value_is_empty() {
-        let map = build_from(HashMap::new(), &[], &owned(&[("A", "x${MISSING}y")]), &[]);
+        let map = build_from(
+            HashMap::new(),
+            &[],
+            &owned(&[("A", "x${MISSING}y")]),
+            &[],
+            &[],
+        );
         assert_eq!(map["A"], "xy");
+    }
+
+    #[test]
+    fn load_env_files_layers_later_over_earlier_and_skips_missing() {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let id = N.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!("tsr-envfile-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join(".env.local"), "FOO=local\nONLY_LOCAL=1\n").unwrap();
+        std::fs::write(base.join(".env.test"), "FOO=test\n").unwrap();
+
+        let files = load_env_files(
+            &base,
+            &owned_paths(&[".env.local", ".env.test", ".env.missing"]),
+        );
+        // Collapse to a map to check the effective (last-wins) values.
+        let map = build_from(HashMap::new(), &[], &[], &files, &[]);
+        assert_eq!(map["FOO"], "test"); // later file wins
+        assert_eq!(map["ONLY_LOCAL"], "1"); // earlier-only key preserved
     }
 
     #[test]

@@ -90,14 +90,24 @@ shell power, use `delegate = { bin = "sh", args = ["-c", "…"] }` or a script f
 
 ### Environment
 
-Four sources are merged (lower sources augmented, never wiped); highest wins:
+Sources are merged (lower sources augmented, never wiped); highest wins:
 
 ```
-task env  >  workspace [env]  >  root .env file  >  process env
+task env  >  task env_file(s)  >  workspace [env]  >  root .env file  >  process env
 ```
 
-Only the workspace-root `.env` is auto-loaded. A `$VAR` referenced in a `run`
-string but defined nowhere is a hard error.
+Only the workspace-root `.env` is auto-loaded. A task can load environment-specific
+files with `env_file` (a string or a list; later files override earlier; paths
+relative to the task's `dir`; missing files skipped) — the way to override the
+default `.env`, e.g. `.env.test` for a test task:
+
+```toml
+[tasks.test]
+run = "vitest"
+env_file = [".env.local", ".env.test"]
+```
+
+A `$VAR` referenced in a `run` string but defined nowhere is a hard error.
 
 ## Exit codes
 

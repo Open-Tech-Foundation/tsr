@@ -58,6 +58,11 @@ pub struct Task {
     pub args: Vec<String>,
     /// Per-task env, in declaration order (SPEC §7.1).
     pub env: Vec<(String, String)>,
+    /// `.env`-style files to load for this task, in listed order (later files
+    /// override earlier ones), resolved relative to the task's directory. Layered
+    /// above the root `.env` and workspace `[env]`, below the inline `env`
+    /// (SPEC §7.2).
+    pub env_files: Vec<String>,
 }
 
 impl Task {
@@ -237,6 +242,9 @@ fn parse_task(key: &str, item: &Item) -> Result<Task> {
                 })?
             }
             "env" => task.env = parse_env_table(value, &format!("tasks.{key}.env"))?,
+            "env_file" => {
+                task.env_files = parse_string_or_array(value, &format!("tasks.{key}.env_file"))?
+            }
             // Unknown keys are tolerated: they round-trip via `doc` (SPEC §1.5).
             _ => {}
         }
@@ -280,6 +288,23 @@ fn expect_string(item: &Item, key: &str, field: &str) -> Result<String> {
     item.as_str()
         .map(str::to_string)
         .ok_or_else(|| TsrError::config(format!("task '{key}': '{field}' must be a string")))
+}
+
+/// Parse either a single string or an array of strings into a `Vec<String>`, so
+/// `env_file = ".env.test"` and `env_file = [".env.local", ".env.test"]` both
+/// work. Empty entries are rejected.
+fn parse_string_or_array(item: &Item, ctx: &str) -> Result<Vec<String>> {
+    let out = if let Some(s) = item.as_str() {
+        vec![s.to_string()]
+    } else {
+        parse_string_array(item, ctx)?
+    };
+    if out.iter().any(|s| s.trim().is_empty()) {
+        return Err(TsrError::config(format!(
+            "'{ctx}' must not contain empty paths"
+        )));
+    }
+    Ok(out)
 }
 
 /// Parse an array of strings; rejects non-arrays and non-string elements.

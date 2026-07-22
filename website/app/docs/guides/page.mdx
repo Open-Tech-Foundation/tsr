@@ -157,8 +157,8 @@ dir = "apps/web"           # resolves apps/web/node_modules/.bin first
 
 ## Set environment variables
 
-Env is merged from four sources — `task > workspace [env] > root .env > process` —
-and each value is `$VAR`-expanded after the merge:
+Env is merged — `task env > task env_file > workspace [env] > root .env > process`
+— and each value is `$VAR`-expanded after the merge:
 
 ```toml
 [env]                      # applies to every task
@@ -170,6 +170,21 @@ NODE_ENV = "production"
 
 A root `.env` is auto-loaded. Full precedence and expansion rules in
 [environment](/docs/environment).
+
+## Load a specific .env file per task
+
+Use `env_file` to layer environment-specific files over the default `.env` — the
+canonical case is `.env.test` for a test task:
+
+```toml
+[tasks.test]
+run = "vitest"
+env_file = [".env.local", ".env.test"]   # later file wins; both override .env
+```
+
+Paths resolve relative to the task's `dir` (or the workspace root); listed order
+is increasing precedence (later overrides earlier); missing files are skipped, so
+an optional `.env.local` need not exist. See [environment](/docs/environment#env_file--per-task-files).
 
 ## Delegate caching to Turbo or Nx
 
