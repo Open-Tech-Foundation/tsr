@@ -1,0 +1,68 @@
+adapters = ["crates.io"]
+tag_format = "v{version}"
+provider = "github"
+default_branch = "main"
+changelog_strategy = "curated"
+changelog_scope = "root"
+github_release_notes = "curated-changelog"
+
+[hooks]
+
+[publish.ignore_paths]
+tsr = []
+
+[[package]]
+name = "tsr"
+adapter = "crates.io"
+mode = "build-only"
+matrix = true
+command = "cargo build --release --target {triple}"
+artifacts = "target/{triple}/release/{bin}{ext}"
+bin_name = "tsr"
+attest = true
+checksums = true
+
+[[package.targets]]
+name = "linux"
+arch = "x86_64"
+triple = "x86_64-unknown-linux-gnu"
+runner = "ubuntu-latest"
+stage_as = "linux-x64"
+
+[[package.targets]]
+name = "linux"
+arch = "aarch64"
+triple = "aarch64-unknown-linux-gnu"
+runner = "ubuntu-latest"
+stage_as = "linux-arm64"
+cross = true
+
+[[package.targets]]
+name = "macos"
+arch = "aarch64"
+triple = "aarch64-apple-darwin"
+runner = "macos-latest"
+stage_as = "darwin-arm64"
+
+[[package.targets]]
+name = "macos"
+arch = "x86_64"
+triple = "x86_64-apple-darwin"
+runner = "macos-latest"
+stage_as = "darwin-x64"
+
+[[package.targets]]
+name = "windows"
+arch = "x86_64"
+triple = "x86_64-pc-windows-msvc"
+runner = "windows-latest"
+stage_as = "win32-x64"
+ext = ".exe"
+
+[[package.targets]]
+name = "freebsd"
+arch = "x86_64"
+triple = "x86_64-unknown-freebsd"
+runner = "ubuntu-latest"
+stage_as = "freebsd-x64"
+vm = true

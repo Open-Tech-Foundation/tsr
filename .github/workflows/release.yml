@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write  # create tags and GitHub Releases
+  id-token: write
+  attestations: write  # sign build provenance for release assets
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      release_tsr: ${{ steps.check.outputs.release_tsr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.28.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.28.0/install.sh | bash
+      - id: check
+        run: |
+          echo "should_release=$(otf-release check --exclude-package tsr)" >> "$GITHUB_OUTPUT"
+          echo "release_tsr=$(otf-release check --package tsr)" >> "$GITHUB_OUTPUT"
+
+  matrix-tsr:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_tsr == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.28.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.28.0/install.sh | bash
+      - id: set
+        run: echo "matrix=$(otf-release matrix --package tsr)" >> "$GITHUB_OUTPUT"
+
+  build-tsr:
+    needs: [check-release, matrix-tsr]
+    if: needs.check-release.outputs.release_tsr == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-tsr.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain
+        if: ${{ matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-${{ matrix.arch }}-linux-gnu
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.vm }}
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install otf-release
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.28.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.28.0/install.sh | bash
+      - name: Install otf-release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OTF_RELEASE_VERSION: v0.28.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.28.0/install.ps1 | iex
+      - name: Build tsr
+        if: ${{ !matrix.vm }}
+        run: otf-release build --package tsr --target ${{ matrix.name }}/${{ matrix.arch }}
+      - name: Build tsr in a freebsd VM
+        if: ${{ matrix.vm && matrix.name == 'freebsd' }}
+        uses: vmactions/freebsd-vm@v1
+        with:
+          arch: ${{ matrix.arch }}
+          usesh: true
+          copyback: true
+          prepare: |
+            pkg install -y rust
+          run: |
+            cargo build --release --target ${{ matrix.triple }}
+      - name: Stage tsr
+        if: ${{ matrix.vm }}
+        run: otf-release build --package tsr --target ${{ matrix.name }}/${{ matrix.arch }} --stage-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsr-${{ matrix.name }}-${{ matrix.arch }}
+          path: .artifacts/tsr
+
+  github-release-tsr:
+    needs: [check-release, build-tsr]
+    if: needs.check-release.outputs.release_tsr == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: .artifacts
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.28.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.28.0/install.sh | bash
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: otf-release github-release --package tsr --artifacts-dir .artifacts
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: .artifacts/.flat-tsr/*
+
