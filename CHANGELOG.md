@@ -83,6 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows CI: the `prepends_node_bin_dirs_nearest_first` test now builds its
+  expected `node_modules/.bin` paths with the same `.join("node_modules").join(".bin")`
+  as `prepend_node_bin`, so path separators match on Windows (a single
+  `join("node_modules/.bin")` kept a forward slash and failed only there).
 - Auto-detect (form 3) is now actually executed for a **single** bare task. A
   bare `[tasks.<name>]` with no `run`/`delegate`/`packages` and no `deps` was
   wrongly treated as a deps-only aggregator and silently did nothing (exit `0`),

@@ -295,8 +295,16 @@ mod tests {
         let sep = if cfg!(windows) { ';' } else { ':' };
         let parts: Vec<&str> = env["PATH"].split(sep).collect();
         // Package .bin first, then hoisted root .bin, then the original PATH.
-        assert_eq!(parts[0], pkg.join("node_modules/.bin").to_str().unwrap());
-        assert_eq!(parts[1], root.join("node_modules/.bin").to_str().unwrap());
+        // Build expected paths the same way as prepend_node_bin so separators
+        // match on Windows (join("node_modules/.bin") would keep a forward slash).
+        assert_eq!(
+            parts[0],
+            pkg.join("node_modules").join(".bin").to_str().unwrap()
+        );
+        assert_eq!(
+            parts[1],
+            root.join("node_modules").join(".bin").to_str().unwrap()
+        );
         assert_eq!(*parts.last().unwrap(), "/usr/bin");
     }
 
