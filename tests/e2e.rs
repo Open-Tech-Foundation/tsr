@@ -1,9 +1,11 @@
 //! End-to-end tests driving the compiled `tsr` binary against real temp
 //! workspaces, asserting on exit codes and output (SPEC §5, §6, §7, §8, §10).
 //!
-//! The tasks these tests run use Unix coreutils (`echo`, `sh`, `touch`, `false`),
-//! so the suite is Unix-only. On Windows the CI matrix still compiles the binary
-//! and runs every platform-independent unit test.
+//! Some of the tasks these tests run reach for Unix binaries (`sh`, `false`) or
+//! POSIX permissions, so the suite is Unix-only. On Windows the CI matrix still
+//! compiles the binary and runs every platform-independent unit test — including
+//! the builtins (SPEC §8.5), which are what make `run` strings portable in the
+//! first place.
 #![cfg(unix)]
 
 use std::fs;
@@ -599,4 +601,164 @@ fn tasks_toml_takes_precedence_over_configless() {
     let out = tsr(&ws, &["dev"]);
     assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
     assert!(stdout(&out).contains("from-config"), "{}", stdout(&out));
+}
+
+// --- builtins & globbing (SPEC §8.5, §8.1) ---
+
+#[test]
+fn glob_expands_and_builtin_rm_cleans_a_build_dir() {
+    // The motivating case: `rm -rf dist/*` must work identically everywhere and
+    // stay a success when there is nothing left to remove.
+    let ws = workspace();
+    write(&ws, "dist/a.js", "");
+    write(&ws, "dist/b.js", "");
+    write(&ws, "dist/nested/c.js", "");
+    write(&ws, "keep.txt", "");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.clean]\nrun = \"rm -rf dist/*\"\n",
+    );
+
+    let out = tsr(&ws, &["clean"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        ws.join("dist").is_dir(),
+        "the glob matched the entries, not dist"
+    );
+    assert!(!ws.join("dist/a.js").exists());
+    assert!(!ws.join("dist/nested").exists());
+    assert!(ws.join("keep.txt").exists());
+
+    // Idempotent: the pattern now matches nothing, and `-f` makes that a success.
+    assert_eq!(code(&tsr(&ws, &["clean"])), 0);
+}
+
+#[test]
+fn builtins_chain_through_the_mini_shell() {
+    let ws = workspace();
+    write(&ws, "src/one.txt", "hello");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.build]\nrun = \"mkdir -p out/deep && cp src/*.txt out/deep && touch out/deep/.stamp\"\n",
+    );
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert_eq!(
+        fs::read_to_string(ws.join("out/deep/one.txt")).unwrap(),
+        "hello"
+    );
+    assert!(ws.join("out/deep/.stamp").is_file());
+}
+
+#[test]
+fn builtin_shadows_a_binary_of_the_same_name_on_path() {
+    // A builtin always wins, so one `run` string behaves the same on every OS.
+    let ws = workspace();
+    let bin = ws.join("fakebin");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "rm");
+    write(&ws, "doomed.txt", "");
+    write(&ws, "tasks.toml", "[tasks.t]\nrun = \"rm doomed.txt\"\n");
+
+    let out = tsr_with_path(&ws, &["t"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        !stdout(&out).contains("INVOKED"),
+        "PATH shim must not run: {}",
+        stdout(&out)
+    );
+    assert!(
+        !ws.join("doomed.txt").exists(),
+        "the builtin must do the work"
+    );
+}
+
+#[test]
+fn builtin_failure_is_a_normal_task_failure() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.t]\nrun = \"rm ghost.txt\"\n");
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 1);
+    assert!(stderr(&out).contains("ghost.txt"), "{}", stderr(&out));
+}
+
+#[test]
+fn globs_resolve_against_the_task_dir() {
+    let ws = workspace();
+    write(&ws, "pkg/a.log", "");
+    write(&ws, "outside.log", "");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.clean]\ndir = \"pkg\"\nrun = \"rm -f *.log\"\n",
+    );
+    assert_eq!(code(&tsr(&ws, &["clean"])), 0);
+    assert!(!ws.join("pkg/a.log").exists());
+    assert!(ws.join("outside.log").exists(), "must not escape 'dir'");
+}
+
+#[test]
+fn quoted_pattern_is_not_globbed() {
+    let ws = workspace();
+    write(&ws, "a.txt", "");
+    write(&ws, "tasks.toml", "[tasks.show]\nrun = \"echo '*.txt'\"\n");
+    let out = tsr(&ws, &["show"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("*.txt"), "{}", stdout(&out));
+}
+
+#[test]
+fn undefined_var_error_underlines_the_reference() {
+    // SPEC §7.3: the diagnostic points a caret at the offending reference.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.deploy]\nrun = \"deploy --target $TARGET\"\n",
+    );
+    let out = tsr(&ws, &["deploy"]);
+    assert_eq!(code(&out), 64);
+    let err = stderr(&out);
+    assert!(err.contains("run = \"deploy --target $TARGET\""), "{err}");
+    assert!(err.contains("^^^^^^^"), "{err}");
+    assert!(err.contains("'$TARGET' is not defined"), "{err}");
+}
+
+#[test]
+fn parameter_expansion_is_rejected_with_a_targeted_error() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"deploy ${TARGET:-prod}\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 64);
+    assert!(
+        stderr(&out).contains("parameter expansion"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_glob_sees_files_an_earlier_command_in_the_sequence_created() {
+    // Globs resolve per command, not when the plan is built, so this pattern
+    // must match the file `touch` produces one step earlier.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"touch dist/built.map && rm dist/*.map\"\n",
+    );
+    write(&ws, "dist/keep.js", "");
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        !ws.join("dist/built.map").exists(),
+        "the glob must have matched a file created mid-sequence"
+    );
+    assert!(ws.join("dist/keep.js").exists());
 }

@@ -243,10 +243,13 @@ fn validate_run_vars_from(
         let file_env = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
         let map = build_from(process.clone(), dotenv, &cfg.env, &file_env, &task.env);
         for var in vars {
-            if !map.contains_key(&var) {
+            if !map.contains_key(&var.name) {
+                // Point a caret at the exact reference in the source (SPEC §7.3).
                 return Err(TsrError::config(format!(
-                    "task '{}': '${}' is not defined in task env, env_file, workspace [env], or .env\n  run = \"{}\"",
-                    task.key, var, run
+                    "task '{}'\n{}\n  '${}' is not defined in task env, env_file, workspace [env], or .env",
+                    task.key,
+                    shell::caret(run, var.span),
+                    var.name
                 )));
             }
         }

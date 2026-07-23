@@ -1,5 +1,6 @@
 //! `tsr` — a lightweight, polyglot, repo-aware task runner (SPEC v1).
 
+mod builtins;
 mod cli;
 mod config;
 mod detect;

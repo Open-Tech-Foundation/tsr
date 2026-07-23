@@ -273,14 +273,24 @@ Fully inherited; no filtering / allow-listing in v1.
 
 `run` strings execute one of two ways, chosen by scanning for shell metacharacters:
 
-1. **No metacharacters** → the string is split and the command is spawned **directly** (`execvp`-style). Fast, fully cross-platform. This is the common path and where `tsr` beats `npm run` (no Node startup tax).
-2. **Supported metacharacters present** → the string runs through `tsr`'s own **minimal shell**.
+1. **Every word static** → the string is split and the command is spawned **directly** (`execvp`-style). Fast, fully cross-platform. This is the common path and where `tsr` beats `npm run` (no Node startup tax).
+2. **Variables, globs or operators present** → the string runs through `tsr`'s own **minimal shell**.
+
+A `run` string is parsed into an **AST** (program → command → word → part), not split straight into argv. Keeping the structure is what lets expansion tell text that came from an unquoted literal — where `*` is a pattern — from text that came from quotes or a variable, where it is just a character.
 
 ### 8.1 Mini-shell — supported (the entire feature set)
 
-- **`$VAR` / `${VAR}`** — expansion from the merged env (§7).
+- **`$VAR` / `${VAR}`** — expansion from the merged env (§7). `${...}` takes a plain variable name only; parameter expansion (`${VAR:-default}`, `${#VAR}`, …) is rejected with a specific error.
 - **`&&` `||` `;`** — sequencing with correct exit-code semantics (`&&` on `0`, `||` on non-zero, `;` always).
-- **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion applies).
+- **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion applies). Quoted text is never globbed.
+- **Globs** — `*`, `?`, `[...]` match against the filesystem, relative to the task's `dir` (§3.2), following `sh` rules: `*` does not cross a `/` and does not match a leading dot; case sensitivity follows the platform. A pattern that matches nothing stays literal, exactly as in `sh`.
+
+Two rules keep globbing predictable:
+
+- **Expanded values are never rescanned.** If `$FILES` holds `*.js`, it stays the literal string `*.js`. Only the `run` string itself can contain a pattern.
+- **Globs resolve when their command runs**, not when the task is planned — so in `build && rm dist/*.map` the pattern sees the files `build` just produced.
+
+Variables, by contrast, resolve **before** the sequence starts, so an undefined `$VAR` fails the task cleanly instead of half-way through (§7.3).
 
 ### 8.2 Mini-shell — rejected (never attempted)
 
@@ -290,8 +300,8 @@ These are rejected at **load time** with a clear, specific error (exit `64`), be
 |-----------|-------------------|
 | `\|` pipes | use `delegate` or a script file |
 | `>` `>>` `2>&1` redirection | use a script file |
-| `*` `?` `[...]` globs | pass an explicit path |
 | `$(...)` / backtick substitution | use a script file |
+| `&` background, `( )` subshells | use `delegate` for real shell control |
 
 ### 8.3 Escape hatch
 
@@ -306,7 +316,27 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 
 ### 8.4 Detection order
 
-`scan → no metachars → direct spawn` · `has supported-only metachars → mini-shell` · `has any unsupported metachar → error 64 at load`. Metacharacter *detection* always runs before *rejection*, so metachar-free strings never touch the mini-shell.
+`parse → every word static → direct spawn` · `variables, globs or operators present → mini-shell` · `any unsupported construct → error 64 at load`. Classification is a property of the parsed AST, so a plain string never touches expansion, and quoting alone (`echo 'a b'`) still takes the direct path.
+
+### 8.5 Built-in commands
+
+`rm -rf dist` has to mean the same thing on Linux, macOS and Windows — but the coreutils it names are Unix binaries that do not exist on Windows. So `tsr` implements the file operations tasks actually use, in-process:
+
+| Builtin | Options |
+|---------|---------|
+| `rm` | `-r`/`-R`/`--recursive`, `-f`/`--force` |
+| `cp` | `-r`/`-R`/`--recursive` |
+| `mv` | — |
+| `mkdir` | `-p`/`--parents` |
+| `touch` | — |
+| `cat` | — (stdin when no operands) |
+| `echo` | leading `-n` |
+| `pwd` | — |
+
+- **A builtin always wins** over a binary of the same name on `PATH`, on every platform. One `run` string, one behaviour. `delegate` is the escape hatch when a task genuinely needs the platform's own tool (§8.3).
+- Builtins apply to **`run` strings only** — never to `delegate` or an auto-detected native runner (§3.1).
+- Short options bundle (`-rf`), `--` ends option parsing, and relative paths resolve against the task's `dir`.
+- **Exit codes:** `0` success, `1` a failed operation, `2` a usage error (unknown flag, missing operand). As in POSIX, `rm -f` with nothing to remove succeeds silently — which is what makes `rm -rf dist/*` idempotent once `dist` is empty.
 
 ---
 
@@ -333,7 +363,7 @@ Only existing directories are added, so it is a no-op in non-JS packages. The co
 |------|---------|
 | `0` | Success. |
 | *child's code* | On task failure, the first failed child's **exact** exit code is propagated verbatim (`1`, `2`, `130`, …), so CI sees the real signal. |
-| `64` | **Runner-level** error: config parse failure, `dir`+`packages` both set, unknown task name, `delegate` binary not found, undefined `$VAR`, rejected mini-shell metacharacter. |
+| `64` | **Runner-level** error: config parse failure, `dir`+`packages` both set, unknown task name, `delegate` binary not found, undefined `$VAR`, rejected mini-shell metacharacter. A failing **builtin** (§8.5) is a task failure, not a runner error, so it propagates its own `1`/`2`. |
 
 The distinction lets pipelines tell "my task failed" (child code) apart from "the runner itself broke" (`64`).
 
@@ -344,6 +374,7 @@ The distinction lets pipelines tell "my task failed" (child code) apart from "th
 | Capability | v1 | v1.1 |
 |-----------|:--:|:--:|
 | `run` (direct spawn) + mini-shell | ✓ | |
+| Globbing + cross-platform builtins (§8.5) | ✓ | |
 | `delegate` (string + table forms) | ✓ | |
 | Auto-detect ecosystem → native runner | ✓ | |
 | `packages` fan-out (glob + name match) | ✓ | |

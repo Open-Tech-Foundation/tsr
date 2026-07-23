@@ -1,18 +1,25 @@
-//! `run`-string execution model (SPEC §8).
+//! `run`-string parsing and expansion (SPEC §8).
 //!
-//! A `run` string is lexed, quote-aware, into a [`Program`]. During lexing,
-//! unsupported constructs (`|` `>` `<` `*` `?` `[` `$(` `` ` `` `&` `(`) are
-//! rejected at **load time** with exit code `64` (SPEC §8.2). The resulting plan
-//! is one of:
+//! A `run` string is lexed into an **AST** — [`Program`] → [`Command`] →
+//! [`Word`] → [`Part`] — rather than straight into argv. Keeping the structure
+//! is what lets the later expansion pass distinguish text that came from an
+//! unquoted literal (where `*` is a glob) from text that came from quotes or a
+//! variable (where `*` is just a character).
 //!
-//! - [`RunPlan::Direct`] — no shell features at all: a single command split into
+//! Unsupported constructs (`|` `>` `<` `$(` `` ` `` `&` `(`) are rejected at
+//! **load time** with exit code `64` (SPEC §8.2). The resulting plan is one of:
+//!
+//! - [`RunPlan::Direct`] — every word is static: a single command split into
 //!   argv and spawned directly, `execvp`-style (SPEC §8, path 1).
-//! - [`RunPlan::Shell`] — supported metacharacters present (`$VAR`, `&& || ;`,
-//!   quoting): the mini-shell expands variables (SPEC §7.3) and sequences
-//!   commands with correct exit-code semantics (SPEC §8.1).
+//! - [`RunPlan::Shell`] — the string needs work at run time (variables, globs,
+//!   or `&&`/`||`/`;` sequencing), so the mini-shell handles it (SPEC §8.1).
 //!
-//! Detection order (SPEC §8.4): the lexer always runs first, so a metachar-free
-//! string is classified `Direct` and never touches variable/operator handling.
+//! Expansion runs in two stages. Variables resolve once per job, against its
+//! merged env, so an undefined `$VAR` fails before anything executes. Globs
+//! resolve per command, at the moment it runs, so a pattern sees the files an
+//! earlier command in the same sequence produced.
+
+use std::path::Path;
 
 use crate::error::{Result, TsrError};
 
@@ -27,40 +34,66 @@ pub enum Sep {
     Semi,
 }
 
-/// A piece of a word: either literal text or a variable to expand.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Fragment {
-    Literal(String),
-    /// `$NAME` / `${NAME}` — expanded against the merged env (SPEC §7.3).
-    Var(String),
+/// A half-open range of `char` offsets into the original `run` string, used to
+/// point a diagnostic at the exact construct that caused it (SPEC §7.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
 }
 
-/// A single command: a sequence of words (argv-to-be), each built from
-/// fragments so variable expansion can be deferred until the env is known.
+/// A `$NAME` / `${NAME}` reference, with the span it occupies in the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Command {
-    words: Vec<Vec<Fragment>>,
+pub struct VarRef {
+    pub name: String,
+    pub span: Span,
+}
+
+/// One piece of a word. The variant records *where the text came from*, which
+/// decides whether its glob metacharacters are patterns or literals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Part {
+    /// Unquoted literal text. `*`, `?` and `[` here are glob metacharacters.
+    Bare(String),
+    /// Text from `'...'` or `"..."`. Glob metacharacters are literal.
+    Quoted(String),
+    /// A variable reference. Its value is always literal — an expanded value is
+    /// never rescanned for globs, so a path in `$OUT` can't turn into a pattern.
+    Var(VarRef),
+}
+
+/// A single argv-word-to-be: the parts that concatenate into one argument
+/// (before globbing, which may fan one word out into several).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Word {
+    pub parts: Vec<Part>,
+}
+
+/// A single command: the words that become its argv.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Command {
+    pub words: Vec<Word>,
 }
 
 /// A parsed `run` string: a command sequence joined by separators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    first: Command,
-    rest: Vec<(Sep, Command)>,
+    pub first: Command,
+    pub rest: Vec<(Sep, Command)>,
 }
 
 /// The classification of a `run` string (SPEC §8, paths 1 & 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunPlan {
-    /// No shell features: static argv, spawned directly.
+    /// Every word is static: argv is known at parse time, spawned directly.
     Direct(Vec<String>),
-    /// Supported metacharacters present: handled by the mini-shell.
+    /// Needs run-time work (variables, globs, or sequencing).
     Shell(Program),
 }
 
 impl RunPlan {
-    /// Variable names referenced by this plan (none for a direct spawn).
-    pub fn referenced_vars(&self) -> Vec<String> {
+    /// Variable names referenced by this plan (none for a static argv).
+    pub fn referenced_vars(&self) -> Vec<VarRef> {
         match self {
             RunPlan::Direct(_) => Vec::new(),
             RunPlan::Shell(p) => p.referenced_vars(),
@@ -68,10 +101,43 @@ impl RunPlan {
     }
 }
 
-/// A command whose words have been expanded against the env, ready to spawn.
+/// One argument after variable expansion, still awaiting globbing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arg {
+    /// Plain text, used verbatim.
+    Literal(String),
+    /// A glob pattern, with the literal text to fall back to when it matches
+    /// nothing (`sh` behaviour — SPEC §8.1).
+    Pattern { pattern: String, literal: String },
+}
+
+/// A command whose words have been expanded against the env. Globs are *not*
+/// resolved yet — see [`ExpandedCommand::argv`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpandedCommand {
-    pub argv: Vec<String>,
+    pub args: Vec<Arg>,
+}
+
+impl ExpandedCommand {
+    /// Resolve to concrete argv, expanding globs against `dir`.
+    ///
+    /// Globbing is deliberately deferred to the moment the command runs, not
+    /// done when the plan is built: in `build && rm dist/*.map` the pattern has
+    /// to see the files `build` just produced.
+    pub fn argv(&self, dir: &Path) -> Vec<String> {
+        let mut argv = Vec::with_capacity(self.args.len());
+        for arg in &self.args {
+            match arg {
+                Arg::Literal(s) => argv.push(s.clone()),
+                Arg::Pattern { pattern, literal } => match glob_matches(dir, pattern) {
+                    // A matching pattern fans one word out into its matches.
+                    Some(matches) => argv.extend(matches),
+                    None => argv.push(literal.clone()),
+                },
+            }
+        }
+        argv
+    }
 }
 
 /// An expanded command sequence, ready for the mini-shell to execute.
@@ -84,35 +150,54 @@ pub struct ExecPlan {
 /// Parse and classify a `run` string. Rejects unsupported metacharacters at load
 /// time (exit `64`).
 pub fn parse(input: &str) -> Result<RunPlan> {
-    let mut lexer = Lexer::new(input);
-    let program = lexer.parse_program()?;
+    let program = Lexer::new(input).parse_program()?;
 
-    // Direct fast-path: a single command, no operators, no quotes, no vars.
-    if !lexer.saw_shell_feature && program.rest.is_empty() {
-        let argv: Vec<String> = program
-            .first
-            .words
-            .iter()
-            .map(|w| {
-                w.iter()
-                    .map(|f| match f {
-                        Fragment::Literal(s) => s.as_str(),
-                        Fragment::Var(_) => unreachable!("no vars without shell feature"),
-                    })
-                    .collect::<String>()
-            })
-            .collect();
-        if argv.is_empty() {
-            return Err(TsrError::config("'run' string is empty"));
-        }
+    // Direct fast-path: one command whose every word is already a literal. This
+    // is a structural property of the AST — quoting alone (`echo 'a b'`) still
+    // qualifies, because quotes affect *parsing*, not run-time work.
+    if program.rest.is_empty() && program.first.words.iter().all(Word::is_static) {
+        let argv: Vec<String> = program.first.words.iter().map(Word::literal).collect();
         return Ok(RunPlan::Direct(argv));
     }
     Ok(RunPlan::Shell(program))
 }
 
+impl Word {
+    /// True when this word needs no run-time work: no variables, no globs.
+    fn is_static(&self) -> bool {
+        !self.parts.iter().any(|p| match p {
+            Part::Bare(s) => has_glob_meta(s),
+            Part::Quoted(_) => false,
+            Part::Var(_) => true,
+        })
+    }
+
+    /// The literal text of a static word (see [`Word::is_static`]).
+    fn literal(&self) -> String {
+        self.parts
+            .iter()
+            .map(|p| match p {
+                Part::Bare(s) | Part::Quoted(s) => s.as_str(),
+                Part::Var(_) => unreachable!("literal() on a word containing a variable"),
+            })
+            .collect()
+    }
+
+    /// Append a part, coalescing adjacent same-kind literals for a tidier AST.
+    fn push(&mut self, part: Part) {
+        match (self.parts.last_mut(), &part) {
+            (Some(Part::Bare(prev)), Part::Bare(next))
+            | (Some(Part::Quoted(prev)), Part::Quoted(next)) => prev.push_str(next),
+            _ => self.parts.push(part),
+        }
+    }
+}
+
 impl Program {
-    /// Expand every word against `lookup`, which resolves a variable name to its
-    /// value. An undefined variable is a hard error (SPEC §7.3, exit `64`).
+    /// Expand every word's variables against `lookup`. An undefined variable is
+    /// a hard error (SPEC §7.3, exit `64`), raised here — before anything runs —
+    /// rather than part-way through a sequence. Globs are resolved later, per
+    /// command, by [`ExpandedCommand::argv`].
     pub fn expand(&self, lookup: &dyn Fn(&str) -> Option<String>) -> Result<ExecPlan> {
         let first = expand_command(&self.first, lookup)?;
         let mut rest = Vec::with_capacity(self.rest.len());
@@ -122,14 +207,15 @@ impl Program {
         Ok(ExecPlan { first, rest })
     }
 
-    /// All variable names referenced by the program (for load-time checking).
-    pub fn referenced_vars(&self) -> Vec<String> {
+    /// All variable references in the program, in source order (for load-time
+    /// checking and diagnostics).
+    pub fn referenced_vars(&self) -> Vec<VarRef> {
         let mut out = Vec::new();
         for cmd in std::iter::once(&self.first).chain(self.rest.iter().map(|(_, c)| c)) {
             for word in &cmd.words {
-                for frag in word {
-                    if let Fragment::Var(name) = frag {
-                        out.push(name.clone());
+                for part in &word.parts {
+                    if let Part::Var(v) = part {
+                        out.push(v.clone());
                     }
                 }
             }
@@ -138,54 +224,138 @@ impl Program {
     }
 }
 
+/// The two renderings of a word: the plain text it expands to, and the glob
+/// pattern it represents (with non-`Bare` metacharacters escaped so they stay
+/// literal). `is_pattern` says whether the pattern form is meaningful at all.
+struct Rendered {
+    text: String,
+    pattern: String,
+    is_pattern: bool,
+}
+
+fn render(word: &Word, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Rendered> {
+    let mut r = Rendered {
+        text: String::new(),
+        pattern: String::new(),
+        is_pattern: false,
+    };
+    for part in &word.parts {
+        match part {
+            Part::Bare(s) => {
+                r.text.push_str(s);
+                r.pattern.push_str(s);
+                r.is_pattern |= has_glob_meta(s);
+            }
+            Part::Quoted(s) => {
+                r.text.push_str(s);
+                r.pattern.push_str(&glob::Pattern::escape(s));
+            }
+            Part::Var(v) => {
+                let val = lookup(&v.name).ok_or_else(|| {
+                    TsrError::config(format!(
+                        "'${}' is not defined in task env, env_file, workspace [env], or .env",
+                        v.name
+                    ))
+                })?;
+                r.pattern.push_str(&glob::Pattern::escape(&val));
+                r.text.push_str(&val);
+            }
+        }
+    }
+    Ok(r)
+}
+
 fn expand_command(
     cmd: &Command,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ExpandedCommand> {
-    let mut argv = Vec::with_capacity(cmd.words.len());
+    let mut args = Vec::with_capacity(cmd.words.len());
     for word in &cmd.words {
-        let mut s = String::new();
-        for frag in word {
-            match frag {
-                Fragment::Literal(lit) => s.push_str(lit),
-                Fragment::Var(name) => {
-                    let val = lookup(name).ok_or_else(|| {
-                        TsrError::config(format!(
-                            "'${name}' is not defined in task env, workspace [env], or .env"
-                        ))
-                    })?;
-                    s.push_str(&val);
-                }
+        let r = render(word, lookup)?;
+        args.push(if r.is_pattern {
+            Arg::Pattern {
+                pattern: r.pattern,
+                literal: r.text,
             }
-        }
-        argv.push(s);
+        } else {
+            Arg::Literal(r.text)
+        });
     }
-    Ok(ExpandedCommand { argv })
+    Ok(ExpandedCommand { args })
 }
 
-impl ExecPlan {
-    /// Execute the sequence, applying `&&`/`||`/`;` semantics, using `spawn` to
-    /// run each command and yield its exit code. Returns the sequence's exit
-    /// code: the last command actually executed (SPEC §8.1).
-    ///
-    /// The executor uses its own abort-aware loop (`exec::run_shell`) on the hot
-    /// path; this pure-logic version is the reference used to unit-test the
-    /// sequencing semantics in isolation.
-    #[allow(dead_code)]
-    pub fn run(&self, spawn: &mut dyn FnMut(&[String]) -> i32) -> i32 {
-        let mut code = spawn(&self.first.argv);
-        for (sep, cmd) in &self.rest {
-            let should_run = match sep {
-                Sep::And => code == 0,
-                Sep::Or => code != 0,
-                Sep::Semi => true,
+/// Characters that make a bare word a glob pattern.
+fn has_glob_meta(s: &str) -> bool {
+    s.contains(['*', '?', '['])
+}
+
+/// Match `pattern` against the filesystem, relative to `dir`. Returns `None`
+/// when the pattern is unparseable or matches nothing; otherwise the matches,
+/// sorted, and relative to `dir` unless the pattern was absolute.
+///
+/// Matching deliberately mirrors `sh`: `*` does not cross a path separator and
+/// does not match a leading dot. Case sensitivity follows the platform.
+fn glob_matches(dir: &Path, pattern: &str) -> Option<Vec<String>> {
+    let opts = glob::MatchOptions {
+        case_sensitive: !cfg!(windows),
+        require_literal_separator: true,
+        require_literal_leading_dot: true,
+    };
+
+    let absolute = Path::new(pattern).is_absolute();
+    let full = if absolute {
+        pattern.to_string()
+    } else {
+        // The base directory is fixed text, not part of the pattern, so escape
+        // any metacharacters a path component happens to contain.
+        let base = glob::Pattern::escape(&dir.to_string_lossy());
+        format!("{}/{}", base.trim_end_matches(['/', '\\']), pattern)
+    };
+
+    let mut out: Vec<String> = glob::glob_with(&full, opts)
+        .ok()?
+        .filter_map(|r| r.ok())
+        .map(|p| {
+            let rel = if absolute {
+                None
+            } else {
+                p.strip_prefix(dir).ok()
             };
-            if should_run {
-                code = spawn(&cmd.argv);
-            }
-        }
-        code
+            rel.unwrap_or(&p).to_string_lossy().into_owned()
+        })
+        .collect();
+    if out.is_empty() {
+        return None;
     }
+    out.sort();
+    Some(out)
+}
+
+impl Sep {
+    /// Whether the command after this separator runs, given the previous
+    /// command's exit code (SPEC §8.1). This is the single definition of the
+    /// sequencing rule; [`exec`](crate::exec) drives it from its own
+    /// abort-aware loop so a fail-fast can interrupt a sequence mid-way.
+    pub fn proceeds(self, prev: i32) -> bool {
+        match self {
+            Sep::And => prev == 0,
+            Sep::Or => prev != 0,
+            Sep::Semi => true,
+        }
+    }
+}
+
+/// Render a source span as a caret line under `run = "<src>"`, matching the
+/// diagnostic layout in SPEC §7.3.
+pub fn caret(src: &str, span: Span) -> String {
+    // Width of the `  run = "` prefix the line is printed behind.
+    const PREFIX: usize = 9;
+    let width = span.end.saturating_sub(span.start).max(1);
+    format!(
+        "  run = \"{src}\"\n{pad}{carets}",
+        pad = " ".repeat(PREFIX + span.start),
+        carets = "^".repeat(width),
+    )
 }
 
 /// Quote-aware lexer that parses a `run` string into a [`Program`] and rejects
@@ -193,8 +363,6 @@ impl ExecPlan {
 struct Lexer {
     chars: Vec<char>,
     pos: usize,
-    /// Set when any mini-shell feature (quote, `$`, or operator) is seen.
-    saw_shell_feature: bool,
 }
 
 impl Lexer {
@@ -202,7 +370,6 @@ impl Lexer {
         Lexer {
             chars: input.chars().collect(),
             pos: 0,
-            saw_shell_feature: false,
         }
     }
 
@@ -225,13 +392,9 @@ impl Lexer {
         let mut seps: Vec<Sep> = Vec::new();
 
         loop {
-            let cmd = self.parse_command()?;
-            commands.push(cmd);
+            commands.push(self.parse_command()?);
             match self.parse_separator()? {
-                Some(sep) => {
-                    self.saw_shell_feature = true;
-                    seps.push(sep);
-                }
+                Some(sep) => seps.push(sep),
                 None => break,
             }
         }
@@ -256,8 +419,8 @@ impl Lexer {
 
     /// Parse a single command up to the next separator or end of input.
     fn parse_command(&mut self) -> Result<Command> {
-        let mut words: Vec<Vec<Fragment>> = Vec::new();
-        let mut cur: Vec<Fragment> = Vec::new();
+        let mut words: Vec<Word> = Vec::new();
+        let mut cur = Word::default();
         let mut word_started = false;
 
         loop {
@@ -275,26 +438,25 @@ impl Lexer {
                 Some('&') if self.peek2() == Some('&') => break,
                 Some('|') if self.peek2() == Some('|') => break,
                 Some('\'') => {
-                    self.saw_shell_feature = true;
                     word_started = true;
                     self.lex_single_quote(&mut cur)?;
                 }
                 Some('"') => {
-                    self.saw_shell_feature = true;
                     word_started = true;
                     self.lex_double_quote(&mut cur)?;
                 }
                 Some('$') => {
-                    self.saw_shell_feature = true;
                     word_started = true;
-                    let frag = self.lex_dollar()?;
-                    push_fragment(&mut cur, frag);
+                    match self.lex_dollar()? {
+                        Some(var) => cur.push(Part::Var(var)),
+                        None => cur.push(Part::Bare("$".into())),
+                    }
                 }
                 Some(c) => {
                     reject_unsupported(c)?;
                     self.bump();
                     word_started = true;
-                    push_fragment(&mut cur, Fragment::Literal(c.to_string()));
+                    cur.push(Part::Bare(c.to_string()));
                 }
             }
         }
@@ -330,8 +492,8 @@ impl Lexer {
         }
     }
 
-    /// `'...'` — everything literal, no expansion (SPEC §8.1).
-    fn lex_single_quote(&mut self, cur: &mut Vec<Fragment>) -> Result<()> {
+    /// `'...'` — everything literal, no expansion, no globbing (SPEC §8.1).
+    fn lex_single_quote(&mut self, cur: &mut Word) -> Result<()> {
         self.bump(); // opening quote
         let mut lit = String::new();
         loop {
@@ -343,13 +505,13 @@ impl Lexer {
                 }
             }
         }
-        push_fragment(cur, Fragment::Literal(lit));
+        cur.push(Part::Quoted(lit));
         Ok(())
     }
 
     /// `"..."` — literal text with `$VAR`/`${VAR}` expansion (SPEC §8.1).
     /// Command substitution and backticks remain rejected inside double quotes.
-    fn lex_double_quote(&mut self, cur: &mut Vec<Fragment>) -> Result<()> {
+    fn lex_double_quote(&mut self, cur: &mut Word) -> Result<()> {
         self.bump(); // opening quote
         loop {
             match self.peek() {
@@ -357,16 +519,14 @@ impl Lexer {
                     self.bump();
                     break;
                 }
-                Some('$') => {
-                    let frag = self.lex_dollar()?;
-                    push_fragment(cur, frag);
-                }
-                Some('`') => {
-                    return Err(unsupported('`'));
-                }
+                Some('$') => match self.lex_dollar()? {
+                    Some(var) => cur.push(Part::Var(var)),
+                    None => cur.push(Part::Quoted("$".into())),
+                },
+                Some('`') => return Err(unsupported_substitution()),
                 Some(c) => {
                     self.bump();
-                    push_fragment(cur, Fragment::Literal(c.to_string()));
+                    cur.push(Part::Quoted(c.to_string()));
                 }
                 None => {
                     return Err(TsrError::config("'run' string: unterminated double quote"));
@@ -376,9 +536,10 @@ impl Lexer {
         Ok(())
     }
 
-    /// Parse a `$`-introduced token: `${NAME}`, `$NAME`, or a literal `$`.
-    /// Rejects `$(...)` command substitution (SPEC §8.2).
-    fn lex_dollar(&mut self) -> Result<Fragment> {
+    /// Parse a `$`-introduced token into a [`VarRef`], or `None` when the `$` is
+    /// just a literal dollar sign. Rejects `$(...)` substitution (SPEC §8.2).
+    fn lex_dollar(&mut self) -> Result<Option<VarRef>> {
+        let start = self.pos;
         self.bump(); // consume '$'
         match self.peek() {
             Some('(') => Err(unsupported_substitution()),
@@ -394,10 +555,14 @@ impl Lexer {
                         }
                     }
                 }
-                if name.is_empty() {
-                    return Err(TsrError::config("'run' string: empty '${}' variable"));
-                }
-                Ok(Fragment::Var(name))
+                validate_var_name(&name)?;
+                Ok(Some(VarRef {
+                    name,
+                    span: Span {
+                        start,
+                        end: self.pos,
+                    },
+                }))
             }
             Some(c) if c == '_' || c.is_ascii_alphabetic() => {
                 let mut name = String::new();
@@ -409,21 +574,37 @@ impl Lexer {
                         break;
                     }
                 }
-                Ok(Fragment::Var(name))
+                Ok(Some(VarRef {
+                    name,
+                    span: Span {
+                        start,
+                        end: self.pos,
+                    },
+                }))
             }
             // A `$` not introducing a variable is a literal dollar sign.
-            _ => Ok(Fragment::Literal("$".into())),
+            _ => Ok(None),
         }
     }
 }
 
-/// Append a fragment, coalescing adjacent literals for a tidier AST.
-fn push_fragment(word: &mut Vec<Fragment>, frag: Fragment) {
-    if let (Some(Fragment::Literal(prev)), Fragment::Literal(next)) = (word.last_mut(), &frag) {
-        prev.push_str(next);
-    } else {
-        word.push(frag);
+/// A `${...}` body must be a plain variable name. Anything else is a shell
+/// parameter expansion the mini-shell does not implement, and saying so beats
+/// failing later with "'${VAR:-x}' is not defined".
+fn validate_var_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(TsrError::config("'run' string: empty '${}' variable"));
     }
+    let valid = !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
+    if valid {
+        return Ok(());
+    }
+    Err(TsrError::config(format!(
+        "'run' string: '${{{name}}}' is not a plain variable name — parameter \
+         expansion (':-', ':+', '#', …) is unsupported; set a default in [env] \
+         or use a script file"
+    )))
 }
 
 /// Reject an unsupported metacharacter with a message pointing at the escape
@@ -436,7 +617,6 @@ fn reject_unsupported(c: char) -> Result<()> {
             "use `delegate` or a script file",
         )),
         '>' | '<' => Err(unsupported_msg(c, "redirection", "use a script file")),
-        '*' | '?' | '[' => Err(unsupported_msg(c, "glob", "pass an explicit path")),
         '`' => Err(unsupported_substitution()),
         '&' => Err(unsupported_msg(
             '&',
@@ -450,10 +630,6 @@ fn reject_unsupported(c: char) -> Result<()> {
         )),
         _ => Ok(()),
     }
-}
-
-fn unsupported(c: char) -> TsrError {
-    unsupported_msg(c, "metacharacter", "use `delegate` or a script file")
 }
 
 fn unsupported_substitution() -> TsrError {
@@ -473,6 +649,9 @@ fn unsupported_msg(c: char, kind: &str, hint: &str) -> TsrError {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn direct(input: &str) -> Vec<String> {
         match parse(input).unwrap() {
@@ -488,17 +667,64 @@ mod tests {
         }
     }
 
-    fn expand_argv(input: &str, env: &[(&str, &str)]) -> Vec<Vec<String>> {
+    /// Fully resolve a `run` string to the argv of each command in its
+    /// sequence, whichever plan it classified as.
+    fn expand_in(input: &str, env: &[(&str, &str)], dir: &Path) -> Vec<Vec<String>> {
         let map: HashMap<String, String> = env
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let plan = shell(input).expand(&|k| map.get(k).cloned()).unwrap();
-        std::iter::once(plan.first.clone())
-            .chain(plan.rest.iter().map(|(_, c)| c.clone()))
-            .map(|c| c.argv)
-            .collect()
+        match parse(input).unwrap() {
+            RunPlan::Direct(argv) => vec![argv],
+            RunPlan::Shell(p) => {
+                let plan = p.expand(&|k| map.get(k).cloned()).unwrap();
+                std::iter::once(&plan.first)
+                    .chain(plan.rest.iter().map(|(_, c)| c))
+                    .map(|c| c.argv(dir))
+                    .collect()
+            }
+        }
     }
+
+    fn expand_argv(input: &str, env: &[(&str, &str)]) -> Vec<Vec<String>> {
+        expand_in(input, env, Path::new("/nonexistent-tsr-glob-base"))
+    }
+
+    /// Drive a sequence the way [`exec`](crate::exec) does, to exercise the
+    /// `&&`/`||`/`;` rule in [`Sep::proceeds`] in isolation.
+    fn drive(plan: &ExecPlan, run: &mut dyn FnMut(&[String]) -> i32) -> (Vec<String>, i32) {
+        let dir = Path::new(".");
+        let mut ran = Vec::new();
+        let argv = plan.first.argv(dir);
+        ran.push(argv[0].clone());
+        let mut code = run(&argv);
+        for (sep, cmd) in &plan.rest {
+            if !sep.proceeds(code) {
+                continue;
+            }
+            let argv = cmd.argv(dir);
+            ran.push(argv[0].clone());
+            code = run(&argv);
+        }
+        (ran, code)
+    }
+
+    /// A scratch directory with `files` created inside it.
+    fn scratch(files: &[&str]) -> PathBuf {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let id = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("tsr-shell-{}-{id}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for f in files {
+            let p = dir.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "").unwrap();
+        }
+        dir
+    }
+
+    // --- classification ---
 
     #[test]
     fn plain_string_is_direct_spawn() {
@@ -507,17 +733,24 @@ mod tests {
     }
 
     #[test]
-    fn quotes_group_words() {
-        assert_eq!(
-            expand_argv("echo 'hello world'", &[]),
-            vec![vec!["echo", "hello world"]]
-        );
-        assert_eq!(expand_argv("echo \"a b\"", &[]), vec![vec!["echo", "a b"]]);
+    fn quoting_alone_stays_direct() {
+        // Quotes affect parsing, not run-time work, so the word is still static.
+        assert_eq!(direct("echo 'hello world'"), vec!["echo", "hello world"]);
+        assert_eq!(direct("echo \"a b\""), vec!["echo", "a b"]);
+        assert_eq!(direct("echo ''"), vec!["echo", ""]);
     }
 
     #[test]
+    fn vars_globs_and_operators_need_the_shell() {
+        assert!(matches!(parse("a $B").unwrap(), RunPlan::Shell(_)));
+        assert!(matches!(parse("rm dist/*").unwrap(), RunPlan::Shell(_)));
+        assert!(matches!(parse("a && b").unwrap(), RunPlan::Shell(_)));
+    }
+
+    // --- quoting & variables ---
+
+    #[test]
     fn single_quotes_are_literal() {
-        // '$VAR' inside single quotes is not expanded.
         assert_eq!(
             expand_argv("echo '$VAR'", &[("VAR", "x")]),
             vec![vec!["echo", "$VAR"]]
@@ -553,14 +786,133 @@ mod tests {
     }
 
     #[test]
+    fn parameter_expansion_is_a_targeted_error() {
+        let err = parse("deploy ${TARGET:-prod}").unwrap_err();
+        assert!(err.to_string().contains("parameter expansion"), "{err}");
+        assert_eq!(err.exit_code(), 64);
+    }
+
+    #[test]
+    fn var_spans_point_at_the_reference() {
+        let vars = shell("deploy --target $TARGET").referenced_vars();
+        assert_eq!(vars.len(), 1);
+        let span = vars[0].span;
+        let src = "deploy --target $TARGET";
+        let text: String = src
+            .chars()
+            .skip(span.start)
+            .take(span.end - span.start)
+            .collect();
+        assert_eq!(text, "$TARGET");
+    }
+
+    #[test]
+    fn referenced_vars_collected() {
+        let mut vars: Vec<String> = shell("a $X && b ${Y}")
+            .referenced_vars()
+            .into_iter()
+            .map(|v| v.name)
+            .collect();
+        vars.sort();
+        assert_eq!(vars, vec!["X", "Y"]);
+    }
+
+    // --- globbing ---
+
+    #[test]
+    fn glob_expands_relative_to_the_task_dir() {
+        let dir = scratch(&["dist/a.js", "dist/b.js", "src/keep.rs"]);
+        assert_eq!(
+            expand_in("rm dist/*", &[], &dir),
+            vec![vec!["rm", "dist/a.js", "dist/b.js"]]
+        );
+    }
+
+    #[test]
+    fn glob_matches_are_sorted_and_fan_out() {
+        let dir = scratch(&["c.txt", "a.txt", "b.txt"]);
+        assert_eq!(
+            expand_in("rm *.txt", &[], &dir),
+            vec![vec!["rm", "a.txt", "b.txt", "c.txt"]]
+        );
+    }
+
+    #[test]
+    fn unmatched_glob_stays_literal() {
+        let dir = scratch(&[]);
+        assert_eq!(
+            expand_in("rm dist/*", &[], &dir),
+            vec![vec!["rm", "dist/*"]]
+        );
+    }
+
+    #[test]
+    fn glob_does_not_cross_separators_or_match_dotfiles() {
+        let dir = scratch(&["a.js", "nested/b.js", ".hidden.js"]);
+        assert_eq!(expand_in("rm *.js", &[], &dir), vec![vec!["rm", "a.js"]]);
+    }
+
+    #[test]
+    fn quoted_metachars_are_not_globs() {
+        let dir = scratch(&["a.txt"]);
+        // The pattern is quoted, so it stays a literal argument.
+        assert_eq!(
+            expand_in("echo '*.txt'", &[], &dir),
+            vec![vec!["echo", "*.txt"]]
+        );
+    }
+
+    #[test]
+    fn expanded_variables_are_not_rescanned_for_globs() {
+        let dir = scratch(&["a.txt"]);
+        assert_eq!(
+            expand_in("echo $P", &[("P", "*.txt")], &dir),
+            vec![vec!["echo", "*.txt"]]
+        );
+    }
+
+    #[test]
+    fn var_and_glob_combine_in_one_word() {
+        let dir = scratch(&["build/one.js", "build/two.js"]);
+        assert_eq!(
+            expand_in("rm $OUT/*.js", &[("OUT", "build")], &dir),
+            vec![vec!["rm", "build/one.js", "build/two.js"]]
+        );
+    }
+
+    #[test]
+    fn question_mark_and_class_patterns_work() {
+        let dir = scratch(&["a1.log", "a2.log", "bb.log"]);
+        assert_eq!(
+            expand_in("rm a?.log", &[], &dir),
+            vec![vec!["rm", "a1.log", "a2.log"]]
+        );
+        assert_eq!(
+            expand_in("rm [ab]b.log", &[], &dir),
+            vec![vec!["rm", "bb.log"]]
+        );
+    }
+
+    #[test]
+    fn unparseable_pattern_stays_literal() {
+        let dir = scratch(&[]);
+        // An unclosed class is not a valid pattern; keep the word as typed.
+        assert_eq!(expand_in("echo a[b", &[], &dir), vec![vec!["echo", "a[b"]]);
+    }
+
+    // --- sequencing ---
+
+    #[test]
+    fn sep_proceeds_rule() {
+        assert!(Sep::And.proceeds(0) && !Sep::And.proceeds(1));
+        assert!(!Sep::Or.proceeds(0) && Sep::Or.proceeds(1));
+        assert!(Sep::Semi.proceeds(0) && Sep::Semi.proceeds(7));
+    }
+
+    #[test]
     fn sequencing_and_semantics() {
-        // && runs second only on success; the runner short-circuits on failure.
         let plan = shell("a && b").expand(&|_| None).unwrap();
-        let mut ran: Vec<String> = Vec::new();
-        let code = plan.run(&mut |argv| {
-            ran.push(argv[0].clone());
-            if argv[0] == "a" { 1 } else { 0 }
-        });
+        let (ran, code) = drive(&plan, &mut |argv| if argv[0] == "a" { 1 } else { 0 });
         assert_eq!(ran, vec!["a"]); // b skipped
         assert_eq!(code, 1);
     }
@@ -568,11 +920,7 @@ mod tests {
     #[test]
     fn sequencing_or_semantics() {
         let plan = shell("a || b").expand(&|_| None).unwrap();
-        let mut ran: Vec<String> = Vec::new();
-        let code = plan.run(&mut |argv| {
-            ran.push(argv[0].clone());
-            if argv[0] == "a" { 1 } else { 0 }
-        });
+        let (ran, code) = drive(&plan, &mut |argv| if argv[0] == "a" { 1 } else { 0 });
         assert_eq!(ran, vec!["a", "b"]);
         assert_eq!(code, 0);
     }
@@ -580,14 +928,12 @@ mod tests {
     #[test]
     fn sequencing_semicolon_always_runs() {
         let plan = shell("a ; b").expand(&|_| None).unwrap();
-        let mut ran: Vec<String> = Vec::new();
-        let code = plan.run(&mut |argv| {
-            ran.push(argv[0].clone());
-            if argv[0] == "a" { 3 } else { 0 }
-        });
+        let (ran, code) = drive(&plan, &mut |argv| if argv[0] == "a" { 3 } else { 0 });
         assert_eq!(ran, vec!["a", "b"]);
         assert_eq!(code, 0);
     }
+
+    // --- rejection ---
 
     #[test]
     fn rejects_pipe() {
@@ -611,12 +957,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_glob() {
-        assert!(parse("rm *.tmp").unwrap_err().to_string().contains("glob"));
-        assert!(parse("ls a?b").is_err());
-    }
-
-    #[test]
     fn rejects_command_substitution() {
         assert!(
             parse("echo $(date)")
@@ -635,7 +975,6 @@ mod tests {
 
     #[test]
     fn metachar_inside_quotes_is_not_rejected() {
-        // A pipe inside single quotes is a literal, not a rejected pipe.
         assert_eq!(
             expand_argv("echo 'a | b'", &[]),
             vec![vec!["echo", "a | b"]]
@@ -650,9 +989,18 @@ mod tests {
     }
 
     #[test]
-    fn referenced_vars_collected() {
-        let mut vars = shell("a $X && b ${Y}").referenced_vars();
-        vars.sort();
-        assert_eq!(vars, vec!["X", "Y"]);
+    fn caret_underlines_the_span() {
+        let src = "deploy --target $TARGET";
+        let span = shell(src).referenced_vars()[0].span;
+        let out = caret(src, span);
+        let (source_line, caret_line) = out.split_once('\n').unwrap();
+        assert_eq!(source_line, "  run = \"deploy --target $TARGET\"");
+        // The carets must sit exactly under `$TARGET` in the line above.
+        assert_eq!(caret_line.len(), source_line.len() - 1);
+        assert_eq!(caret_line.trim_start(), "^".repeat("$TARGET".len()));
+        assert_eq!(
+            source_line.find("$TARGET").unwrap(),
+            caret_line.find('^').unwrap()
+        );
     }
 }

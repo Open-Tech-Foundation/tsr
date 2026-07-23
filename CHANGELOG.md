@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Mini-shell: **glob expansion** in `run` strings (`*`, `?`, `[...]`), matched
+  against the filesystem relative to the task's `dir` and following `sh` rules —
+  `*` does not cross a `/` or match a leading dot, and an unmatched pattern stays
+  literal (SPEC §8.1). Quoted text and expanded variable values are never
+  globbed, so a `*` that arrives via `$VAR` stays a literal `*`. Globs resolve
+  when their command runs rather than when the task is planned, so a pattern in
+  `build && rm dist/*.map` sees the files `build` just produced.
+- Mini-shell: **built-in commands** — `rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`,
+  `echo` and `pwd` are implemented in-process and always win over a binary of the
+  same name on `PATH`, so `run = "rm -rf dist/*"` behaves identically on Linux,
+  macOS and Windows (SPEC §8.5). Short options bundle (`-rf`), `--` ends option
+  parsing, and relative paths resolve against the task's `dir`. Builtins apply to
+  `run` strings only, never to `delegate` or an auto-detected native runner.
+- Undefined-`$VAR` errors now underline the offending reference with a caret,
+  as SPEC §7.3 has always specified.
+
+### Changed
+
+- `run` strings are parsed into an **AST** (program → command → word → part)
+  instead of straight into argv. Retaining the structure is what lets expansion
+  distinguish a `*` typed in the `run` string from one that arrives via a quote
+  or a variable, and it makes direct-vs-mini-shell classification a structural
+  property rather than a lexer side effect — so a quoted-but-otherwise-static
+  string such as `run = "echo 'a b'"` now takes the fast direct-spawn path.
+- `${...}` now accepts a plain variable name only. Parameter expansion
+  (`${VAR:-default}`, `${#VAR}`, …) is rejected at load time with a specific
+  message instead of failing later as an undefined variable named `VAR:-default`.
+- Globs are no longer rejected at load time; the SPEC §8.2 rejection table now
+  lists background `&` and subshells `( )` explicitly in their place.
+- The `&&`/`||`/`;` sequencing rule now has a single definition (`Sep::proceeds`)
+  shared by the executor, replacing the duplicate copy the executor carried.
+
 ### Fixed
 
 - Windows installer: `install.ps1` downloaded `tsr-win32-<arch>.zip`, but the

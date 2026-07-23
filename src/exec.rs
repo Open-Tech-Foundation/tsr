@@ -17,11 +17,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::builtins;
 use crate::config::{Config, Task};
 use crate::env;
 use crate::error::TsrError;
 use crate::resolve::{self, Invocation};
-use crate::shell::{self, ExecPlan, RunPlan, Sep};
+use crate::shell::{self, Arg, ExecPlan, ExpandedCommand, RunPlan};
 use crate::workspace;
 
 /// Adaptive poll backoff while waiting on a child (SPEC §5.2). Starting small
@@ -90,9 +91,11 @@ enum ResultKind {
 
 /// What a leaf job actually executes.
 enum Action {
-    /// A single direct command (`execvp`-style).
+    /// A resolved `delegate` or auto-detected native-runner command. Always an
+    /// external binary — builtins (SPEC §8.5) apply to `run` strings only.
     Spawn { program: String, args: Vec<String> },
-    /// A mini-shell command sequence.
+    /// A `run` string: one command or a `&&`/`||`/`;` sequence, each command
+    /// either a builtin or a spawn.
     Shell(ExecPlan),
 }
 
@@ -319,25 +322,24 @@ impl<'a> Ctx<'a> {
                 program,
                 args: extra(args),
             },
-            Invocation::Run(s) => match shell::parse(&s).map_err(|e| strip_error(&e))? {
-                RunPlan::Direct(argv) => {
-                    let mut it = argv.into_iter();
-                    let program = it
-                        .next()
-                        .ok_or_else(|| "'run' string is empty".to_string())?;
-                    Action::Spawn {
-                        program,
-                        args: extra(it.collect()),
-                    }
-                }
-                RunPlan::Shell(program) => {
-                    let mut plan = program
+            // Both `run` paths become an `ExecPlan`: the direct one is simply a
+            // one-command sequence. Keeping a single shape gives builtin
+            // dispatch and passthrough one code path instead of two.
+            Invocation::Run(s) => {
+                let mut plan = match shell::parse(&s).map_err(|e| strip_error(&e))? {
+                    RunPlan::Direct(argv) => ExecPlan {
+                        first: ExpandedCommand {
+                            args: argv.into_iter().map(Arg::Literal).collect(),
+                        },
+                        rest: Vec::new(),
+                    },
+                    RunPlan::Shell(program) => program
                         .expand(&|k| env.get(k).cloned())
-                        .map_err(|e| strip_error(&e))?;
-                    append_to_last(&mut plan, &extra(Vec::new()));
-                    Action::Shell(plan)
-                }
-            },
+                        .map_err(|e| strip_error(&e))?,
+                };
+                append_to_last(&mut plan, &extra(Vec::new()));
+                Action::Shell(plan)
+            }
         };
 
         Ok(Job {
@@ -459,10 +461,10 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// Run a mini-shell sequence with `&&`/`||`/`;` semantics (SPEC §8.1),
-    /// checking the abort flag between commands.
+    /// Run a `run` string's command sequence with `&&`/`||`/`;` semantics
+    /// (SPEC §8.1), checking the abort flag between commands.
     fn run_shell(&self, plan: &ExecPlan, job: &Job) -> LeafWait {
-        let mut last = match self.spawn_wait(&plan.first.argv[0], &plan.first.argv[1..], job) {
+        let mut last = match self.run_command(&plan.first, job) {
             LeafWait::Exited(c) => c,
             other => return other,
         };
@@ -470,19 +472,31 @@ impl<'a> Ctx<'a> {
             if self.aborted() {
                 return LeafWait::Killed;
             }
-            let should_run = match sep {
-                Sep::And => last == 0,
-                Sep::Or => last != 0,
-                Sep::Semi => true,
-            };
-            if should_run {
-                match self.spawn_wait(&cmd.argv[0], &cmd.argv[1..], job) {
-                    LeafWait::Exited(c) => last = c,
-                    other => return other,
-                }
+            if !sep.proceeds(last) {
+                continue;
+            }
+            match self.run_command(cmd, job) {
+                LeafWait::Exited(c) => last = c,
+                other => return other,
             }
         }
         LeafWait::Exited(last)
+    }
+
+    /// Run one command of a `run` string: a builtin in-process, anything else
+    /// as a spawned child (SPEC §8.5). Globs are resolved here, so a pattern
+    /// sees whatever an earlier command in the sequence produced.
+    fn run_command(&self, cmd: &ExpandedCommand, job: &Job) -> LeafWait {
+        let argv = cmd.argv(&job.dir);
+        let Some((program, args)) = argv.split_first() else {
+            return LeafWait::SpawnFailed("'run' string is empty".into());
+        };
+        if builtins::is_builtin(program) {
+            // Builtins are in-process and always fast, so there is no child to
+            // poll; an abort is honoured by the caller's between-command check.
+            return LeafWait::Exited(builtins::run(program, args, &job.dir));
+        }
+        self.spawn_wait(program, args, job)
     }
 
     /// Spawn one child and wait, polling the abort flag so a fail-fast can kill
@@ -564,9 +578,11 @@ fn append_to_last(plan: &mut ExecPlan, extra: &[String]) {
     if extra.is_empty() {
         return;
     }
+    // Passthrough arrives as already-resolved argv, so it is never re-globbed.
+    let args = extra.iter().cloned().map(Arg::Literal);
     match plan.rest.last_mut() {
-        Some((_, cmd)) => cmd.argv.extend(extra.iter().cloned()),
-        None => plan.first.argv.extend(extra.iter().cloned()),
+        Some((_, cmd)) => cmd.args.extend(args),
+        None => plan.first.args.extend(args),
     }
 }
 
@@ -739,12 +755,78 @@ mod tests {
             .build_job(task, &cfg.root, "t".into(), &["--watch".to_string()])
             .unwrap();
         match job.action {
-            Action::Spawn { program, args } => {
-                assert_eq!(program, "vitest");
-                assert_eq!(args, vec!["--color", "--watch"]);
+            Action::Shell(plan) => {
+                assert!(plan.rest.is_empty(), "a plain `run` is a one-command plan");
+                assert_eq!(
+                    plan.first.argv(&cfg.root),
+                    vec!["vitest", "--color", "--watch"]
+                );
             }
-            _ => panic!("expected direct spawn"),
+            _ => panic!("expected a run-string plan"),
         }
+    }
+
+    #[test]
+    fn passthrough_appends_to_the_last_command_of_a_sequence() {
+        let (cfg, _r) = setup("[tasks.t]\nrun = \"build && vitest\"\nargs = [\"--color\"]\n");
+        let ctx = Ctx::new(&cfg);
+        let job = ctx
+            .build_job(
+                cfg.task("t").unwrap(),
+                &cfg.root,
+                "t".into(),
+                &["--watch".to_string()],
+            )
+            .unwrap();
+        match job.action {
+            Action::Shell(plan) => {
+                assert_eq!(plan.first.argv(&cfg.root), vec!["build"]);
+                assert_eq!(
+                    plan.rest[0].1.argv(&cfg.root),
+                    vec!["vitest", "--color", "--watch"]
+                );
+            }
+            _ => panic!("expected a run-string plan"),
+        }
+    }
+
+    #[test]
+    fn builtins_run_in_process_for_run_strings() {
+        let (cfg, root) = setup("[tasks.t]\nrun = \"mkdir -p out/nested && touch out/nested/x\"\n");
+        assert_eq!(run(&cfg, "t", &[]), 0);
+        assert!(root.join("out/nested/x").is_file());
+    }
+
+    #[test]
+    fn builtins_receive_glob_expanded_arguments() {
+        let (cfg, root) = setup("[tasks.clean]\nrun = \"rm -rf dist/*\"\n");
+        std::fs::create_dir_all(root.join("dist/keep")).unwrap();
+        std::fs::write(root.join("dist/a.js"), "").unwrap();
+        std::fs::write(root.join("dist/b.js"), "").unwrap();
+        assert_eq!(run(&cfg, "clean", &[]), 0);
+        // The glob expanded to the entries, so `dist` itself survives.
+        assert!(root.join("dist").is_dir());
+        assert!(!root.join("dist/a.js").exists());
+        assert!(!root.join("dist/keep").exists());
+        // And it stays a success once there is nothing left to match.
+        assert_eq!(run(&cfg, "clean", &[]), 0);
+    }
+
+    #[test]
+    fn globs_resolve_against_the_task_dir_not_the_process_cwd() {
+        let (cfg, root) = setup("[tasks.clean]\ndir = \"pkg\"\nrun = \"rm -f *.log\"\n");
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/a.log"), "").unwrap();
+        std::fs::write(root.join("outside.log"), "").unwrap();
+        assert_eq!(run(&cfg, "clean", &[]), 0);
+        assert!(!root.join("pkg/a.log").exists());
+        assert!(root.join("outside.log").exists(), "must not escape 'dir'");
+    }
+
+    #[test]
+    fn builtin_failure_propagates_its_exit_code() {
+        let (cfg, _r) = setup("[tasks.t]\nrun = \"rm ghost.txt\"\n");
+        assert_eq!(run(&cfg, "t", &[]), 1);
     }
 
     #[test]
