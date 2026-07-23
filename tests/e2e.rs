@@ -762,3 +762,61 @@ fn a_glob_sees_files_an_earlier_command_in_the_sequence_created() {
     );
     assert!(ws.join("dist/keep.js").exists());
 }
+
+#[test]
+fn or_true_makes_a_step_non_fatal_without_a_unix_binary() {
+    // `cmd || true` is the standard "don't fail the build here" idiom; both
+    // halves are builtins so it behaves the same on Windows.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"rm ghost.txt || true\"\n[tasks.f]\nrun = \"true && false\"\n",
+    );
+    assert_eq!(code(&tsr(&ws, &["t"])), 0);
+    assert_eq!(code(&tsr(&ws, &["f"])), 1);
+}
+
+#[test]
+fn brace_expansion_is_rejected_rather_than_silently_passed_through() {
+    // With `-f` an unexpanded `{a,b}` would fail silently, doing nothing.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.c]\nrun = \"rm -rf dist/{js,css}\"\n",
+    );
+    let out = tsr(&ws, &["c"]);
+    assert_eq!(code(&out), 64);
+    assert!(stderr(&out).contains("brace expansion"), "{}", stderr(&out));
+}
+
+#[test]
+fn braces_without_a_comma_still_work() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.e]\nrun = \"echo --define:{}\"\n");
+    let out = tsr(&ws, &["e"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("--define:{}"), "{}", stdout(&out));
+}
+
+#[test]
+fn globstar_matches_across_directories() {
+    let ws = workspace();
+    write(&ws, "src/one.js", "");
+    write(&ws, "src/deep/two.js", "");
+    write(&ws, "src/deep/skip.ts", "");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.list]\nrun = \"echo src/**/*.js\"\n",
+    );
+    let out = tsr(&ws, &["list"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("src/deep/two.js") && stdout(&out).contains("src/one.js"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!stdout(&out).contains("skip.ts"), "{}", stdout(&out));
+}

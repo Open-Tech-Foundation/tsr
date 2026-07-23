@@ -283,7 +283,7 @@ A `run` string is parsed into an **AST** (program → command → word → part)
 - **`$VAR` / `${VAR}`** — expansion from the merged env (§7). `${...}` takes a plain variable name only; parameter expansion (`${VAR:-default}`, `${#VAR}`, …) is rejected with a specific error.
 - **`&&` `||` `;`** — sequencing with correct exit-code semantics (`&&` on `0`, `||` on non-zero, `;` always).
 - **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion applies). Quoted text is never globbed.
-- **Globs** — `*`, `?`, `[...]` match against the filesystem, relative to the task's `dir` (§3.2), following `sh` rules: `*` does not cross a `/` and does not match a leading dot; case sensitivity follows the platform. A pattern that matches nothing stays literal, exactly as in `sh`.
+- **Globs** — `*`, `?`, `[...]` and `**` match against the filesystem, relative to the task's `dir` (§3.2), following `sh` rules: `*` does not cross a `/` and does not match a leading dot, while `**` spans directories (including zero of them, so `a/**/*.js` matches `a/x.js`); case sensitivity follows the platform. A pattern that matches nothing stays literal, exactly as in `sh`.
 
 Two rules keep globbing predictable:
 
@@ -302,6 +302,7 @@ These are rejected at **load time** with a clear, specific error (exit `64`), be
 | `>` `>>` `2>&1` redirection | use a script file |
 | `$(...)` / backtick substitution | use a script file |
 | `&` background, `( )` subshells | use `delegate` for real shell control |
+| `{a,b}` brace expansion | list the paths explicitly, or quote the braces |
 
 ### 8.3 Escape hatch
 
@@ -332,10 +333,12 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 | `cat` | — (stdin when no operands) |
 | `echo` | leading `-n` |
 | `pwd` | — |
+| `true` / `false` | — (operands ignored) |
 
 - **A builtin always wins** over a binary of the same name on `PATH`, on every platform. One `run` string, one behaviour. `delegate` is the escape hatch when a task genuinely needs the platform's own tool (§8.3).
 - Builtins apply to **`run` strings only** — never to `delegate` or an auto-detected native runner (§3.1).
 - Short options bundle (`-rf`), `--` ends option parsing, and relative paths resolve against the task's `dir`.
+- `true` and `false` exist so `cmd || true` — the standard "this step must not fail the build" idiom — works on Windows, where there is no `/bin/true` to fall back on.
 - **Exit codes:** `0` success, `1` a failed operation, `2` a usage error (unknown flag, missing operand). As in POSIX, `rm -f` with nothing to remove succeeds silently — which is what makes `rm -rf dist/*` idempotent once `dist` is empty.
 
 ---

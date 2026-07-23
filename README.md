@@ -98,19 +98,20 @@ needs variables, globs or operators it goes through a built-in mini-shell:
 - `$VAR` / `${VAR}` expansion (against the merged env)
 - `&&` `||` `;` sequencing
 - `'single'` (literal) and `"double"` (expanding) quotes
-- `*` `?` `[…]` globs, matched relative to the task's `dir`
+- `*` `?` `[…]` `**` globs, matched relative to the task's `dir`
 
 Unsupported constructs — pipes `|`, redirection `>`/`<`, command substitution
-`$(…)`/backticks, background `&`, subshells `(…)` — are rejected at load time.
-For real shell power, use `delegate = { bin = "sh", args = ["-c", "…"] }` or a
-script file.
+`$(…)`/backticks, background `&`, subshells `(…)`, brace expansion `{a,b}` — are
+rejected at load time. For real shell power, use
+`delegate = { bin = "sh", args = ["-c", "…"] }` or a script file.
 
 ### Built-in commands
 
-`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`, `echo` and `pwd` are implemented
-in-process and **always** win over a binary of the same name on `PATH`, so
-`run = "rm -rf dist/*"` behaves identically on Linux, macOS and Windows. They
-apply to `run` strings only — never to `delegate` or an auto-detected runner.
+`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`, `echo`, `pwd`, `true` and `false` are
+implemented in-process and **always** win over a binary of the same name on
+`PATH`, so `run = "rm -rf dist/*"` behaves identically on Linux, macOS and
+Windows. They apply to `run` strings only — never to `delegate` or an
+auto-detected runner. `true`/`false` are what make `cmd || true` portable.
 
 ### Environment
 

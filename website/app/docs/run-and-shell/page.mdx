@@ -31,7 +31,8 @@ startup tax. In a non-JS package it's a no-op.
   `||` on non-zero, `;` always).
 - **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion
   applies). Quoted text is never globbed.
-- **Globs** — `*`, `?`, `[...]` match real files, relative to the task's `dir`.
+- **Globs** — `*`, `?`, `[...]`, `**` match real files, relative to the task's
+  `dir`.
 
 ```toml
 [tasks.deploy]
@@ -47,7 +48,9 @@ run = "build && deploy --target $TARGET || notify 'deploy failed'"
 ## Globbing
 
 Patterns follow `sh`: `*` does not cross a `/` and does not match a leading dot,
-and a pattern that matches nothing stays literal. Two rules keep it predictable:
+`**` spans directories (including zero of them, so `a/**/*.js` matches
+`a/x.js`), and a pattern that matches nothing stays literal. Two rules keep it
+predictable:
 
 - **Expanded values are never rescanned.** If `$FILES` holds `*.js`, it stays the
   literal string `*.js`. Only the `run` string itself can hold a pattern.
@@ -73,6 +76,7 @@ operations tasks actually use, in-process:
 | `cat` | — (stdin when given no files) |
 | `echo` | leading `-n` |
 | `pwd` | — |
+| `true` / `false` | — (operands ignored) |
 
 ```toml
 [tasks.clean]
@@ -87,6 +91,10 @@ resolve against the task's `dir`. A builtin exits `0` on success, `1` on a faile
 operation, and `2` on a usage error. As in POSIX, `rm -f` with nothing to remove
 succeeds silently — which is what makes `rm -rf dist/*` idempotent once `dist`
 is already empty.
+
+`true` and `false` are here for a reason: `cmd || true` is the standard "this
+step must not fail the build" idiom, and on Windows there is no `/bin/true` to
+fall back on.
 
 <Callout type="warning" title="A builtin always wins">
   On every platform, these names resolve to <code>tsr</code>'s own
@@ -108,6 +116,7 @@ These require OS-level plumbing outside the tool's scope, so they are rejected a
 | `>` `>>` `2>&1` redirection | use a script file |
 | `$(...)` / backtick substitution | use a script file |
 | `&` background, `( )` subshells | use `delegate` for real shell control |
+| `{a,b}` brace expansion | list the paths explicitly, or quote the braces |
 
 <Callout type="warning" title="Rejection happens up front">
   Unsupported constructs are caught when the config loads — before any task
@@ -125,6 +134,10 @@ parse → every word static           → direct spawn
 Classification is a property of the parsed string, and metacharacters inside
 quotes are literal — so `run = "echo 'a | b'"` prints `a | b`, it does not trip
 the pipe rule, and `run = "echo '*.txt'"` prints `*.txt` rather than globbing.
+
+Brace expansion is rejected only when it would actually mean something —
+a `{...}` group holding a comma. `{}` and `{json}` are ordinary text in `sh`
+too, so `find . -exec rm {} +` and `--define:{}` stay legal.
 
 ## The escape hatch
 

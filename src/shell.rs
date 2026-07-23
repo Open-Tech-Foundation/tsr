@@ -463,6 +463,9 @@ impl Lexer {
         if word_started {
             words.push(cur);
         }
+        for word in &words {
+            reject_brace_list(word)?;
+        }
         Ok(Command { words })
     }
 
@@ -605,6 +608,44 @@ fn validate_var_name(name: &str) -> Result<()> {
          expansion (':-', ':+', '#', …) is unsupported; set a default in [env] \
          or use a script file"
     )))
+}
+
+/// Reject `{a,b}` brace expansion, which the mini-shell does not implement.
+///
+/// Without this, `rm -rf dist/{js,css}` would pass the brace text through as a
+/// literal path — and with `-f` that fails *silently*, which is exactly the kind
+/// of quiet wrong answer SPEC §8.2 exists to prevent.
+///
+/// The check deliberately mirrors `sh`'s own trigger: only a `{…}` group
+/// containing a comma is brace expansion. `{}` and `{json}` are ordinary text in
+/// `sh` too, so `find . -exec rm {} ;` and `--define:{}` stay legal. Quoted text
+/// is exempt, since quoting is how you ask for a literal brace.
+fn reject_brace_list(word: &Word) -> Result<()> {
+    let bare: String = word
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Bare(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    let chars: Vec<char> = bare.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c != '{' {
+            continue;
+        }
+        // A comma before the matching `}` makes this a brace list.
+        if let Some(end) = chars[i + 1..].iter().position(|c| *c == '}')
+            && chars[i + 1..i + 1 + end].contains(&',')
+        {
+            return Err(TsrError::config(
+                "'run' string uses '{a,b}' (brace expansion), which is unsupported \
+                 — list the paths explicitly, or quote the braces to pass them through",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Reject an unsupported metacharacter with a message pointing at the escape
@@ -890,6 +931,48 @@ mod tests {
         assert_eq!(
             expand_in("rm [ab]b.log", &[], &dir),
             vec![vec!["rm", "bb.log"]]
+        );
+    }
+
+    #[test]
+    fn globstar_matches_recursively_including_zero_depth() {
+        let dir = scratch(&["one.js", "a/two.js", "a/b/three.js", "a/skip.txt"]);
+        assert_eq!(
+            expand_in("tsc **/*.js", &[], &dir),
+            vec![vec!["tsc", "a/b/three.js", "a/two.js", "one.js"]]
+        );
+        // `**` spans zero directories too, so `a/two.js` matches alongside the
+        // deeper `a/b/three.js`.
+        assert_eq!(
+            expand_in("tsc a/**/*.js", &[], &dir),
+            vec![vec!["tsc", "a/b/three.js", "a/two.js"]]
+        );
+    }
+
+    #[test]
+    fn rejects_brace_expansion() {
+        let err = parse("rm -rf dist/{js,css}").unwrap_err();
+        assert!(err.to_string().contains("brace expansion"), "{err}");
+        assert_eq!(err.exit_code(), 64);
+    }
+
+    #[test]
+    fn braces_without_a_comma_are_ordinary_text() {
+        // `sh` only treats `{…}` as expansion when it holds a comma, so these
+        // real-world usages must keep working.
+        let dir = scratch(&[]);
+        assert_eq!(
+            expand_in("find . -exec rm {} +", &[], &dir),
+            vec![vec!["find", ".", "-exec", "rm", "{}", "+"]]
+        );
+        assert_eq!(
+            expand_in("esbuild --define:{json}", &[], &dir),
+            vec![vec!["esbuild", "--define:{json}"]]
+        );
+        // Quoting is the documented way to pass a literal brace list through.
+        assert_eq!(
+            expand_in("echo '{js,css}'", &[], &dir),
+            vec![vec!["echo", "{js,css}"]]
         );
     }
 

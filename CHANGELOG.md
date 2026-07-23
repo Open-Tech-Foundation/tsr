@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run` strings only, never to `delegate` or an auto-detected native runner.
 - Undefined-`$VAR` errors now underline the offending reference with a caret,
   as SPEC §7.3 has always specified.
+- Builtins `true` and `false`, so `cmd || true` — the standard "this step must
+  not fail the build" idiom — works on Windows, which has no `/bin/true` to fall
+  back on. Both ignore their operands, as POSIX specifies.
+- `{a,b}` brace expansion is now rejected at load time instead of being passed
+  through as literal text. `rm -rf dist/{js,css}` previously did nothing at all
+  and, thanks to `-f`, said nothing about it. Detection matches `sh`'s own
+  trigger — only a `{...}` group containing a comma — so `find . -exec rm {} +`
+  and `--define:{json}` keep working, and quoting still passes braces through.
+- Documented and covered `**` in glob patterns, which the implementation already
+  supported: it spans directories, including zero of them, so `a/**/*.js`
+  matches `a/x.js` as well as `a/b/c.js`.
 
 ### Changed
 

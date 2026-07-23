@@ -24,7 +24,9 @@ const USAGE: i32 = 2;
 const FAIL: i32 = 1;
 
 /// Every command `tsr` implements itself.
-pub const NAMES: &[&str] = &["cat", "cp", "echo", "mkdir", "mv", "pwd", "rm", "touch"];
+pub const NAMES: &[&str] = &[
+    "cat", "cp", "echo", "false", "mkdir", "mv", "pwd", "rm", "touch", "true",
+];
 
 /// Whether `name` is handled in-process rather than spawned.
 pub fn is_builtin(name: &str) -> bool {
@@ -38,6 +40,11 @@ pub fn run(name: &str, args: &[String], cwd: &Path) -> i32 {
         "cat" => cat(args, cwd),
         "cp" => cp(args, cwd),
         "echo" => echo(args),
+        // POSIX: both ignore their operands entirely. `cmd || true` is the
+        // portable way to make a step non-fatal, so these have to exist on
+        // Windows too, where there is no `/bin/true` to fall back on.
+        "false" => FAIL,
+        "true" => 0,
         "mkdir" => mkdir(args, cwd),
         "mv" => mv(args, cwd),
         "pwd" => pwd(cwd),
@@ -426,6 +433,16 @@ mod tests {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(&p, body).unwrap();
         p
+    }
+
+    #[test]
+    fn true_and_false_are_portable_exit_codes() {
+        let dir = scratch();
+        assert_eq!(call("true", &[], &dir), 0);
+        assert_eq!(call("false", &[], &dir), FAIL);
+        // POSIX: operands are ignored rather than parsed as flags.
+        assert_eq!(call("true", &["--anything", "x"], &dir), 0);
+        assert_eq!(call("false", &["--anything", "x"], &dir), FAIL);
     }
 
     #[test]
