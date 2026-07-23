@@ -14,18 +14,26 @@ $InstallDir = if ($env:TSR_INSTALL) { $env:TSR_INSTALL } else { Join-Path $HOME 
 $BinDir = Join-Path $InstallDir 'bin'
 
 # --- detect platform --------------------------------------------------------
+# Release archives are named `tsr-<os>-<arch>`, where <os> is `windows`.
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
   'AMD64' { 'x86-64' }
   'ARM64' { 'arm64' }
   default { throw "unsupported architecture: $($env:PROCESSOR_ARCHITECTURE)" }
 }
-$target = "win32-$arch"
+$target = "windows-$arch"
 
 # --- resolve version --------------------------------------------------------
+# /releases/latest redirects to /releases/tag/<version>, so the tag falls out of
+# the final URL. Avoids api.github.com, which is rate-limited per IP.
 $version = $env:TSR_VERSION
 if (-not $version) {
-  $rel = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-  $version = $rel.tag_name
+  $resp = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -UseBasicParsing
+  $final = if ($resp.BaseResponse.ResponseUri) {
+    $resp.BaseResponse.ResponseUri.AbsoluteUri            # Windows PowerShell 5.1
+  } else {
+    $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri  # PowerShell 7+
+  }
+  $version = $final -replace '.*/tag/', ''
 }
 if (-not $version) { throw 'could not determine the latest release (set $env:TSR_VERSION)' }
 $name = "tsr-$target"

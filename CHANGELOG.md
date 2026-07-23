@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows installer: `install.ps1` downloaded `tsr-win32-<arch>.zip`, but the
+  release ships `tsr-windows-<arch>.zip`, so `irm …/install.ps1 | iex` failed
+  with a 404 for the whole 0.1.0 release.
+
+### Changed
+
+- Installers resolve the latest version from the `/releases/latest` redirect
+  (the tag is the last segment of the URL it lands on) instead of calling
+  `api.github.com`, which is rate-limited per IP.
+
 ## [0.1.0] - 2026-07-23
 
 ### Added

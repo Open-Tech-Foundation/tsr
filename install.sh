@@ -44,10 +44,12 @@ esac
 target="${os_part}-${arch_part}"
 
 # --- resolve version --------------------------------------------------------
+# /releases/latest redirects to /releases/tag/<version>, so the tag falls out of
+# the final URL. Avoids api.github.com, which is rate-limited per IP.
 version="${TSR_VERSION:-}"
 if [ -z "$version" ]; then
-  version="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-    grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)"
+  version="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    "https://github.com/$REPO/releases/latest" | sed 's#.*/tag/##')"
   [ -n "$version" ] || err "could not determine the latest release (set TSR_VERSION)"
 fi
 name="tsr-${target}"
