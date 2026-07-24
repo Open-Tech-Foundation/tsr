@@ -40,7 +40,7 @@ run = "build && deploy --target $TARGET || notify 'deploy failed'"
 ```
 
 <Callout type="note" title="`${...}` takes a plain name">
-  Parameter expansion — <code>{"${VAR:-default}"}</code>, <code>{"${#VAR}"}</code>{" "}
+  Parameter expansion — <code>&#36;&#123;VAR:-default&#125;</code>, <code>&#36;&#123;#VAR&#125;</code>{" "}
   and friends — is not implemented, and says so rather than failing later with a
   confusing "not defined". Set the default in <code>[env]</code> instead.
 </Callout>

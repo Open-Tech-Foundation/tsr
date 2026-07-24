@@ -1,24 +1,5 @@
 import { Link } from "@opentf/web";
 
-const TASKS_TOML = `# tasks.toml
-[workspace]
-members = ["apps/*", "packages/*"]
-
-[tasks.dev]
-run = "vite"
-dir = "apps/web"
-
-[tasks.test]
-packages = ["apps/*"]        # auto-detect
-
-[tasks.build]
-delegate = "turbo"           # → turbo run build
-
-[tasks.ci]
-deps = ["lint", "test", "build"]
-parallel = true
-`;
-
 // Capability comparison against the other runners people reach for. Each cell is
 // "y" (has it), "p" (partial / needs a plugin or extra tool), or "n" (no). Kept
 // deliberately factual — the benchmark page has the speed numbers.
@@ -46,6 +27,11 @@ const COMPARE_ROWS = [
     label: "Resolves node_modules/.bin",
     hint: "call vite / eslint like npm run",
     cells: ["y", "y", "y", "y", "n", "n", "n", "y"],
+  },
+  {
+    label: "Built-in shell & coreutils",
+    hint: "cross-platform rm, cp, mkdir, $VAR, globs",
+    cells: ["y", "n", "p", "p", "n", "p", "n", "n"],
   },
   {
     label: "Declarative env vars & .env",
@@ -180,8 +166,8 @@ export default function Home() {
               <div class="ico">🐚</div>
               <h3>Safe mini-shell</h3>
               <p>
-                <code>$VAR</code>, <code>&amp;&amp; || ;</code> and quoting are supported;
-                pipes, redirects and globs are rejected up front, not half-run.
+                In-process <code>$VAR</code> expansion, <code>&amp;&amp; || ;</code>, quoting, and globs
+                (<code>*</code>, <code>**</code>) plus cross-platform builtins (<code>rm</code>, <code>cp</code>, <code>mkdir</code>). Pipes &amp; redirects are rejected up front.
               </p>
             </div>
             <div class="card">
@@ -239,13 +225,17 @@ export default function Home() {
               </tbody>
             </table>
           </div>
-          <p class="cmp-legend">
-            ✅ yes&nbsp;&nbsp;
-            🟡 partial / needs a plugin&nbsp;&nbsp;
-            🔀 delegated by design&nbsp;&nbsp;
-            ❌ no&nbsp;&nbsp;·&nbsp;&nbsp;
-            <Link href="/docs/benchmarks">see the speed numbers →</Link>
-          </p>
+          <div class="cmp-legend-row">
+            <div class="cmp-legend">
+              <span>✅ yes</span>
+              <span>🟡 partial / needs a plugin</span>
+              <span>🔀 delegated by design</span>
+              <span>❌ no</span>
+            </div>
+            <Link class="cmp-bench-link" href="/docs/benchmarks">
+              See the speed numbers →
+            </Link>
+          </div>
         </div>
       </section>
 
@@ -280,7 +270,25 @@ export default function Home() {
           </div>
 
           <div class="codeblock">
-            <pre>{TASKS_TOML}</pre>
+            <pre>
+              <span class="cm"># tasks.toml</span>{"\n"}
+              <span class="k">[workspace]</span>{"\n"}
+              members = [<span class="s">"apps/*"</span>, <span class="s">"packages/*"</span>]{"\n"}
+              {"\n"}
+              <span class="k">[tasks.dev]</span>{"\n"}
+              run = <span class="s">"vite"</span>{"\n"}
+              dir = <span class="s">"apps/web"</span>{"\n"}
+              {"\n"}
+              <span class="k">[tasks.test]</span>{"\n"}
+              packages = [<span class="s">"apps/*"</span>]        <span class="cm"># auto-detect</span>{"\n"}
+              {"\n"}
+              <span class="k">[tasks.build]</span>{"\n"}
+              delegate = <span class="s">"turbo"</span>           <span class="cm"># → turbo run build</span>{"\n"}
+              {"\n"}
+              <span class="k">[tasks.ci]</span>{"\n"}
+              deps = [<span class="s">"lint"</span>, <span class="s">"test"</span>, <span class="s">"build"</span>]{"\n"}
+              parallel = <span class="t">true</span>
+            </pre>
           </div>
         </div>
       </section>
