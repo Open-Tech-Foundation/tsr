@@ -294,6 +294,11 @@ h1.title .grad {
   border: 1px solid transparent;
   transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
+.btn svg,
+.cmp-bench-link svg {
+  display: block;
+  flex-shrink: 0;
+}
 .btn:active {
   transform: translateY(1px);
 }

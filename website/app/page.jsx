@@ -1,5 +1,26 @@
 import { Link } from "@opentf/web";
 
+function ArrowRightIcon({ stroke = "currentColor", style, className }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={stroke}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={style}
+      className={className}
+    >
+      <path d="M5 12h14" />
+      <path d="m12 5 7 7-7 7" />
+    </svg>
+  );
+}
+
 // Capability comparison against the other runners people reach for. Each cell is
 // "y" (has it), "p" (partial / needs a plugin or extra tool), or "n" (no). Kept
 // deliberately factual — the benchmark page has the speed numbers.
@@ -72,7 +93,7 @@ export default function Home() {
           <div>
             <span class="eyebrow">
               <span class="dot" />
-              a command runner, not a build system
+              A command runner, not a build system
             </span>
             <h1 class="title">
               One interface over <span class="grad">every runner</span> in your repo.
@@ -86,7 +107,7 @@ export default function Home() {
             </p>
             <div class="cta-row">
               <Link class="btn btn-primary" href="/docs">
-                Get started →
+                Get started <ArrowRightIcon stroke="#ffffff" />
               </Link>
             </div>
           </div>
@@ -233,7 +254,7 @@ export default function Home() {
               <span>❌ no</span>
             </div>
             <Link class="cmp-bench-link" href="/docs/benchmarks">
-              See the speed numbers →
+              See the speed numbers <ArrowRightIcon />
             </Link>
           </div>
         </div>
@@ -264,7 +285,7 @@ export default function Home() {
             </ul>
             <div class="cta-row" style="margin-top:20px">
               <Link class="btn btn-ghost" href="/docs/configuration">
-                Configuration reference →
+                Configuration reference <ArrowRightIcon />
               </Link>
             </div>
           </div>
