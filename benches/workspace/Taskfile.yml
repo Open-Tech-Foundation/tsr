@@ -8,6 +8,12 @@ tasks:
   shell:
     silent: true
     cmds: ["echo $HOME && echo ok"]
+  builtins:
+    silent: true
+    cmds: ["mkdir -p _bench_tmp && touch _bench_tmp/a.txt && cp _bench_tmp/a.txt _bench_tmp/b.txt && mv _bench_tmp/b.txt _bench_tmp/c.txt && rm -rf _bench_tmp"]
+  globbing:
+    silent: true
+    cmds: ["echo src/*.rs"]
   steps5:
     silent: true
     cmds: [true,true,true,true,true]

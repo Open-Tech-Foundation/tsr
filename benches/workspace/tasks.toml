@@ -39,6 +39,12 @@ run = "true"
 [tasks.shell]
 run = "echo $HOME && echo ok"
 
+[tasks.builtins]
+run = "mkdir -p _bench_tmp && touch _bench_tmp/a.txt && cp _bench_tmp/a.txt _bench_tmp/b.txt && mv _bench_tmp/b.txt _bench_tmp/c.txt && rm -rf _bench_tmp"
+
+[tasks.globbing]
+run = "echo src/*.rs"
+
 [tasks.cli]
 run = "localcli"
 

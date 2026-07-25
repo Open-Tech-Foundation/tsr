@@ -12,15 +12,14 @@ commands.
 |----------|-------|----------|
 | `startup` | one task, spawns `true` | Pure per-invocation overhead. |
 | `shell` | one task, `echo $HOME && echo done` | Shell support — `$VAR` expansion + `&&`, which tsr's mini-shell handles in-process. |
-| `localbin` | one task calling `node_modules/.bin/localcli` (a Node script) | Local-binary resolution — the real `npm run` replacement case. `tsr`/`npm`/`bun` only (see below). |
+| `builtins` | one task, `mkdir` + `touch` + `cp` + `mv` + `rm` | In-process coreutils — file ops executed in-process without sub-process spawning. |
+| `globbing` | one task, `echo src/*.rs` | In-process globbing — file pattern matching resolved relative to task `dir`. |
+| `localbin` | one task calling `node_modules/.bin/localcli` (a Node script) | Local-binary resolution — the real `npm run` replacement case. `tsr`/`npm`/`bun`/`deno` only (see below). |
 | `steps5` | one task, 5 sequential commands | In-task sequencing — the runner launches **once**. |
 | `graph5` | one task with 5 trivial dependencies | Dependency-graph overhead. |
 | `graph10` | one task with 10 trivial dependencies | Graph overhead, scaled — shows it grow linearly. |
 
-The `shell` scenario exercises the mini-shell tsr supports natively (`$VAR`,
-`&&`/`||`/`;`, quoting). Pipes, redirects, globs and command substitution are
-**not** in the mini-shell — for those, tsr users reach for a `delegate` to
-`sh -c` or a script file, so they aren't part of this comparison.
+The `builtins` and `globbing` scenarios exercise `tsr`'s in-process Rust coreutils and glob expansion engine (`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`, `echo`, `pwd`, `*`, `?`, `[...]`, `**`). Other runners invoke external sub-processes or shell delegation, while `tsr` resolves them directly in-process.
 
 The `localbin` scenario resolves a binary from `node_modules/.bin` — the lookup
 `tsr`, `npm`, `bun`, and `deno` perform but `just`/`make`/go-task/`mise` do not — so it
@@ -80,21 +79,18 @@ is faster; `×` is relative to the fastest runner in that scenario. Raw exports:
 
 Mean wall-clock, in milliseconds:
 
-| Runner | `startup` | `shell` | `steps5` | `graph5` | `graph10` |
-|--------|----------:|--------:|---------:|---------:|----------:|
-| `make` | 1.4 | 1.4 | 3.0 | 3.1 | 5.1 |
-| **`tsr`** | **1.6** | **2.5** | **5.0** | **5.1** | **9.6** |
-| `just` | 1.9 | 1.9 | 3.8 | 3.8 | 6.1 |
-| `bun` | 2.3 | 2.3 | 2.3 | 11.5 | 22.7 |
-| `mise` | 19.7 | 19.7 | 24.2 | 32.2 | 45.8 |
-| `task` (go-task) | 99.5 | 99.8 | 103.6 | 104.7 | 107.4 |
-| `npm` | 83.9 | 84.0 | 83.4 | 416.8 | 843.1 |
+| Runner | `startup` | `shell` | `builtins` | `globbing` | `steps5` | `graph5` | `graph10` |
+|--------|----------:|--------:|-----------:|-----------:|---------:|---------:|----------:|
+| **`tsr`** | **0.9** | **0.9** | **1.1** | **1.0** | **0.9** | **1.0** | **1.1** |
+| `make` | 1.6 | 1.6 | 5.3 | 1.6 | 3.4 | 3.4 | 5.9 |
+| `just` | 2.3 | 2.3 | 5.9 | 2.3 | 4.4 | 4.5 | 7.2 |
+| `bun` | 2.9 | 2.8 | 7.2 | 2.8 | 2.8 | 14.0 | 28.3 |
+| `deno` | 7.1 | 7.1 | 8.6 | 7.1 | 7.3 | 34.0 | 68.9 |
+| `mise` | 21.1 | 21.2 | 24.7 | 21.3 | 26.4 | 36.1 | 55.2 |
+| `npm` | 89.7 | 89.8 | 93.0 | 90.3 | 89.7 | 441.0 | 881.6 |
+| `task` (go-task) | 104.3 | 104.2 | 108.6 | 104.0 | 108.5 | 109.3 | 116.6 |
 
-**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun only —
-just/make/go-task/mise don't resolve project-local binaries): `bun` 19.7 ms ·
-**`tsr` 27.5 ms** · `npm` 100.2 ms. Calling a project-local Node tool
-(`vite`/`eslint`), `tsr` is **~3.6× faster than `npm run`** and near `bun` — it
-resolves the same `node_modules/.bin` binary but skips npm's extra Node startup.
+**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun/deno only): `bun` 21.3 ms · **`tsr` 28.2 ms** · `deno` 31.8 ms · `npm` 107.8 ms. Calling a project-local Node tool (`vite`/`eslint`), `tsr` is **~3.8× faster than `npm run`** — it resolves the same `node_modules/.bin` binary but skips npm's extra Node startup.
 
 `startup`/`shell`: `tsr` sits with the native runners and ~50–60× ahead of
 npm/task; `mise` lands in between (~20 ms — a Rust binary, but it does more at

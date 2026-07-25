@@ -37,6 +37,21 @@ those use a `delegate` to `sh -c` as an escape hatch, not measured here.)
 
 <BenchChart scenario={data.scenarios.shell} />
 
+## coreutils builtins — `mkdir` + `touch` + `cp` + `mv` + `rm`
+
+File operations executed in a sequence (`mkdir`, `touch`, `cp`, `mv`, `rm`).
+`tsr` runs these **in-process** via native Rust coreutils without spawning shell
+sub-processes or external binaries, outperforming conventional shell execution.
+
+<BenchChart scenario={data.scenarios.builtins} />
+
+## glob expansion — `echo src/*.rs`
+
+A task matching files via `*` globbing. `tsr` parses and resolves globs
+in-process against the filesystem relative to the task's `dir`.
+
+<BenchChart scenario={data.scenarios.globbing} />
+
 ## local binary — resolving `node_modules/.bin`
 
 The real "`npm run` replacement" case: a task that calls a project-local tool

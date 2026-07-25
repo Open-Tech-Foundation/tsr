@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Benchmark suite & documentation: updated hyperfine benchmark scenario results across all task runners and synchronized website benchmark dataset.
 - Website landing page: added syntax highlighting for `tasks.toml`, updated tagline theme and modern pill button shapes, updated Safe mini-shell section details, repositioned benchmark speed numbers link, and added Built-in shell & coreutils row to comparison table.
 - `run` strings are parsed into an **AST** (program → command → word → part)
   instead of straight into argv. Retaining the structure is what lets expansion

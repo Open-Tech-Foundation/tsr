@@ -89,9 +89,11 @@ bench() {
 
 bench startup none noop
 bench shell none shell
+bench builtins none builtins
+bench globbing none globbing
 bench localbin none cli 0 js
 bench steps5 none steps5
 bench graph5 sh graph5 5
 bench graph10 sh graph10 10
 
-echo "results in benches/results/{startup,shell,localbin,steps5,graph5,graph10}.{md,json}" >&2
+echo "results in benches/results/{startup,shell,builtins,globbing,localbin,steps5,graph5,graph10}.{md,json}" >&2

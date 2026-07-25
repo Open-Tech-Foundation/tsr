@@ -6,6 +6,12 @@ noop:
 shell:
     @echo $HOME && echo ok
 
+builtins:
+    @mkdir -p _bench_tmp && touch _bench_tmp/a.txt && cp _bench_tmp/a.txt _bench_tmp/b.txt && mv _bench_tmp/b.txt _bench_tmp/c.txt && rm -rf _bench_tmp
+
+globbing:
+    @echo src/*.rs
+
 steps5:
     @true
     @true
