@@ -2,8 +2,9 @@
 //!
 //! Paths are handled as [`Path`]/[`PathBuf`](std::path::PathBuf) everywhere
 //! inside `tsr`, but some of them leave the process — a glob match becomes an
-//! argv entry (SPEC §8.1). Those renderings are normalised here so a
-//! `tasks.toml` behaves the same on every platform.
+//! argv entry (SPEC §8.1), a package's `rel` is matched against user-written
+//! patterns and printed by `list` (SPEC §9.1). Those renderings are normalised
+//! here so a `tasks.toml` behaves the same on every platform.
 //!
 //! This is the *only* place that rewrites a path into text with `/`. Diagnostics
 //! are not covered: an error message naming a file should show the platform's
@@ -39,6 +40,12 @@ pub fn to_slash(path: &Path) -> String {
     out
 }
 
+/// Render `path` relative to `base`, with `/` separators. Falls back to the
+/// whole path when it does not sit under `base`.
+pub fn rel_to_slash(base: &Path, path: &Path) -> String {
+    to_slash(path.strip_prefix(base).unwrap_or(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +75,19 @@ mod tests {
     #[test]
     fn redundant_separators_collapse() {
         assert_eq!(to_slash(Path::new("a//b/")), "a/b");
+    }
+
+    #[test]
+    fn rel_to_slash_strips_the_base_when_it_applies() {
+        let base = PathBuf::from("/work/repo");
+        assert_eq!(
+            rel_to_slash(&base, &base.join("apps").join("web")),
+            "apps/web"
+        );
+        // Not under `base`, so the path is rendered whole rather than guessed at.
+        assert_eq!(
+            rel_to_slash(&base, Path::new("/elsewhere/pkg")),
+            "/elsewhere/pkg"
+        );
     }
 }

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::detect::{self, Ecosystem};
 use crate::error::{Result, TsrError};
+use crate::path::rel_to_slash;
 
 /// A discovered workspace package.
 #[derive(Debug, Clone)]
@@ -43,7 +44,7 @@ pub fn packages(cfg: &Config) -> Vec<Package> {
             let Some(eco) = detect::detect(&entry) else {
                 continue;
             };
-            let rel = rel_path(&cfg.root, &entry);
+            let rel = rel_to_slash(&cfg.root, &entry);
             let name = detect::manifest_name(&entry, eco);
             found.entry(rel.clone()).or_insert(Package {
                 path: entry,
@@ -97,14 +98,6 @@ fn pattern_matches(pattern: &str, pkg: &Package) -> bool {
 
 fn is_glob(pattern: &str) -> bool {
     pattern.contains(['*', '?', '['])
-}
-
-fn rel_path(root: &std::path::Path, path: &std::path::Path) -> String {
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    rel.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 #[cfg(test)]
