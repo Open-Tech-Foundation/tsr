@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Website: bumped the OTF Web framework — `@opentf/web` 0.20.0 → 0.24.0,
+  `@opentf/web-docs` 0.17.0 → 0.21.0, `@opentf/web-cli` 1.18.0 → 1.22.0 — and set
+  the docs version badge to `v0.2.0`, the release it documents.
+
 ## [0.2.0] - 2026-07-26
 
 ### Added

@@ -1,7 +1,7 @@
 {
   "name": "tsr-website",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "The tsr website + documentation, built with the OTF Web framework.",
   "scripts": {
@@ -11,10 +11,10 @@
     "serve": "otfw serve"
   },
   "dependencies": {
-    "@opentf/web": "0.20.0",
-    "@opentf/web-docs": "0.17.0"
+    "@opentf/web": "0.24.0",
+    "@opentf/web-docs": "0.21.0"
   },
   "devDependencies": {
-    "@opentf/web-cli": "1.18.0"
+    "@opentf/web-cli": "1.22.0"
   }
 }

@@ -5,11 +5,11 @@
     "": {
       "name": "tsr-website",
       "dependencies": {
-        "@opentf/web": "0.20.0",
-        "@opentf/web-docs": "0.17.0",
+        "@opentf/web": "0.24.0",
+        "@opentf/web-docs": "0.21.0",
       },
       "devDependencies": {
-        "@opentf/web-cli": "1.18.0",
+        "@opentf/web-cli": "1.22.0",
       },
     },
   },
@@ -32,13 +32,13 @@
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.1.6", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1", "@emnapi/runtime": "^1.7.1" } }, "sha512-ZLv/JdUfkvOy9eCnnBaGfiO+XimbjebAeO+MRQqD/B+FR1tnRN0tpKSJHRbE8sFfS6aqsXZ67TQjfwfsxULVbg=="],
 
-    "@opentf/web": ["@opentf/web@0.20.0", "", {}, "sha512-2mOADFT1Qq9R9zIdSy56GTBXuSc9V8/h0rmWIO/lUEhKLhXdnqaPK+uVbI2KhtQ6BXzpc58SrJHP/rHdlHVnSQ=="],
+    "@opentf/web": ["@opentf/web@0.24.0", "", {}, "sha512-9JnCzkpMBq9GzH65nu7puPvm3FBX1Z6/xPzlrNRCQSP/Ia6WUkyiIr2jzEQjrqTVyOgDxa+XiyCC8aXyDqUigg=="],
 
-    "@opentf/web-cli": ["@opentf/web-cli@1.18.0", "", { "dependencies": { "@opentf/web-compiler": "0.10.0", "@tailwindcss/node": "4.2.2", "@tailwindcss/oxide": "4.2.2", "rolldown": "1.0.0-rc.17", "tailwindcss": "4.2.2" }, "peerDependencies": { "@opentf/web": "*" }, "bin": { "otfw": "src/cli.js" } }, "sha512-qqE5mJHMbGsyxRmhgk2+n3Es/bhjtBMPzzXtH5J0DF4Tl6qDp4f9g875grKog9ziDWcVb/LCvv9SYMIu75ly/A=="],
+    "@opentf/web-cli": ["@opentf/web-cli@1.22.0", "", { "dependencies": { "@opentf/web-compiler": "0.12.0", "@tailwindcss/node": "4.2.2", "@tailwindcss/oxide": "4.2.2", "rolldown": "1.0.0-rc.17", "tailwindcss": "4.2.2" }, "peerDependencies": { "@opentf/web": "*" }, "bin": { "otfw": "src/cli.js" } }, "sha512-Oxvr0It4EQuWz/IMFEZjH78937hgp3tp4AdfXl905ToXoWJ6jhNtQiqwI/ngFBAmCnP3A8Z9YrCK2z4/qTOG0Q=="],
 
-    "@opentf/web-compiler": ["@opentf/web-compiler@0.10.0", "", {}, "sha512-dC+wFVYFzkQSGh70bGELszf8W/gEhpkHybpLEYDKQoya3qjIRd2tKhPiLcwW9mYXlF/m70v0hfao9Eve8Q9wrQ=="],
+    "@opentf/web-compiler": ["@opentf/web-compiler@0.12.0", "", {}, "sha512-4p8xr/aPgrK7xROaTWrMN7hxcFJLB9/0fQrtCosnpvEjHz1mGGyxACRzQ6BuAwSyL08pl7tLaD9nFqB6i5i+bA=="],
 
-    "@opentf/web-docs": ["@opentf/web-docs@0.17.0", "", { "dependencies": { "pagefind": "^1.5.2" }, "peerDependencies": { "@opentf/web": "*" } }, "sha512-ItKCt0shv9tpNeXMZtNK5+/vv2aCWGSm84Mrjh79PqQWhEJpizhPRexUV1kYUhMyi80bqInI3RvzmCh4c6IbRA=="],
+    "@opentf/web-docs": ["@opentf/web-docs@0.21.0", "", { "dependencies": { "pagefind": "^1.5.2" }, "peerDependencies": { "@opentf/web": "*" } }, "sha512-upKZI8bmX/fU1EwAmQnQf3M6ZAIVP68Ld029w/TH2HMXqLuB0ZeWIXFPb3WzjHR4ogZYRfDG1Wv5FM9ud6Z+xA=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.127.0", "", {}, "sha512-aIYXQBo4lCbO4z0R3FHeucQHpF46l2LbMdxRvqvuRuW2OxdnSkcng5B8+K12spgLDj93rtN3+J2Vac/TIO+ciQ=="],
 
