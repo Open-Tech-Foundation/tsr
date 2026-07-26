@@ -1,13 +1,16 @@
+<div align="center">
+
 # tsr
 
-A lightweight, polyglot, repo-aware task runner. It is a **command runner**, not
-a build system: one unified interface over the native runners already in a repo
-(`npm`, `bun`, `cargo`, `go`, `uv`, …), plus a task dependency graph and opt-in
-parallelism. Caching is delegated to specialist tools (Turbo, Nx), never
-reimplemented.
+A command runner, not a build system
 
-Website & Documentation: [https://tsr.opentechf.org](https://tsr.opentechf.org)  
-Specification: [`SPEC.md`](SPEC.md)
+🌐 [https://tsr.opentechf.org](https://tsr.opentechf.org)
+
+</div>
+
+> A lightweight, polyglot, repo-aware task runner. 
+
+one unified interface over the native runners already in a repo (`npm`, `bun`, `cargo`, `go`, `uv`, …), plus a task dependency graph and opt-in parallelism. Caching is delegated to specialist tools (Turbo, Nx), never reimplemented.
 
 ## Install
 
@@ -149,3 +152,7 @@ cargo test          # unit + end-to-end tests
 cargo clippy --all-targets
 cargo fmt
 ```
+
+## 📄 License
+
+This project is licensed under the [MIT License](./LICENSE).
