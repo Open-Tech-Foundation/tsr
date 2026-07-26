@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-26
+
 ### Fixed
 
 - **Windows: `run = "vite"` / auto-detected `npm` could not be spawned at all**,
