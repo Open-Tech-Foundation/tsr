@@ -56,6 +56,60 @@ pub fn prepend_node_bin(env: &mut HashMap<String, String>, dir: &Path, root: &Pa
     }
 }
 
+/// Windows' documented default when `PATHEXT` is not set.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+/// Resolve the program a `run` string names to a concrete file, applying
+/// Windows' `PATHEXT` rules (SPEC §9.2).
+///
+/// [`Command`](std::process::Command) searches `PATH` itself, but on Windows it
+/// only ever probes the bare name and `.exe`. Every Node tool installs as a
+/// batch shim — `npm` is `npm.cmd`, and `node_modules/.bin` holds `vite.cmd` —
+/// so a bare `npm` fails to spawn with "program not found". Handing `Command`
+/// the resolved path instead lets it recognise the `.cmd` and route it through
+/// `cmd.exe` with the argument escaping that needs.
+///
+/// The search runs over the *job's* `PATH` — the one [`prepend_node_bin`]
+/// extended — so a project-local tool still wins over a global one. `None` means
+/// nothing matched; the caller then spawns the bare name and lets `Command`
+/// report the failure. On Unix this is always `None`: `execvp` already applies
+/// `PATH` correctly, and executability there is a mode bit, not an extension.
+pub fn resolve_program(program: &str, env: &HashMap<String, String>) -> Option<PathBuf> {
+    if !cfg!(windows) || program.contains(['/', '\\']) {
+        // An explicit path is used as given, exactly as a shell would.
+        return None;
+    }
+    let pathext = env.get("PATHEXT").map_or(DEFAULT_PATHEXT, String::as_str);
+    lookup_program(program, env.get("PATH")?, pathext)
+}
+
+/// The `PATH` × `PATHEXT` search itself, taking both as plain text so it is
+/// testable on any platform.
+///
+/// Matches how a shell resolves a command: a name that already carries an
+/// extension is looked up as written, and only a bare one is tried against each
+/// `PATHEXT` entry. `PATH` order decides, so the nearest `node_modules/.bin`
+/// wins before any extension preference does.
+fn lookup_program(program: &str, path: &str, pathext: &str) -> Option<PathBuf> {
+    let has_extension = Path::new(program).extension().is_some();
+    for dir in std::env::split_paths(path) {
+        if has_extension {
+            let candidate = dir.join(program);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        } else {
+            for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+                let candidate = dir.join(format!("{program}{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Build the merged, fully-expanded environment for `task` (SPEC §7.1), reading
 /// the real process env, the root `.env`, and the task's `env_file`(s).
 pub fn build(cfg: &Config, task: &Task) -> HashMap<String, String> {
@@ -309,6 +363,93 @@ mod tests {
             root.join("node_modules").join(".bin").to_str().unwrap()
         );
         assert_eq!(*parts.last().unwrap(), "/usr/bin");
+    }
+
+    // --- program resolution (SPEC §9.2) ---
+
+    /// A directory holding the given files, and the `PATH` text selecting the
+    /// directories in the order listed.
+    fn bin_dirs(dirs: &[&[&str]]) -> (Vec<PathBuf>, String) {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let id = N.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!("tsr-lookup-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mut paths = Vec::new();
+        for (i, files) in dirs.iter().enumerate() {
+            let dir = base.join(format!("d{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in *files {
+                std::fs::write(dir.join(f), "").unwrap();
+            }
+            paths.push(dir);
+        }
+        let joined = std::env::join_paths(&paths).unwrap();
+        (paths, joined.to_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn lookup_finds_a_bare_name_through_pathext() {
+        // The reported Windows failure: `npm` is `npm.cmd`, which `Command`'s own
+        // search never probes for.
+        let (dirs, path) = bin_dirs(&[&["npm.cmd"]]);
+        assert_eq!(
+            lookup_program("npm", &path, ".COM;.EXE;.BAT;.cmd"),
+            Some(dirs[0].join("npm.cmd"))
+        );
+    }
+
+    #[test]
+    fn lookup_prefers_path_order_over_extension_order() {
+        // A project-local `node_modules/.bin` sits first in PATH, so it wins even
+        // though the later directory holds an earlier-listed extension.
+        let (dirs, path) = bin_dirs(&[&["vite.cmd"], &["vite.exe"]]);
+        assert_eq!(
+            lookup_program("vite", &path, ".exe;.cmd"),
+            Some(dirs[0].join("vite.cmd"))
+        );
+    }
+
+    #[test]
+    fn lookup_takes_the_first_matching_extension_within_a_directory() {
+        let (dirs, path) = bin_dirs(&[&["tool.cmd", "tool.exe"]]);
+        assert_eq!(
+            lookup_program("tool", &path, ".exe;.cmd"),
+            Some(dirs[0].join("tool.exe"))
+        );
+    }
+
+    #[test]
+    fn lookup_uses_an_explicit_extension_as_written() {
+        // Already extended: looked up as-is, never re-extended into `npm.cmd.exe`.
+        let (dirs, path) = bin_dirs(&[&["npm.cmd"]]);
+        assert_eq!(
+            lookup_program("npm.cmd", &path, ".exe"),
+            Some(dirs[0].join("npm.cmd"))
+        );
+        assert_eq!(lookup_program("npm.exe", &path, ".exe"), None);
+    }
+
+    #[test]
+    fn lookup_misses_leave_the_spawn_error_to_command() {
+        let (_dirs, path) = bin_dirs(&[&["other.cmd"]]);
+        assert_eq!(lookup_program("npm", &path, ".exe;.cmd"), None);
+    }
+
+    #[test]
+    fn resolve_program_leaves_explicit_paths_alone() {
+        // A path is spawned as written on every platform, like a shell would.
+        let env = proc(&[("PATH", "/usr/bin")]);
+        assert_eq!(resolve_program("./tools/build", &env), None);
+        assert_eq!(resolve_program("node_modules/.bin/vite", &env), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_program_is_a_noop_on_unix() {
+        // execvp already applies PATH, and an extension means nothing here.
+        let (_dirs, path) = bin_dirs(&[&["npm.cmd"]]);
+        let env = proc(&[("PATH", &path)]);
+        assert_eq!(resolve_program("npm", &env), None);
     }
 
     #[test]

@@ -502,7 +502,14 @@ impl<'a> Ctx<'a> {
     /// Spawn one child and wait, polling the abort flag so a fail-fast can kill
     /// it mid-run (SPEC §5.2).
     fn spawn_wait(&self, program: &str, args: &[String], job: &Job) -> LeafWait {
-        let mut cmd = Command::new(program);
+        // On Windows a bare `npm`/`vite` is a `.cmd` shim, which `Command`'s own
+        // PATH search never probes for; resolving it here against the job's PATH
+        // is what makes those spawn at all (SPEC §9.2).
+        let resolved = env::resolve_program(program, &job.env);
+        let mut cmd = match &resolved {
+            Some(path) => Command::new(path),
+            None => Command::new(program),
+        };
         cmd.args(args)
             .current_dir(&job.dir)
             .env_clear()

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `run = "vite"` / auto-detected `npm` could not be spawned at all**,
+  failing with `cannot run 'npm': program not found` (exit `64`). The tools this
+  targets are batch shims — `npm` is `npm.cmd`, `node_modules/.bin` holds
+  `vite.cmd` — but when the OS searches `PATH` for a bare name it appends only
+  `.exe`, so the shim was never found. `tsr` now resolves the program against
+  the job's `PATH` using `PATHEXT` before spawning (SPEC §9.2), so a
+  project-local tool still wins over a global one. A name written with an
+  extension, or any path with a separator, is used as given, as a shell would.
+
 ### Changed
 
 - Website: bumped the OTF Web framework — `@opentf/web` 0.20.0 → 0.24.0,

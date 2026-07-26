@@ -358,6 +358,8 @@ For `run = "vite"` to genuinely replace `npm run dev`, a directly-spawned comman
 
 Only existing directories are added, so it is a no-op in non-JS packages. The command itself is still spawned directly (`execvp`-style) — this only fixes *where* the binary is found, and pays no Node startup tax.
 
+On **Windows** the name also has to be resolved against `PATHEXT`, because the tools this targets are batch shims — `npm` is `npm.cmd`, and `node_modules/.bin` holds `vite.cmd`. `tsr` searches the job's `PATH` in order, trying each `PATHEXT` extension for a bare name (a name written with an extension, or any path with a separator, is used as given). Without this a bare `npm` or `vite` cannot be spawned at all, since the OS appends only `.exe` when searching.
+
 ---
 
 ## 10. Exit codes

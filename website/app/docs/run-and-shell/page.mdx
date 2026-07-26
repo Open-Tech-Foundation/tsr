@@ -24,6 +24,11 @@ workspace root, nearest first — exactly the lookup npm/bun/yarn/pnpm do. So
 `run = "eslint ."` or `run = "vite build"` resolves the local tool, with no Node
 startup tax. In a non-JS package it's a no-op.
 
+On Windows these tools are batch shims — `npm` is really `npm.cmd`, and
+`node_modules/.bin` holds `vite.cmd` — so `tsr` also applies `PATHEXT` when it
+resolves a bare name. Write `run = "vite"` and it works the same everywhere; the
+extension is never something you have to spell out.
+
 ## Supported — the entire feature set
 
 - **`$VAR` / `${VAR}`** — expansion from the [merged env](/docs/environment).
