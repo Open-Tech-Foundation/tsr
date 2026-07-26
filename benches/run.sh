@@ -4,6 +4,8 @@
 #
 #   startup   one task that spawns `true`           per-invocation overhead
 #   shell     one task, `echo $HOME && echo done`   shell one-liner ($VAR + &&)
+#   builtins  one task, mkdir+touch+cp+mv+rm        in-process coreutils (SPEC §8.5)
+#   globbing  one task, `echo src/*.rs`             in-process glob expansion (§8.1)
 #   localbin  one task calling node_modules/.bin     local-binary resolution (JS only)
 #   steps5    one task, 5 sequential commands       in-task sequencing (one launch)
 #   graph5    a task with 5 trivial dependencies    dependency-graph overhead

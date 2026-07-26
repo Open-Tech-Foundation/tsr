@@ -81,18 +81,18 @@ Mean wall-clock, in milliseconds:
 
 | Runner | `startup` | `shell` | `builtins` | `globbing` | `steps5` | `graph5` | `graph10` |
 |--------|----------:|--------:|-----------:|-----------:|---------:|---------:|----------:|
-| **`tsr`** | **0.9** | **0.9** | **1.1** | **1.0** | **0.9** | **1.0** | **1.1** |
-| `make` | 1.6 | 1.6 | 5.3 | 1.6 | 3.4 | 3.4 | 5.9 |
-| `just` | 2.3 | 2.3 | 5.9 | 2.3 | 4.4 | 4.5 | 7.2 |
-| `bun` | 2.9 | 2.8 | 7.2 | 2.8 | 2.8 | 14.0 | 28.3 |
-| `deno` | 7.1 | 7.1 | 8.6 | 7.1 | 7.3 | 34.0 | 68.9 |
-| `mise` | 21.1 | 21.2 | 24.7 | 21.3 | 26.4 | 36.1 | 55.2 |
-| `npm` | 89.7 | 89.8 | 93.0 | 90.3 | 89.7 | 441.0 | 881.6 |
-| `task` (go-task) | 104.3 | 104.2 | 108.6 | 104.0 | 108.5 | 109.3 | 116.6 |
+| **`tsr`** | **0.8** | **0.8** | **0.9** | **0.8** | **0.8** | **0.9** | **1.0** |
+| `make` | 1.4 | 1.4 | 4.7 | 1.5 | 3.1 | 3.1 | 5.2 |
+| `just` | 2.0 | 2.0 | 5.5 | 2.0 | 3.9 | 3.9 | 6.3 |
+| `bun` | 2.3 | 2.3 | 6.7 | 2.4 | 2.3 | 11.5 | 23.4 |
+| `deno` | 6.2 | 6.2 | 8.0 | 6.3 | 6.3 | 30.5 | 61.0 |
+| `mise` | 19.8 | 19.7 | 22.9 | 20.6 | 24.6 | 32.3 | 47.4 |
+| `npm` | 84.0 | 84.3 | 89.1 | 84.8 | 85.6 | 425.7 | 842.2 |
+| `task` (go-task) | 101.4 | 99.7 | 105.3 | 106.1 | 104.2 | 106.5 | 111.8 |
 
-**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun/deno only): `bun` 21.3 ms · **`tsr` 28.2 ms** · `deno` 31.8 ms · `npm` 107.8 ms. Calling a project-local Node tool (`vite`/`eslint`), `tsr` is **~3.8× faster than `npm run`** — it resolves the same `node_modules/.bin` binary but skips npm's extra Node startup.
+**`localbin` — calling a local `node_modules/.bin` tool** (tsr/npm/bun/deno only): `bun` 20.0 ms · **`tsr` 27.6 ms** · `deno` 29.7 ms · `npm` 105.2 ms. Calling a project-local Node tool (`vite`/`eslint`), `tsr` is **~3.8× faster than `npm run`** — it resolves the same `node_modules/.bin` binary but skips npm's extra Node startup.
 
-`startup`/`shell`: `tsr` sits with the native runners and ~50–60× ahead of
+`startup`/`shell`: `tsr` sits with the native runners and ~100–125× ahead of
 npm/task; `mise` lands in between (~20 ms — a Rust binary, but it does more at
 startup). On the `shell` one-liner `tsr` is a touch slower than `make`/`just`
 because it spawns each command as a real process while a shell runs `echo` as a
@@ -101,9 +101,10 @@ builtin — the win lands when the commands are real programs, not builtins.
 The graph columns tell the bigger story. `tsr`, `just`, `make`, and `mise` resolve
 the whole graph in one launch, so their cost grows gently with graph size. `npm`
 has no graph: chaining `npm run` per task multiplies its ~84 ms startup, reaching
-**~843 ms for ten no-op tasks (≈164× the fastest)**. `bun` chains too but from a
-cheaper startup (~23 ms). `go-task` also resolves its graph in-process but from a
-~100 ms startup, so it stays roughly flat — slow to start, but it doesn't compound.
+**~842 ms for ten no-op tasks (≈816× `tsr`)**. `bun` chains too, but from a much
+cheaper startup, so ten tasks cost it ~23 ms. `go-task` also resolves its graph
+in-process but from a ~100 ms startup, so it stays roughly flat — slow to start,
+but it doesn't compound.
 
 Exact tables: [`results/startup.md`](results/startup.md),
 [`results/steps5.md`](results/steps5.md), [`results/graph5.md`](results/graph5.md),
