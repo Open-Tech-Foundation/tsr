@@ -3,9 +3,10 @@
 //!
 //! Most of the suite runs on every platform in the CI matrix: the builtins
 //! (SPEC §8.5) are what make a `run` string portable, so a task built from them
-//! is testable everywhere. The individual tests that reach for a Unix binary
-//! (`sh`) or need a POSIX executable bit to stand up a fake runner carry their
-//! own `#[cfg(unix)]` — see [`shim`] and [`tsr_with_path`].
+//! is testable everywhere, and [`shim`] stands up a fake runner in whichever
+//! form the platform actually ships (executable script / `.cmd`). Only the
+//! tests that name a Unix binary outright (`sh`) or build a symlinked shebang
+//! layout carry a `#[cfg(unix)]`.
 //!
 //! Keep new tests platform-independent where the behaviour is: a task written
 //! with builtins asserts the same thing on Windows, and that is where separator
@@ -432,31 +433,61 @@ fn packages_pattern_matching_nothing_is_error_64() {
 /// Write a fake runner that prints exactly how it was invoked, so tests can
 /// assert what `tsr` spawned without needing the real toolchain installed.
 ///
-/// Unix-only: the shim is a shebang script made executable via the POSIX mode
-/// bits. The Windows equivalent would be a `.cmd`, which `Command::new` will not
-/// find by bare name, so those tests stay Unix-side.
-#[cfg(unix)]
+/// Deliberately built the way each platform really ships a tool: an executable
+/// shebang script on Unix, a `.cmd` batch shim on Windows — which is exactly the
+/// shape (`npm.cmd`, `node_modules/.bin/vite.cmd`) that `Command`'s own PATH
+/// search cannot find, and that `env::resolve_program` exists to resolve.
 fn shim(dir: &Path, name: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    let p = dir.join(name);
-    fs::write(&p, format!("#!/bin/sh\necho INVOKED {name} \"$@\"\n")).unwrap();
-    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(name);
+        fs::write(&p, format!("#!/bin/sh\necho INVOKED {name} \"$@\"\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let p = dir.join(format!("{name}.cmd"));
+        fs::write(&p, format!("@echo off\r\necho INVOKED {name} %*\r\n")).unwrap();
+    }
 }
 
 /// Run `tsr` with `prepend` at the front of `PATH` (so shims shadow real tools).
-/// Unix-only, alongside [`shim`] — it also hard-codes the `:` PATH separator.
-#[cfg(unix)]
 fn tsr_with_path(dir: &Path, args: &[&str], prepend: &Path) -> Output {
     let path = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(windows) { ';' } else { ':' };
     Command::new(BIN)
         .args(args)
         .current_dir(dir)
-        .env("PATH", format!("{}:{path}", prepend.display()))
+        .env("PATH", format!("{}{sep}{path}", prepend.display()))
         .output()
         .expect("failed to spawn tsr")
 }
 
-#[cfg(unix)]
+/// A locally-installed tool is found by bare name from `node_modules/.bin`, the
+/// `npm run` replacement case (SPEC §9.2). On Windows that tool is a `.cmd`, so
+/// this is the regression test for `run = "vite"` failing with "program not
+/// found".
+#[test]
+fn resolves_a_local_bin_shim_by_bare_name() {
+    let ws = workspace();
+    let bindir = ws.join("node_modules/.bin");
+    fs::create_dir_all(&bindir).unwrap();
+    shim(&bindir, "vite");
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.dev]\nrun = \"vite\"\nargs = [\"build\"]\n",
+    );
+    let out = tsr(&ws, &["dev"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED vite build"),
+        "{}",
+        stdout(&out)
+    );
+}
+
 #[test]
 fn bare_task_autodetects_each_ecosystem() {
     // The "auto-detects each package's runner" claim (SPEC §3.1, form 3): a bare
@@ -505,7 +536,6 @@ fn bare_task_autodetects_each_ecosystem() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn deps_only_task_is_an_aggregator_not_autodetected() {
     // A bare task WITH deps is a pure aggregator (SPEC §5.2): it runs its deps and
@@ -546,7 +576,6 @@ fn bare_task_without_a_marker_is_runner_error_64() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn configless_runs_the_package_native_script() {
     // No tasks.toml at all: `tsr dev` still works repo-aware, mapping to the
@@ -566,7 +595,6 @@ fn configless_runs_the_package_native_script() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn configless_walks_up_to_the_nearest_package() {
     // Run from a nested directory: tsr finds the package marker in a parent, just
@@ -665,7 +693,6 @@ fn builtins_chain_through_the_mini_shell() {
     assert!(ws.join("out/deep/.stamp").is_file());
 }
 
-#[cfg(unix)]
 #[test]
 fn builtin_shadows_a_binary_of_the_same_name_on_path() {
     // A builtin always wins, so one `run` string behaves the same on every OS.

@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Website: bumped the OTF Web framework — `@opentf/web` 0.20.0 → 0.24.0,
   `@opentf/web-docs` 0.17.0 → 0.21.0, `@opentf/web-cli` 1.18.0 → 1.22.0 — and set
   the docs version badge to `v0.2.0`, the release it documents.
+- CI: the fake-runner tests now run on Windows too. `shim` writes whichever form
+  the platform actually ships — an executable script on Unix, a `.cmd` on
+  Windows — so ecosystem auto-detection, configless mode and builtin shadowing
+  are covered end to end there. That is the coverage the `PATHEXT` bug slipped
+  through: 39 of the 44 e2e tests now run on every platform, up from 33.
 
 ## [0.2.0] - 2026-07-26
 
