@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `PATH` was looked up case-sensitively, so it was never found.**
+  Windows compares environment names case-insensitively and conventionally
+  spells the variable `Path`, but `tsr` carries the environment in a `HashMap`,
+  whose lookup is exact — so `get("PATH")` returned nothing. Two consequences,
+  both Windows-only:
+  - The 0.3.0 `PATHEXT` fix could not do its job: with no `PATH` to search it
+    fell straight back to the old behaviour, leaving `cannot run 'npm': program
+    not found` exactly as before.
+  - `node_modules/.bin` prepending (SPEC §9.2) inserted a *second* `PATH`
+    variable instead of extending `Path`, so a job's environment lost every
+    system directory. A local tool that shelled out to anything else on `PATH`
+    would fail.
+
+  Environment names are now compared the way the platform does, and values are
+  written back under the key already in use.
+
 ## [0.3.0] - 2026-07-26
 
 ### Fixed

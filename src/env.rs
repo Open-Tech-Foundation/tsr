@@ -23,6 +23,43 @@ use crate::shell;
 /// The `.env` file loaded from the workspace root (SPEC §7.2).
 pub const DOTENV_FILE: &str = ".env";
 
+/// Find the key under which `env` holds `name`, comparing the way the platform
+/// compares environment names: exactly on Unix, case-insensitively on Windows.
+///
+/// This matters because the environment is carried in a plain [`HashMap`], whose
+/// lookup is always case-sensitive, while Windows treats names as equal
+/// case-insensitively and conventionally spells the search path `Path`. A direct
+/// `get("PATH")` therefore misses it. ASCII folding is enough here: the names
+/// looked up (`PATH`, `PATHEXT`) are ASCII.
+///
+/// `case_insensitive` is a parameter rather than a `cfg!` so both behaviours are
+/// testable on either platform.
+fn find_key(env: &HashMap<String, String>, name: &str, case_insensitive: bool) -> Option<String> {
+    if env.contains_key(name) {
+        return Some(name.to_string());
+    }
+    if case_insensitive {
+        return env.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned();
+    }
+    None
+}
+
+/// Read an environment value by name, honouring the platform's name comparison.
+fn var<'a>(env: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
+    let key = find_key(env, name, cfg!(windows))?;
+    env.get(&key).map(String::as_str)
+}
+
+/// The key to *write* `name` under: the one already present, or `name` itself.
+///
+/// Writing back to the existing key is what keeps `Path` a single variable. A
+/// plain `insert("PATH", …)` next to an inherited `Path` would leave two entries
+/// that Windows considers the same name, and which of them the child sees is
+/// then anyone's guess.
+fn write_key(env: &HashMap<String, String>, name: &str) -> String {
+    find_key(env, name, cfg!(windows)).unwrap_or_else(|| name.to_string())
+}
+
 /// Prepend `node_modules/.bin` directories to `PATH` so locally-installed
 /// binaries (`vite`, `eslint`, `tsc`, …) resolve when a `run` string names them
 /// directly — the same lookup npm/bun/yarn/pnpm perform, and what makes tsr a
@@ -47,12 +84,14 @@ pub fn prepend_node_bin(env: &mut HashMap<String, String>, dir: &Path, root: &Pa
     if bins.is_empty() {
         return;
     }
-    // Prepend the discovered bin dirs (nearest first) ahead of the existing PATH.
-    let existing = env.get("PATH").cloned().unwrap_or_default();
+    // Prepend the discovered bin dirs (nearest first) ahead of the existing PATH,
+    // extending whichever key already holds it so the rest of PATH survives.
+    let key = write_key(env, "PATH");
+    let existing = env.get(&key).cloned().unwrap_or_default();
     let mut parts = bins;
     parts.extend(std::env::split_paths(&existing));
     if let Ok(joined) = std::env::join_paths(parts) {
-        env.insert("PATH".to_string(), joined.to_string_lossy().into_owned());
+        env.insert(key, joined.to_string_lossy().into_owned());
     }
 }
 
@@ -79,8 +118,8 @@ pub fn resolve_program(program: &str, env: &HashMap<String, String>) -> Option<P
         // An explicit path is used as given, exactly as a shell would.
         return None;
     }
-    let pathext = env.get("PATHEXT").map_or(DEFAULT_PATHEXT, String::as_str);
-    lookup_program(program, env.get("PATH")?, pathext)
+    let pathext = var(env, "PATHEXT").unwrap_or(DEFAULT_PATHEXT);
+    lookup_program(program, var(env, "PATH")?, pathext)
 }
 
 /// The `PATH` × `PATHEXT` search itself, taking both as plain text so it is
@@ -363,6 +402,57 @@ mod tests {
             root.join("node_modules").join(".bin").to_str().unwrap()
         );
         assert_eq!(*parts.last().unwrap(), "/usr/bin");
+    }
+
+    // --- environment name lookup ---
+
+    #[test]
+    fn find_key_matches_exactly_when_case_sensitive() {
+        // Unix: `Path` and `PATH` are two different variables.
+        let env = proc(&[("Path", "C:\\win")]);
+        assert_eq!(find_key(&env, "PATH", false), None);
+        assert_eq!(
+            find_key(&env, "Path", false).as_deref(),
+            Some("Path"),
+            "an exact hit still matches"
+        );
+    }
+
+    #[test]
+    fn find_key_matches_any_case_when_insensitive() {
+        // Windows spells it `Path`, and treats the name as equal to `PATH`.
+        let env = proc(&[("Path", "C:\\win"), ("PathExt", ".EXE;.CMD")]);
+        assert_eq!(find_key(&env, "PATH", true).as_deref(), Some("Path"));
+        assert_eq!(find_key(&env, "PATHEXT", true).as_deref(), Some("PathExt"));
+        assert_eq!(find_key(&env, "NOPE", true), None);
+    }
+
+    #[test]
+    fn write_key_reuses_the_existing_spelling() {
+        // Writing to "PATH" beside an inherited "Path" would leave two entries
+        // that Windows considers one variable.
+        let env = proc(&[("Path", "C:\\win")]);
+        let expected = if cfg!(windows) { "Path" } else { "PATH" };
+        assert_eq!(write_key(&env, "PATH"), expected);
+        // Absent either way: the caller's own spelling is used.
+        assert_eq!(write_key(&proc(&[]), "PATH"), "PATH");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn node_bin_extends_the_inherited_path_variable() {
+        // Regression: a plain insert("PATH", …) next to `Path` dropped every
+        // system directory from the job's PATH.
+        let dir = std::env::temp_dir().join(format!("tsr-pathkey-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        let mut env = proc(&[("Path", "C:\\Windows\\system32")]);
+        prepend_node_bin(&mut env, &dir, &dir);
+        assert!(!env.contains_key("PATH"), "must not add a second variable");
+        assert!(
+            env["Path"].ends_with("C:\\Windows\\system32"),
+            "the inherited PATH must survive: {}",
+            env["Path"]
+        );
     }
 
     // --- program resolution (SPEC §9.2) ---
