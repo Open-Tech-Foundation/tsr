@@ -60,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macOS too — including globbing, builtin chains and `dir`-relative patterns,
   which is where separator bugs actually surface. Only the tests needing `sh` or
   a POSIX-executable fake runner stay `#[cfg(unix)]`.
+- CI: cutting a release now requires the cross-platform test suite to pass.
+  `release.yml` triggers on the push rather than on CI finishing, so a red
+  Windows run could previously not stop a tag being cut.
 
 ### Fixed
 
