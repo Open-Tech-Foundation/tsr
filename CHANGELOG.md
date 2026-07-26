@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mini-shell: **glob expansion** in `run` strings (`*`, `?`, `[...]`), matched
   against the filesystem relative to the task's `dir` and following `sh` rules —
   `*` does not cross a `/` or match a leading dot, and an unmatched pattern stays
-  literal (SPEC §8.1). Quoted text and expanded variable values are never
-  globbed, so a `*` that arrives via `$VAR` stays a literal `*`. Globs resolve
+  literal (SPEC §8.1). Matches come back with `/` separators on every platform,
+  so one pattern yields one argv on Linux, macOS and Windows alike. Quoted text
+  and expanded variable values are never globbed, so a `*` that arrives via
+  `$VAR` stays a literal `*`. Globs resolve
   when their command runs rather than when the task is planned, so a pattern in
   `build && rm dist/*.map` sees the files `build` just produced.
 - Mini-shell: **built-in commands** — `rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`,

@@ -22,6 +22,7 @@
 use std::path::Path;
 
 use crate::error::{Result, TsrError};
+use crate::path::to_slash;
 
 /// The separator preceding a command in a sequence (SPEC §8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +296,9 @@ fn has_glob_meta(s: &str) -> bool {
 ///
 /// Matching deliberately mirrors `sh`: `*` does not cross a path separator and
 /// does not match a leading dot. Case sensitivity follows the platform.
+///
+/// Matches always come back with `/` separators, so the same pattern produces
+/// the same argv on every platform — see [`to_slash`].
 fn glob_matches(dir: &Path, pattern: &str) -> Option<Vec<String>> {
     let opts = glob::MatchOptions {
         case_sensitive: !cfg!(windows),
@@ -321,7 +325,7 @@ fn glob_matches(dir: &Path, pattern: &str) -> Option<Vec<String>> {
             } else {
                 p.strip_prefix(dir).ok()
             };
-            rel.unwrap_or(&p).to_string_lossy().into_owned()
+            to_slash(rel.unwrap_or(&p))
         })
         .collect();
     if out.is_empty() {
@@ -946,6 +950,18 @@ mod tests {
         assert_eq!(
             expand_in("tsc a/**/*.js", &[], &dir),
             vec![vec!["tsc", "a/b/three.js", "a/two.js"]]
+        );
+    }
+
+    /// Native separators become `/` on the way out, but a `\` on Unix is part
+    /// of the filename and has to survive untouched.
+    #[test]
+    #[cfg(unix)]
+    fn backslashes_in_unix_filenames_survive_globbing() {
+        let dir = scratch(&["we\\ird.js"]);
+        assert_eq!(
+            expand_in("rm *.js", &[], &dir),
+            vec![vec!["rm", "we\\ird.js"]]
         );
     }
 

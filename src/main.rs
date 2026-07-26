@@ -8,6 +8,7 @@ mod env;
 mod error;
 mod exec;
 mod graph;
+mod path;
 mod resolve;
 mod shell;
 mod tui;

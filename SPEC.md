@@ -283,7 +283,7 @@ A `run` string is parsed into an **AST** (program → command → word → part)
 - **`$VAR` / `${VAR}`** — expansion from the merged env (§7). `${...}` takes a plain variable name only; parameter expansion (`${VAR:-default}`, `${#VAR}`, …) is rejected with a specific error.
 - **`&&` `||` `;`** — sequencing with correct exit-code semantics (`&&` on `0`, `||` on non-zero, `;` always).
 - **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion applies). Quoted text is never globbed.
-- **Globs** — `*`, `?`, `[...]` and `**` match against the filesystem, relative to the task's `dir` (§3.2), following `sh` rules: `*` does not cross a `/` and does not match a leading dot, while `**` spans directories (including zero of them, so `a/**/*.js` matches `a/x.js`); case sensitivity follows the platform. A pattern that matches nothing stays literal, exactly as in `sh`.
+- **Globs** — `*`, `?`, `[...]` and `**` match against the filesystem, relative to the task's `dir` (§3.2), following `sh` rules: `*` does not cross a `/` and does not match a leading dot, while `**` spans directories (including zero of them, so `a/**/*.js` matches `a/x.js`); case sensitivity follows the platform. A pattern that matches nothing stays literal, exactly as in `sh`. Matches are returned with `/` separators on every platform, including Windows, so one `run` string produces one argv everywhere.
 
 Two rules keep globbing predictable:
 

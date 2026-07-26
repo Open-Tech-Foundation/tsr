@@ -56,6 +56,8 @@ predictable:
   literal string `*.js`. Only the `run` string itself can hold a pattern.
 - **A glob resolves when its command runs**, not when the task is planned — so in
   `build && rm dist/*.map` the pattern sees the files `build` just produced.
+- **Matches always use `/`**, Windows included, so a pattern produces the same
+  arguments on every platform.
 
 Variables are the other way round: they resolve *before* the sequence starts, so
 an undefined `$VAR` fails the task cleanly instead of half-way through.
