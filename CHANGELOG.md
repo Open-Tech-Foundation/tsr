@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Simplified `tsr --init` starter template (`tasks.toml`).**
+  Removed redundant explanatory prose comments from the scaffold while keeping clean, commented TOML examples for `[workspace]`, `[env]`, `[tasks.<name>]` (run, delegate, and auto-detect), and dependency graphs.
+
 ### Fixed
 
 - **Windows: `PATH` was looked up case-sensitively, so it was never found.**

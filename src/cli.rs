@@ -36,40 +36,22 @@ EXAMPLES:
 /// (SPEC §2.1), so a placeholder task would hide the real `npm run dev`.
 pub const INIT_TEMPLATE: &str = "\
 # tasks.toml — the workspace root anchor and config for `tsr`.
-#
-# No tasks are defined yet. Uncomment an example below, or run `tsr --config`
-# to author tasks interactively.
-#
-# Heads up: now that this file exists, only the tasks defined here run —
-# `tsr <task>` no longer falls back to auto-detecting `npm run <task>` & co.
-# A bare `[tasks.<name>]` (form 3, below) brings that auto-detection back.
-#
 # Docs: https://tsr.opentechf.org/docs
-#
-# Task names: [A-Za-z0-9_:-]+   ·   `#` = pkg#task   ·   quote keys containing `:`.
-# Precedence when a task runs: delegate → run → auto-detect the native runner.
 
-# Monorepo: glob the packages that `packages = [...]` can fan a task out across.
 # [workspace]
 # members = [\"apps/*\", \"packages/*\"]
 
-# Shared environment inherited by every task (task `env` overrides these).
 # [env]
 # NODE_ENV = \"development\"
 
-# Form 1 — delegate (and hand caching) to a specialist backend.
-# [tasks.build]
-# delegate = \"turbo\"                       # → `turbo run build`
-
-# Form 2 — spawn a command directly (no `npm run` startup tax).
 # [tasks.dev]
-# run = \"vite --host\"
+# run = \"vite\"
 
-# Form 3 — no `run`/`delegate`: auto-detect the ecosystem and use its runner
-# (npm/bun run <task>, cargo <task>, go <task>, uv run <task>).
+# [tasks.build]
+# delegate = \"turbo\"
+
 # [tasks.test]
 
-# Dependency graph + opt-in parallelism (sequential by default).
 # [tasks.ci]
 # deps = [\"lint\", \"test\", \"build\"]
 # parallel = true
