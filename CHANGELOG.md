@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists background `&` and subshells `( )` explicitly in their place.
 - The `&&`/`||`/`;` sequencing rule now has a single definition (`Sep::proceeds`)
   shared by the executor, replacing the duplicate copy the executor carried.
+- CI: the end-to-end suite is no longer Unix-only. Now that the builtins make a
+  `run` string portable, 33 of its 43 tests drive the real binary on Windows and
+  macOS too — including globbing, builtin chains and `dir`-relative patterns,
+  which is where separator bugs actually surface. Only the tests needing `sh` or
+  a POSIX-executable fake runner stay `#[cfg(unix)]`.
 
 ### Fixed
 

@@ -1,12 +1,15 @@
 //! End-to-end tests driving the compiled `tsr` binary against real temp
 //! workspaces, asserting on exit codes and output (SPEC §5, §6, §7, §8, §10).
 //!
-//! Some of the tasks these tests run reach for Unix binaries (`sh`, `false`) or
-//! POSIX permissions, so the suite is Unix-only. On Windows the CI matrix still
-//! compiles the binary and runs every platform-independent unit test — including
-//! the builtins (SPEC §8.5), which are what make `run` strings portable in the
-//! first place.
-#![cfg(unix)]
+//! Most of the suite runs on every platform in the CI matrix: the builtins
+//! (SPEC §8.5) are what make a `run` string portable, so a task built from them
+//! is testable everywhere. The individual tests that reach for a Unix binary
+//! (`sh`) or need a POSIX executable bit to stand up a fake runner carry their
+//! own `#[cfg(unix)]` — see [`shim`] and [`tsr_with_path`].
+//!
+//! Keep new tests platform-independent where the behaviour is: a task written
+//! with builtins asserts the same thing on Windows, and that is where separator
+//! and path-resolution bugs surface.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -90,6 +93,7 @@ fn loads_root_dotenv() {
     assert!(stdout(&out).contains("sekret"), "{}", stdout(&out));
 }
 
+#[cfg(unix)]
 #[test]
 fn env_file_list_overrides_default_dotenv_last_wins() {
     // env_file layers over the root .env; within the list, the later file wins.
@@ -114,6 +118,7 @@ fn env_file_list_overrides_default_dotenv_last_wins() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn env_file_is_scoped_per_task() {
     // A task without env_file sees only the root .env — no leakage from a sibling.
@@ -166,6 +171,7 @@ fn forwards_passthrough_after_double_dash() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn propagates_exact_child_exit_code() {
     let ws = workspace();
@@ -247,15 +253,14 @@ fn dependency_cycle_is_config_error_64() {
 fn deps_run_first_and_fail_fast() {
     let ws = workspace();
     let marker = ws.join("b-ran");
+    // The marker is named relatively: a task runs in the workspace root, and an
+    // absolute Windows path would put `\b` — an invalid escape — in the TOML.
     write(
         &ws,
         "tasks.toml",
-        &format!(
-            "[tasks.ci]\ndeps = [\"a\", \"b\"]\n\
-             [tasks.a]\nrun = \"false\"\n\
-             [tasks.b]\nrun = \"touch {}\"\n",
-            marker.display()
-        ),
+        "[tasks.ci]\ndeps = [\"a\", \"b\"]\n\
+         [tasks.a]\nrun = \"false\"\n\
+         [tasks.b]\nrun = \"touch b-ran\"\n",
     );
     let out = tsr(&ws, &["ci"]);
     assert_eq!(code(&out), 1);
@@ -426,6 +431,11 @@ fn packages_pattern_matching_nothing_is_error_64() {
 
 /// Write a fake runner that prints exactly how it was invoked, so tests can
 /// assert what `tsr` spawned without needing the real toolchain installed.
+///
+/// Unix-only: the shim is a shebang script made executable via the POSIX mode
+/// bits. The Windows equivalent would be a `.cmd`, which `Command::new` will not
+/// find by bare name, so those tests stay Unix-side.
+#[cfg(unix)]
 fn shim(dir: &Path, name: &str) {
     use std::os::unix::fs::PermissionsExt;
     let p = dir.join(name);
@@ -434,6 +444,8 @@ fn shim(dir: &Path, name: &str) {
 }
 
 /// Run `tsr` with `prepend` at the front of `PATH` (so shims shadow real tools).
+/// Unix-only, alongside [`shim`] — it also hard-codes the `:` PATH separator.
+#[cfg(unix)]
 fn tsr_with_path(dir: &Path, args: &[&str], prepend: &Path) -> Output {
     let path = std::env::var("PATH").unwrap_or_default();
     Command::new(BIN)
@@ -444,6 +456,7 @@ fn tsr_with_path(dir: &Path, args: &[&str], prepend: &Path) -> Output {
         .expect("failed to spawn tsr")
 }
 
+#[cfg(unix)]
 #[test]
 fn bare_task_autodetects_each_ecosystem() {
     // The "auto-detects each package's runner" claim (SPEC §3.1, form 3): a bare
@@ -492,6 +505,7 @@ fn bare_task_autodetects_each_ecosystem() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn deps_only_task_is_an_aggregator_not_autodetected() {
     // A bare task WITH deps is a pure aggregator (SPEC §5.2): it runs its deps and
@@ -505,10 +519,7 @@ fn deps_only_task_is_an_aggregator_not_autodetected() {
     write(
         &ws,
         "tasks.toml",
-        &format!(
-            "[tasks.ci]\ndeps = [\"a\"]\n[tasks.a]\nrun = \"touch {}\"\n",
-            marker.display()
-        ),
+        "[tasks.ci]\ndeps = [\"a\"]\n[tasks.a]\nrun = \"touch dep-ran\"\n",
     );
     let out = tsr_with_path(&ws, &["ci"], &bin);
     assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
@@ -535,6 +546,7 @@ fn bare_task_without_a_marker_is_runner_error_64() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn configless_runs_the_package_native_script() {
     // No tasks.toml at all: `tsr dev` still works repo-aware, mapping to the
@@ -554,6 +566,7 @@ fn configless_runs_the_package_native_script() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn configless_walks_up_to_the_nearest_package() {
     // Run from a nested directory: tsr finds the package marker in a parent, just
@@ -652,6 +665,7 @@ fn builtins_chain_through_the_mini_shell() {
     assert!(ws.join("out/deep/.stamp").is_file());
 }
 
+#[cfg(unix)]
 #[test]
 fn builtin_shadows_a_binary_of_the_same_name_on_path() {
     // A builtin always wins, so one `run` string behaves the same on every OS.
