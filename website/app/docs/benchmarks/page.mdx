@@ -1,6 +1,6 @@
 ---
 title: Benchmarks
-description: How tsr's overhead compares to npm, bun, deno, just, go-task, and make — for a single task and across a dependency graph.
+description: How tsr's overhead compares to npm, bun, nub, deno, just, go-task, and make — for a single task and across a dependency graph.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -14,10 +14,14 @@ the **runners themselves**, these scenarios run tasks that do almost nothing and
 measure what's left: process startup, config parsing, and the cost of reaching
 the child commands.
 
-The same task definitions are generated for every tool (`tsr`, `npm`, `bun`, `deno`,
+The same task definitions are generated for every tool (`tsr`, `npm`, `bun`, `nub`, `deno`,
 `just`, go-task, `make`, and `mise`) — see [`benches/`](https://github.com/Open-Tech-Foundation/tsr/tree/main/benches)
 — and timed with [hyperfine](https://github.com/sharkdp/hyperfine). The numbers
 below are loaded directly from the benchmark's JSON export.
+
+The last group is different: a **real multi-package workspace**, measuring the
+topological fan-out (`^task`) that makes `tsr` a monorepo runner. It compares only
+`tsr`, `pnpm`, and `bun` — [see why](#topological-fan-out--a-real-multi-package-workspace).
 
 ## startup — a single task
 
@@ -57,11 +61,13 @@ in-process against the filesystem relative to the task's `dir`.
 The real "`npm run` replacement" case: a task that calls a project-local tool
 like `vite` or `eslint`. These are Node programs, so every runner ultimately
 spawns Node; what differs is the runner's *own* startup on top. Only the runners
-that resolve `node_modules/.bin` can do this — `tsr`, `npm`, `bun`, and `deno` — so this
-is a four-way comparison (`just`/`make`/go-task/`mise` don't resolve project-local
+that resolve `node_modules/.bin` can do this — `tsr`, `npm`, `bun`, `nub`, and `deno` — so this
+is a five-way comparison (`just`/`make`/go-task/`mise` don't resolve project-local
 binaries, so a bare recipe wouldn't find the tool at all). `tsr` prepends
-`node_modules/.bin` to `PATH` like npm/bun/deno, then spawns the tool directly —
-skipping npm's extra Node startup.
+`node_modules/.bin` to `PATH` like npm/bun/nub/deno, then spawns the tool directly —
+skipping npm's extra Node startup. This is the one scenario where `tsr` is not
+first: `bun` reaches the tool faster still, and the three of `bun`/`tsr`/`deno`
+land within ~9 ms of each other once Node's own startup dominates.
 
 <BenchChart scenario={data.scenarios.localbin} />
 
@@ -76,19 +82,55 @@ tax is paid a single time.
 ## dependency graph — five tasks
 
 One task depending on five trivial tasks. `tsr`, `just`, go-task, `make`, and
-`mise` resolve the whole graph in a **single** launch. `npm`/`bun` have no
-dependency graph, so — as their users do — the five tasks are chained with `&&`,
-paying the runner's startup **five times over**.
+`mise` resolve the whole graph in a **single** launch. `npm`, `bun`, `nub`, and
+`deno` have no dependency graph, so — as their users do — the five tasks are
+chained with `&&`, paying the runner's startup **five times over**.
 
 <BenchChart scenario={data.scenarios.graph5} />
 
 ## dependency graph — ten tasks
 
 The same, scaled to ten dependencies. Overhead that is paid per-invocation grows
-linearly: the graph-native runners barely move, while the chained `npm`/`bun`
-costs roughly double from the five-task graph.
+linearly: the graph-native runners barely move, while every chained runner costs
+roughly double what it did on the five-task graph. `npm` reaches ~852 ms for ten
+no-op tasks — about **860× `tsr`**, which stays near 1 ms.
 
 <BenchChart scenario={data.scenarios.graph10} />
+
+## topological fan-out — a real multi-package workspace
+
+Everything above uses a single package. These scenarios use a **workspace of N
+packages in a dependency chain**, each with a no-op `build`, and ask each runner
+to build them all in dependency order — `tsr` with `deps = ["^build"]`, `pnpm`
+with `-r`, `bun` with `--filter`.
+
+Only those three take part, because only those three actually **order packages by
+dependency**. The chain is generated so the correct order is the *reverse* of
+alphabetical, which is how that was checked — `npm --workspaces` walks packages in
+name order and gets it wrong, so it isn't doing this job and is left out rather
+than shown losing a race it never entered.
+
+<BenchChart scenario={data.scenarios.topo10} />
+<BenchChart scenario={data.scenarios.topo50} />
+<BenchChart scenario={data.scenarios.topo200} />
+
+`tsr`'s marginal cost is **~56–62 µs per package**, and it *falls* slightly as the
+workspace grows (62 µs at 10 packages → 56 µs at 200). Reading every package
+manifest to build the dependency graph therefore stays off the critical path: what
+dominates is spawning each child, not resolving the graph.
+
+The two comparisons move in opposite directions. Against `pnpm`, `tsr`'s lead
+narrows with scale (118× → 80× → 53×) as pnpm amortises its large fixed startup.
+Against `bun` it widens (7.6× → 12.3× → 14.9×), because bun's per-package overhead
+is the bigger term.
+
+<Callout type="info" title="Why Turbo and Nx aren't here">
+  They exist to do content-hash caching — which `tsr` deliberately delegates to
+  them rather than reimplementing (see the [overview](/docs)). A no-op benchmark
+  would time them either cold, where `tsr` "wins" only by having no cache to
+  populate, or warm, where they "win" only by skipping the work. Neither number
+  would tell you anything true.
+</Callout>
 
 ## Takeaway
 
@@ -96,8 +138,8 @@ For a single task, `tsr` runs a metacharacter-free `run` string by spawning the
 child directly (`execvp`-style) — no language runtime, no wrapping shell — so it
 sits with the native runners (`make`, `just`) and well ahead of `npm run`. The
 gap **compounds across a dependency graph**: because `tsr` resolves the entire
-graph in one process, its cost stays flat while a chained `npm`/`bun` pays its
-startup once per task. That is the case `tsr` is built for.
+graph in one process, its cost stays flat while a chained `npm`/`bun`/`nub`/`deno`
+pays its startup once per task. That is the case `tsr` is built for.
 
 <Callout type="info" title="Not a build-performance claim">
   This measures runner overhead only. Content-hash and incremental caching are

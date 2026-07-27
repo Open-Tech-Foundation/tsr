@@ -77,6 +77,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   With this, **all three v1.1 capabilities are implemented**.
 
+- **Benchmark coverage for the topological fan-out**, plus `nub` in the
+  comparison set. New `topo10`/`topo50`/`topo200` scenarios build a real
+  multi-package workspace in dependency order, comparing only the runners that
+  actually order packages by dependency — `tsr` (`^build`), `pnpm` (`-r`) and
+  `bun` (`--filter`). `tsr`'s marginal cost measures **~56–62 µs per package**
+  and falls slightly as the workspace grows, so building the package graph stays
+  off the critical path. Turbo/Nx are excluded by design (they exist to cache,
+  which `tsr` delegates), as is `npm --workspaces` (it orders packages by name,
+  not by dependency). Results and rationale: [`benches/README.md`](benches/README.md).
+
 ### Changed
 
 - **`package.json` is now parsed with `serde_json`** instead of the hand-rolled

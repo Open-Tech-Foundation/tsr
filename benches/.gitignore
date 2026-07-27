@@ -1,3 +1,7 @@
 # Raw hyperfine JSON exports (the committed .md tables are the reference sample).
 results/*.json
 workspace/node_modules
+
+# The topo/<N>/ multi-package workspaces are ~270 generated files across three
+# sizes. Regenerate with gen-workspace.sh rather than committing them.
+topo/

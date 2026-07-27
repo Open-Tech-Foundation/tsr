@@ -23,6 +23,9 @@ const SCENARIOS = [
   ["steps5", "in-task steps — one task, 5 sequential commands"],
   ["graph5", "dependency graph — one task, 5 dependencies"],
   ["graph10", "dependency graph — one task, 10 dependencies"],
+  ["topo10", "topological fan-out — 10 packages in a dependency chain"],
+  ["topo50", "topological fan-out — 50 packages in a dependency chain"],
+  ["topo200", "topological fan-out — 200 packages in a dependency chain"],
 ];
 
 function load(scenario) {

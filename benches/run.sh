@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-tool benchmark for `tsr`. Compares tsr · npm · bun · just · go-task · make
+# Cross-tool benchmark for `tsr`. Compares tsr · npm · bun · nub · just · go-task · make
 # · mise across the scenarios below, driven by hyperfine (statistical, with warmup):
 #
 #   startup   one task that spawns `true`           per-invocation overhead
@@ -56,7 +56,7 @@ chain() {
 
 # Run one scenario.
 #   $1=name  $2=shell-mode(none|sh)  $3=task/target  $4=graph_n(0)  $5=tools(all|js)
-# `js` restricts to the runners that resolve node_modules/.bin (tsr/npm/bun) — the
+# `js` restricts to the runners that resolve node_modules/.bin (tsr/npm/bun/nub/deno) — the
 # only fair set for the local-binary scenario. The list is assembled from what's
 # installed.
 bench() {
@@ -65,10 +65,12 @@ bench() {
   if [[ "$graph_n" -gt 0 ]]; then
     has npm && args+=(-n npm "$(chain 'npm run --silent' "$graph_n")")
     has bun && args+=(-n bun "$(chain 'bun run' "$graph_n")")
+    has nub && args+=(-n nub "$(chain 'nub run' "$graph_n")")
     has deno && args+=(-n deno "$(chain 'deno task --quiet' "$graph_n")")
   else
     has npm && args+=(-n npm "npm run --silent $target")
     has bun && args+=(-n bun "bun run $target")
+    has nub && args+=(-n nub "nub run $target")
     has deno && args+=(-n deno "deno task --quiet $target")
   fi
   if [[ "$tools" != "js" ]]; then
@@ -89,6 +91,35 @@ bench() {
     "${args[@]}"
 }
 
+# Topological fan-out across a real multi-package workspace (SPEC §5.0). Only the
+# runners that actually order packages by dependency take part: tsr (`^build`),
+# pnpm (`-r`) and bun (`--filter`). `npm --workspaces` walks packages in *name*
+# order, not dependency order — verified against a chain whose correct order is
+# the reverse of alphabetical — so it is not doing this job, and is left out
+# rather than shown winning a race it is not running. Turbo/Nx are out of scope
+# by design: they exist to cache, which tsr delegates rather than reimplements
+# (SPEC §11), so a no-op comparison against them would measure nothing real.
+bench_topo() {
+  # Separate statements on purpose: bash expands every word of a `local` before
+  # assigning any of them, so `dir="$here/topo/$n"` on the same line would read an
+  # unset `n` (and abort under `set -u`).
+  local n="$1"
+  local dir="$here/topo/$n"
+  [[ -d "$dir" ]] || { echo "skip topo$n — run gen-workspace.sh first" >&2; return; }
+  local args=(-n tsr "$TSR build")
+  has pnpm && args+=(-n pnpm "pnpm -r --reporter=silent run build")
+  has bun && args+=(-n bun "bun run --filter * build")
+
+  echo "== topo$n ==" >&2
+  (
+    cd "$dir"
+    hyperfine --shell=none --warmup 20 --min-runs 80 \
+      --export-json "$out/topo$n.json" \
+      --export-markdown "$out/topo$n.md" \
+      "${args[@]}"
+  )
+}
+
 bench startup none noop
 bench shell none shell
 bench builtins none builtins
@@ -98,4 +129,8 @@ bench steps5 none steps5
 bench graph5 sh graph5 5
 bench graph10 sh graph10 10
 
-echo "results in benches/results/{startup,shell,builtins,globbing,localbin,steps5,graph5,graph10}.{md,json}" >&2
+bench_topo 10
+bench_topo 50
+bench_topo 200
+
+echo "results in benches/results/{startup,shell,builtins,globbing,localbin,steps5,graph5,graph10,topo10,topo50,topo200}.{md,json}" >&2
