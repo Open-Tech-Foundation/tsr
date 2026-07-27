@@ -212,6 +212,7 @@ args = ["--color"]
 
 ```
 tsr <task> [-- <args>...]   run a task; args after -- are forwarded
+tsr <task> --since <ref>    run only in packages affected since a git ref
 tsr --list                  list the tasks defined in tasks.toml
 tsr --config                edit tasks.toml in an interactive TUI
 tsr --init                  create a starter tasks.toml here
@@ -223,6 +224,10 @@ The **first positional argument is always a task name**. Every builtin is a flag
 so a task named `list` or `init` is never shadowed — `tsr list` runs the user's
 `list` task. This keeps the entire bare-word namespace available for
 tasks/scripts, which is the point of the tool.
+
+`--since <ref>` is the one option that may follow a task name (§9.3). It is not a
+bare word, so it shadows nothing; anything else after a task name is still the
+"forward args after `--`" error.
 
 `--config` opens a TUI for authoring tasks with every option (form, `dir`/
 `packages`, `deps`, `parallel`, `args`, `env`, `env_file`). It opens on a menu of
@@ -388,6 +393,17 @@ Only existing directories are added, so it is a no-op in non-JS packages. The co
 
 On **Windows** the name also has to be resolved against `PATHEXT`, because the tools this targets are batch shims — `npm` is `npm.cmd`, and `node_modules/.bin` holds `vite.cmd`. `tsr` searches the job's `PATH` in order, trying each `PATHEXT` extension for a bare name (a name written with an extension, or any path with a separator, is used as given). Without this a bare `npm` or `vite` cannot be spawned at all, since the OS appends only `.exe` when searching.
 
+
+### 9.3 Affected / changed detection (`--since <ref>`)
+
+`tsr <task> --since <ref>` restricts every `packages` fan-out to the packages **affected** by changes since `ref`.
+
+Affected = the packages the changed files live in, **plus every package that transitively depends on them**. Changing a library selects its dependents, because those are exactly the ones whose result could differ. The reverse does not hold: changing an app does not select the libraries it consumes.
+
+- **Changes are read from git**: committed changes, unstaged edits, *and* untracked files (a brand-new package exists only as untracked files). Any git failure — not a repository, unknown ref, git missing — is a runner error (exit `64`) rather than a silent full or empty run.
+- **A changed file outside every package widens to everything.** A root `tasks.toml`, lockfile, CI workflow or shared config could affect any package, so the selection is not narrowed at all. Running too much costs time; skipping work that should have run is a correctness failure.
+- **Only the selection narrows — never the upstream.** `^task` still builds a package's dependencies whether or not they changed, so a filtered run stays correct rather than merely fast.
+- **A pattern that matches packages, none of them affected, is a clean no-op** (exit `0`), not an error. An unmatched *pattern* remains an error (§9.1) because that is a typo.
 ---
 
 ## 10. Exit codes
@@ -414,13 +430,13 @@ The distinction lets pipelines tell "my task failed" (child code) apart from "th
 | Explicit cross-package deps (`pkg#task`) | ✓ | |
 | Opt-in `parallel`, fail-fast | ✓ | |
 | Env model + root `.env` | ✓ | |
-| Package **dependency graph** | | ✓ *(landed)* |
-| Topological deps (`^task`) | | ✓ *(landed)* |
-| Affected / changed detection | | ✓ *(pending)* |
+| Package **dependency graph** (§9) | | ✓ |
+| Topological deps (`^task`, §5.0) | | ✓ |
+| Affected / changed detection (§9.3) | | ✓ |
 
 The arrival of the dependency graph *is* what defines v1.1 as "the monorepo release." v1 stays deliberately graph-free (beyond explicit `pkg#task` edges) to remain lightweight.
 
-Affected / changed detection is the one v1.1 capability still outstanding; the graph it needs is in place and already exposes the downstream direction.
+**All three v1.1 capabilities are implemented.**
 
 ### Explicitly out of scope (delegated, not built)
 

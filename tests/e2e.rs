@@ -1033,3 +1033,166 @@ fn upstream_marker_can_name_a_different_task() {
     let s = stdout(&out);
     assert!(line_of(&s, "packages/ui") < line_of(&s, "apps/web"), "{s}");
 }
+
+// --- affected detection (`--since`, SPEC §9.3) -------------------------------
+
+/// Initialise a git repo in `dir` and commit everything as the baseline, so
+/// `--since HEAD` sees exactly the edits a test makes afterwards.
+fn git_baseline(dir: &Path) {
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "tsr-test")
+            .env("GIT_AUTHOR_EMAIL", "tsr@example.invalid")
+            .env("GIT_COMMITTER_NAME", "tsr-test")
+            .env("GIT_COMMITTER_EMAIL", "tsr@example.invalid")
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "baseline"]);
+}
+
+/// A workspace of apps/web → packages/ui, plus an independent apps/docs.
+fn affected_workspace(task: &str) -> PathBuf {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(&ws, "apps/docs/package.json", &manifest("docs", &[]));
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(&ws, "tasks.toml", task);
+    ws
+}
+
+const FANOUT: &str = "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+                      [tasks.build]\npackages = [\"apps/*\", \"packages/*\"]\nrun = \"pwd\"\n";
+
+fn ran(out: &str, rel: &str) -> bool {
+    let needle = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+    out.lines().any(|l| l.trim_end().ends_with(&needle))
+}
+
+#[test]
+fn since_selects_the_changed_package_and_its_dependents() {
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+    write(&ws, "packages/ui/index.ts", "export const x = 1;\n");
+
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(ran(&s, "packages/ui"), "changed package must run:\n{s}");
+    assert!(ran(&s, "apps/web"), "dependent must run:\n{s}");
+    assert!(
+        !ran(&s, "apps/docs"),
+        "unrelated package must not run:\n{s}"
+    );
+}
+
+#[test]
+fn since_does_not_widen_to_dependencies() {
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+    // Changing the app does not change the library it consumes.
+    write(&ws, "apps/web/index.ts", "export const y = 2;\n");
+
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(ran(&s, "apps/web"), "{s}");
+    assert!(!ran(&s, "packages/ui"), "{s}");
+}
+
+#[test]
+fn since_still_builds_upstream_packages_for_the_caret_marker() {
+    // The selection narrows, but `^build` correctness does not: web needs ui
+    // built whether or not ui changed.
+    let ws = affected_workspace(
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\"]\ndeps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+    git_baseline(&ws);
+    write(&ws, "apps/web/index.ts", "export const y = 2;\n");
+
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(ran(&s, "packages/ui"), "upstream must still build:\n{s}");
+    assert!(ran(&s, "apps/web"), "{s}");
+    assert!(!ran(&s, "apps/docs"), "{s}");
+}
+
+#[test]
+fn since_counts_untracked_files() {
+    // A brand-new package exists only as untracked files.
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+    write(&ws, "apps/docs/new-page.md", "# hi\n");
+
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(ran(&stdout(&out), "apps/docs"), "{}", stdout(&out));
+}
+
+#[test]
+fn since_runs_everything_when_a_change_is_outside_every_package() {
+    // A root-level change could affect anything, so it must not narrow.
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+    write(&ws, "README.md", "# changed\n");
+
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    for rel in ["apps/web", "apps/docs", "packages/ui"] {
+        assert!(ran(&s, rel), "{rel} should run:\n{s}");
+    }
+}
+
+#[test]
+fn since_with_no_changes_runs_nothing_and_succeeds() {
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("no affected packages"), "{s}");
+    assert!(!ran(&s, "apps/web"), "{s}");
+}
+
+#[test]
+fn since_with_an_unknown_ref_is_a_runner_error() {
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+    let out = tsr(&ws, &["build", "--since", "no-such-ref-xyz"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("git"), "{}", stderr(&out));
+}
+
+#[test]
+fn since_outside_a_git_repo_is_a_runner_error() {
+    // No git_baseline: the workspace is not a repository.
+    let ws = affected_workspace(FANOUT);
+    let out = tsr(&ws, &["build", "--since", "HEAD"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+}
+
+#[test]
+fn without_since_every_package_still_runs() {
+    // The filter is opt-in; nothing changes for an ordinary invocation.
+    let ws = affected_workspace(FANOUT);
+    git_baseline(&ws);
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    for rel in ["apps/web", "apps/docs", "packages/ui"] {
+        assert!(ran(&s, rel), "{rel} should run:\n{s}");
+    }
+}

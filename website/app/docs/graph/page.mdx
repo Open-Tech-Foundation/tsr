@@ -55,10 +55,27 @@ package's manifest name — so `workspace:*`, `path = "../ui"`, `replace`
 directives and plain version ranges all work the same way, across npm/bun,
 cargo, go and python.
 
-<Callout type="info" title="Affected detection is still v1.1">
-  Selecting only the packages touched by a change (`--since`-style filtering)
-  is the one monorepo capability not yet implemented.
-</Callout>
+## Affected detection (`--since`)
+
+Run a task only where a change could have mattered:
+
+```bash
+tsr build --since main
+```
+
+The **affected** set is the packages your changed files live in, plus every
+package that transitively depends on them. Changing a library selects its
+dependents; changing an app does not select its libraries.
+
+- Changes come from git: commits, unstaged edits **and** untracked files.
+- A change **outside every package** (root config, lockfile, CI workflow) runs
+  everything — it could affect anything, and skipping work is worse than
+  repeating it.
+- Only the *selection* narrows. `^task` still builds a package's dependencies
+  whether or not they changed, so a filtered run stays correct.
+- Nothing affected is a clean exit `0`, not an error.
+- A missing repo, unknown ref, or missing git is a runner error, exit `64` —
+  never a silent full or empty run.
 
 ## Sequential by default
 

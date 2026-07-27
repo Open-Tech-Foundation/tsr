@@ -7,6 +7,7 @@ description: Every tsr command and flag — running tasks, passthrough, list, an
 
 ```text
 tsr <task> [-- <args>...]   run a task; args after -- are forwarded
+tsr <task> --since <ref>    run only in packages affected since a git ref
 tsr --list                  list the tasks defined in tasks.toml
 tsr --config                edit tasks.toml in an interactive TUI
 tsr --init                  create a starter tasks.toml here
@@ -60,6 +61,26 @@ args = ["--color"]
 ```sh
 tsr test -- --watch    # → vitest --color --watch
 ```
+
+## `tsr <task> --since <ref>`
+
+Restricts every `packages` fan-out to the packages **affected** by changes since
+a git ref — the packages that changed, plus every package that transitively
+depends on them.
+
+```sh
+tsr build --since main
+tsr test --since HEAD~1
+```
+
+Changes are read from git, including untracked files. A change outside every
+package (root config, lockfile, CI workflow) runs everything, since it could
+affect anything. Upstream `^task` dependencies are still built regardless, so a
+filtered run stays correct. Nothing affected exits `0`; a missing repo or unknown
+ref exits `64`.
+
+This is the only option that may follow a task name — everything else still
+belongs after `--`.
 
 ## `tsr --list`
 

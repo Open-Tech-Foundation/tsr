@@ -1,6 +1,7 @@
 //! `tsr` — a lightweight, polyglot, repo-aware task runner (SPEC v1).
 
 mod builtins;
+mod changed;
 mod cli;
 mod config;
 mod detect;
@@ -63,7 +64,11 @@ fn run() -> error::Result<i32> {
             }
             Ok(0)
         }
-        Cli::Run { task, passthrough } => {
+        Cli::Run {
+            task,
+            passthrough,
+            since,
+        } => {
             // A `tasks.toml` is optional: with one, load it; without one, run the
             // task repo-aware via auto-detection (configless mode) so `tsr dev`
             // maps to `npm run dev` / `cargo dev` / … (SPEC §3.1 form 3).
@@ -78,8 +83,18 @@ fn run() -> error::Result<i32> {
             // i.e. the invoked task and its dependency closure (SPEC §7.3).
             let reachable = graph::reachable(&cfg, &task);
             env::validate_run_vars(&cfg, &reachable)?;
+            // `--since` narrows every `packages` fan-out to the affected set
+            // (SPEC §9.3). `None` here means "no filtering", which is also what
+            // a change outside every package resolves to.
+            let affected = match &since {
+                Some(git_ref) => {
+                    let files = changed::changed_files(&cfg.root, git_ref)?;
+                    changed::affected(&pkggraph::PackageGraph::build(&cfg), &files)
+                }
+                None => None,
+            };
             // exec::run owns its own failure reporting and returns the exit code.
-            Ok(exec::run(&cfg, &task, &passthrough))
+            Ok(exec::run(&cfg, &task, &passthrough, affected.as_ref()))
         }
     }
 }

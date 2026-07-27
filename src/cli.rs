@@ -13,6 +13,7 @@ tsr — a lightweight, polyglot, repo-aware task runner
 
 USAGE:
     tsr <task> [-- <args>...]   run a task; args after -- are forwarded
+    tsr <task> --since <ref>    run only in packages affected since a git ref
     tsr --list                  list the tasks defined in tasks.toml
     tsr --config                edit tasks.toml in an interactive TUI
     tsr --init                  create a starter tasks.toml here
@@ -28,7 +29,8 @@ ecosystem in the current directory or a parent.
 EXAMPLES:
     tsr dev
     tsr test -- --watch
-    tsr ci";
+    tsr ci
+    tsr build --since main";
 
 /// The starter config written by `tsr --init`: reference comments only, no live
 /// tasks. Defining nothing keeps the scaffold from shadowing what the repo
@@ -63,6 +65,9 @@ pub enum Cli {
     Run {
         task: String,
         passthrough: Vec<String>,
+        /// `--since <ref>`: restrict `packages` fan-outs to the packages
+        /// affected by changes since this git ref (SPEC §9.3).
+        since: Option<String>,
     },
     List,
     Init,
@@ -108,18 +113,46 @@ pub fn parse(args: &[String]) -> Result<Cli> {
             "unknown flag '{flag}'\n\n{USAGE}"
         ))),
         Some(task) => {
-            if head.len() > 1 {
-                return Err(TsrError::runtime(format!(
-                    "unexpected argument '{}' — forward args after '--' (e.g. `tsr {task} -- {}`)",
-                    head[1], head[1],
-                )));
-            }
+            let since = parse_since(task, &head[1..])?;
             Ok(Cli::Run {
                 task: task.to_string(),
                 passthrough: tail.to_vec(),
+                since,
             })
         }
     }
+}
+
+/// Parse the options that may follow a task name. Only `--since <ref>` (or
+/// `--since=<ref>`) is accepted; anything else is still the "did you mean `--`?"
+/// error, since the bare-word namespace belongs to task names (SPEC §6.1).
+fn parse_since(task: &str, rest: &[String]) -> Result<Option<String>> {
+    let mut since: Option<String> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        let arg = rest[i].as_str();
+        let value = if let Some(v) = arg.strip_prefix("--since=") {
+            i += 1;
+            v.to_string()
+        } else if arg == "--since" {
+            let v = rest.get(i + 1).ok_or_else(|| {
+                TsrError::runtime("'--since' needs a git ref (e.g. `--since main`)")
+            })?;
+            i += 2;
+            v.clone()
+        } else {
+            return Err(TsrError::runtime(format!(
+                "unexpected argument '{arg}' — forward args after '--' (e.g. `tsr {task} -- {arg}`)"
+            )));
+        };
+        if value.is_empty() {
+            return Err(TsrError::runtime(
+                "'--since' needs a git ref (e.g. `--since main`)",
+            ));
+        }
+        since = Some(value);
+    }
+    Ok(since)
 }
 
 /// Scaffold a starter `tasks.toml` in `dir`. Refuses to overwrite an existing
@@ -233,7 +266,8 @@ mod tests {
             parse_ok(&["dev"]),
             Cli::Run {
                 task: "dev".into(),
-                passthrough: vec![]
+                passthrough: vec![],
+                since: None,
             }
         );
     }
@@ -245,6 +279,7 @@ mod tests {
             Cli::Run {
                 task: "test".into(),
                 passthrough: vec!["--watch".into(), "-x".into()],
+                since: None,
             }
         );
     }
@@ -255,7 +290,8 @@ mod tests {
             parse_ok(&["test", "--"]),
             Cli::Run {
                 task: "test".into(),
-                passthrough: vec![]
+                passthrough: vec![],
+                since: None,
             }
         );
     }
@@ -268,6 +304,7 @@ mod tests {
             Cli::Run {
                 task: "run".into(),
                 passthrough: vec!["list".into(), "--help".into()],
+                since: None,
             }
         );
     }
@@ -308,6 +345,7 @@ mod tests {
             Cli::Run {
                 task: "list".into(),
                 passthrough: vec![],
+                since: None,
             }
         );
         assert_eq!(
@@ -315,6 +353,7 @@ mod tests {
             Cli::Run {
                 task: "init".into(),
                 passthrough: vec!["--flag".into()],
+                since: None,
             }
         );
     }
@@ -398,5 +437,71 @@ mod tests {
                 .to_string()
                 .contains("no arguments")
         );
+    }
+
+    #[test]
+    fn parses_since_in_both_spellings() {
+        for args in [
+            ["build", "--since", "main"].as_slice(),
+            ["build", "--since=main"].as_slice(),
+        ] {
+            assert_eq!(
+                parse_ok(args),
+                Cli::Run {
+                    task: "build".into(),
+                    passthrough: vec![],
+                    since: Some("main".into()),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn since_combines_with_passthrough() {
+        assert_eq!(
+            parse_ok(&["test", "--since", "HEAD~1", "--", "--watch"]),
+            Cli::Run {
+                task: "test".into(),
+                passthrough: vec!["--watch".into()],
+                since: Some("HEAD~1".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn since_without_a_ref_is_an_error() {
+        assert!(
+            parse_err(&["build", "--since"])
+                .to_string()
+                .contains("git ref")
+        );
+        assert!(
+            parse_err(&["build", "--since="])
+                .to_string()
+                .contains("git ref")
+        );
+    }
+
+    #[test]
+    fn a_ref_that_looks_like_a_flag_is_still_taken_as_the_value() {
+        // `--since` consumes the next token whatever it is; git will reject a
+        // bogus ref far more informatively than we could.
+        assert_eq!(
+            parse_ok(&["build", "--since", "--weird"]),
+            Cli::Run {
+                task: "build".into(),
+                passthrough: vec![],
+                since: Some("--weird".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn other_arguments_after_a_task_still_error() {
+        // The bare-word namespace belongs to task names (SPEC §6.1), so this
+        // must keep pointing at `--` rather than silently accepting options.
+        let err = parse_err(&["build", "extra"]).to_string();
+        assert!(err.contains("unexpected argument"), "{err}");
+        assert!(err.contains("--"), "{err}");
     }
 }

@@ -10,7 +10,7 @@
 //! killed (leaf spawns poll the flag), and a summary is printed. The first
 //! failing child's exact exit code is propagated (SPEC §10).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,8 +38,13 @@ const POLL_MAX: Duration = Duration::from_millis(20);
 /// child's exact code, or `64` when the runner itself could not proceed (bad
 /// spawn, missing delegate, unmatched `packages`, …). `passthrough` is forwarded
 /// to the root task's own command (SPEC §6).
-pub fn run(cfg: &Config, root: &str, passthrough: &[String]) -> i32 {
-    let ctx = Ctx::new(cfg);
+pub fn run(
+    cfg: &Config,
+    root: &str,
+    passthrough: &[String],
+    affected: Option<&HashSet<String>>,
+) -> i32 {
+    let ctx = Ctx::new(cfg, affected);
     let _ = ctx.run_task(root, passthrough, true);
 
     let runner_error = ctx.runner_error.lock().unwrap().clone();
@@ -123,6 +128,10 @@ enum SlotState {
 /// Shared execution state.
 struct Ctx<'a> {
     cfg: &'a Config,
+    /// `--since` selection: when set, a `packages` fan-out runs only in these
+    /// packages (SPEC §9.3). Upstream `^task` work is never filtered — it is
+    /// needed whether or not it changed.
+    affected: Option<&'a HashSet<String>>,
     aborted: AtomicBool,
     /// First failing child's exact exit code (set once; wall-clock-first wins).
     first_failure: Mutex<Option<i32>>,
@@ -133,9 +142,10 @@ struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    fn new(cfg: &'a Config) -> Ctx<'a> {
+    fn new(cfg: &'a Config, affected: Option<&'a HashSet<String>>) -> Ctx<'a> {
         Ctx {
             cfg,
+            affected,
             aborted: AtomicBool::new(false),
             first_failure: Mutex::new(None),
             runner_error: Mutex::new(None),
@@ -287,13 +297,29 @@ impl<'a> Ctx<'a> {
     /// a flat batch. With them, order matters, and the fan-out becomes a walk of
     /// the package graph instead (SPEC §4.2, §5).
     fn run_packages(&self, task: &Task, patterns: &[String], passthrough: &[String]) -> Status {
-        let pkgs = match workspace::match_packages(self.cfg, patterns, &task.key) {
+        let matched = match workspace::match_packages(self.cfg, patterns, &task.key) {
             Ok(p) => p,
             Err(e) => {
                 self.note_runner(strip_error(&e));
                 return Status::Runner;
             }
         };
+
+        // `--since` narrows the selection (SPEC §9.3). An unmatched *pattern* is
+        // still an error above — a typo — but a pattern that matched packages
+        // none of which are affected is the whole point of the flag, so it is a
+        // clean no-op rather than a failure.
+        let pkgs: Vec<workspace::Package> = match self.affected {
+            Some(set) => matched
+                .into_iter()
+                .filter(|p| set.contains(&p.rel))
+                .collect(),
+            None => matched,
+        };
+        if pkgs.is_empty() {
+            println!("· {} — no affected packages", task.key);
+            return Status::Ok;
+        }
 
         if task.deps.iter().any(|d| upstream_dep(d).is_some()) {
             return self.run_packages_topological(task, &pkgs, passthrough);
@@ -813,7 +839,7 @@ mod tests {
     fn run_task(toml: &str, task: &str) -> i32 {
         let (cfg, _root) = setup(toml);
         graph::validate(&cfg, task).unwrap();
-        run(&cfg, task, &[])
+        run(&cfg, task, &[], None)
     }
 
     use crate::graph;
@@ -854,7 +880,7 @@ mod tests {
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "ci").unwrap();
         // a fails → b must be skipped (never launched).
-        assert_eq!(run(&cfg, "ci", &[]), 1);
+        assert_eq!(run(&cfg, "ci", &[], None), 1);
         assert!(!marker.exists(), "sibling 'b' should not have run");
     }
 
@@ -869,7 +895,7 @@ mod tests {
         std::fs::write(root.join("tasks.toml"), &toml).unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "top").unwrap();
-        assert_eq!(run(&cfg, "top", &[]), 0);
+        assert_eq!(run(&cfg, "top", &[], None), 0);
         assert!(marker.exists());
     }
 
@@ -887,7 +913,7 @@ mod tests {
         std::fs::write(root.join("tasks.toml"), &toml).unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "top").unwrap();
-        assert_eq!(run(&cfg, "top", &[]), 0);
+        assert_eq!(run(&cfg, "top", &[], None), 0);
         let contents = std::fs::read_to_string(&log).unwrap();
         assert_eq!(contents.lines().count(), 1, "base must run exactly once");
     }
@@ -909,7 +935,7 @@ mod tests {
         let (cfg, _r) = setup(toml);
         graph::validate(&cfg, "top").unwrap();
         let start = Instant::now();
-        let code = run(&cfg, "top", &[]);
+        let code = run(&cfg, "top", &[], None);
         assert_eq!(code, 1);
         assert!(
             start.elapsed() < Duration::from_secs(4),
@@ -921,7 +947,7 @@ mod tests {
     fn passthrough_and_args_ordering() {
         // args prepended before CLI passthrough, appended to the resolved command.
         let (cfg, _r) = setup("[tasks.t]\nrun = \"vitest\"\nargs = [\"--color\"]\n");
-        let ctx = Ctx::new(&cfg);
+        let ctx = Ctx::new(&cfg, None);
         let task = cfg.task("t").unwrap();
         let job = ctx
             .build_job(task, &cfg.root, "t".into(), &["--watch".to_string()])
@@ -941,7 +967,7 @@ mod tests {
     #[test]
     fn passthrough_appends_to_the_last_command_of_a_sequence() {
         let (cfg, _r) = setup("[tasks.t]\nrun = \"build && vitest\"\nargs = [\"--color\"]\n");
-        let ctx = Ctx::new(&cfg);
+        let ctx = Ctx::new(&cfg, None);
         let job = ctx
             .build_job(
                 cfg.task("t").unwrap(),
@@ -965,7 +991,7 @@ mod tests {
     #[test]
     fn builtins_run_in_process_for_run_strings() {
         let (cfg, root) = setup("[tasks.t]\nrun = \"mkdir -p out/nested && touch out/nested/x\"\n");
-        assert_eq!(run(&cfg, "t", &[]), 0);
+        assert_eq!(run(&cfg, "t", &[], None), 0);
         assert!(root.join("out/nested/x").is_file());
     }
 
@@ -975,13 +1001,13 @@ mod tests {
         std::fs::create_dir_all(root.join("dist/keep")).unwrap();
         std::fs::write(root.join("dist/a.js"), "").unwrap();
         std::fs::write(root.join("dist/b.js"), "").unwrap();
-        assert_eq!(run(&cfg, "clean", &[]), 0);
+        assert_eq!(run(&cfg, "clean", &[], None), 0);
         // The glob expanded to the entries, so `dist` itself survives.
         assert!(root.join("dist").is_dir());
         assert!(!root.join("dist/a.js").exists());
         assert!(!root.join("dist/keep").exists());
         // And it stays a success once there is nothing left to match.
-        assert_eq!(run(&cfg, "clean", &[]), 0);
+        assert_eq!(run(&cfg, "clean", &[], None), 0);
     }
 
     #[test]
@@ -990,7 +1016,7 @@ mod tests {
         std::fs::create_dir_all(root.join("pkg")).unwrap();
         std::fs::write(root.join("pkg/a.log"), "").unwrap();
         std::fs::write(root.join("outside.log"), "").unwrap();
-        assert_eq!(run(&cfg, "clean", &[]), 0);
+        assert_eq!(run(&cfg, "clean", &[], None), 0);
         assert!(!root.join("pkg/a.log").exists());
         assert!(root.join("outside.log").exists(), "must not escape 'dir'");
     }
@@ -998,7 +1024,7 @@ mod tests {
     #[test]
     fn builtin_failure_propagates_its_exit_code() {
         let (cfg, _r) = setup("[tasks.t]\nrun = \"rm ghost.txt\"\n");
-        assert_eq!(run(&cfg, "t", &[]), 1);
+        assert_eq!(run(&cfg, "t", &[], None), 1);
     }
 
     #[test]
@@ -1007,7 +1033,7 @@ mod tests {
         std::fs::write(root.join("package.json"), "{}").unwrap();
         std::fs::write(root.join("tasks.toml"), "[tasks.test]\nargs = [\"--ci\"]\n").unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
-        let ctx = Ctx::new(&cfg);
+        let ctx = Ctx::new(&cfg, None);
         let task = cfg.task("test").unwrap();
         let job = ctx
             .build_job(task, &cfg.root, "test".into(), &["--watch".to_string()])

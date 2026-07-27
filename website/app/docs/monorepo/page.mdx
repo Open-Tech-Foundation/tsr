@@ -94,4 +94,13 @@ Every package's dependencies build before it does, a shared library builds once,
 and upstream packages are built even when the pattern didn't select them. See
 [the graph docs](/docs/graph) for the full rules.
 
-Affected/changed detection is the remaining **v1.1** item.
+## Running only what changed
+
+```bash
+tsr build --since main
+```
+
+`--since` restricts each fan-out to the packages affected by changes since a git
+ref — the packages that changed, plus everything that depends on them. Upstream
+dependencies are still built, so the run stays correct and not merely fast. See
+[the graph docs](/docs/graph#affected-detection-since) for the full rules.

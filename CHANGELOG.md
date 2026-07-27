@@ -52,6 +52,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     fan-out; `parallel` and fail-fast behave exactly as they do for any batch.
   - A cycle in the package graph is a runner error (exit `64`).
 
+- **Affected detection — `tsr <task> --since <ref>` (SPEC §6.1, §9.3).**
+  Restricts every `packages` fan-out to the packages affected by changes since a
+  git ref: the packages the changed files live in, plus every package that
+  transitively depends on them.
+
+  ```sh
+  tsr build --since main
+  ```
+
+  - Changes are read from git — commits, unstaged edits **and** untracked files,
+    since a brand-new package exists only as untracked files.
+  - A changed file **outside every package** (root config, lockfile, CI
+    workflow) runs everything: it could affect anything, and skipping work that
+    should have run is worse than repeating work that need not have.
+  - Only the *selection* narrows. Upstream `^task` dependencies are still built
+    whether or not they changed, so a filtered run stays correct, not just fast.
+  - Nothing affected is a clean exit `0`. An unmatched `packages` *pattern*
+    remains an error, because that is a typo.
+  - A missing repository, unknown ref, or missing git binary is a runner error
+    (exit `64`) rather than a silent full or empty run.
+  - `--since` is the only option that may follow a task name; the bare-word
+    namespace still belongs entirely to task names.
+
+  With this, **all three v1.1 capabilities are implemented**.
+
 ### Changed
 
 - **`package.json` is now parsed with `serde_json`** instead of the hand-rolled

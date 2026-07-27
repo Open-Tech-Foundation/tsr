@@ -30,10 +30,8 @@ pub struct PackageGraph {
     packages: Vec<Package>,
     /// `deps[i]` — packages that `i` depends on (upstream).
     deps: Vec<Vec<usize>>,
-    /// `dependents[i]` — packages that depend on `i` (downstream). Maintained
-    /// for affected-detection, the last v1.1 item, which walks the graph in this
-    /// direction; `^task` only ever walks upstream.
-    #[allow(dead_code)]
+    /// `dependents[i]` — packages that depend on `i` (downstream). Walked by
+    /// affected-detection; `^task` only ever walks upstream.
     dependents: Vec<Vec<usize>>,
     by_rel: HashMap<String, usize>,
     by_name: HashMap<String, usize>,
@@ -86,7 +84,6 @@ impl PackageGraph {
     }
 
     /// Every package in the workspace, ordered by relative path.
-    #[allow(dead_code)]
     pub fn packages(&self) -> &[Package] {
         &self.packages
     }
@@ -109,28 +106,14 @@ impl PackageGraph {
         &self.deps[index]
     }
 
-    /// Direct downstream dependents of `index` — what a change to it affects.
-    #[allow(dead_code)]
-    pub fn dependents_of(&self, index: usize) -> &[usize] {
-        &self.dependents[index]
-    }
-
-    /// Every package reachable upstream from `roots`, **always excluding** the
-    /// roots themselves — even where a cycle leads back to one. `^task` means
-    /// "my dependencies", never "me".
-    ///
-    /// The executor does not use this: it recurses one hop at a time through
-    /// [`Self::deps_of`] so that each package's own command is interleaved at the
-    /// right point. This is the bulk answer, for callers that want the set.
-    #[allow(dead_code)]
-    pub fn upstream_closure(&self, roots: &[usize]) -> Vec<usize> {
-        self.closure(roots, &self.deps)
-    }
-
     /// Every package reachable downstream from `roots`, **always excluding** the
-    /// roots themselves. This is the affected set for a given change; callers
-    /// that also want the changed packages add them back explicitly.
-    #[allow(dead_code)]
+    /// roots themselves even where a cycle leads back to one. This is the
+    /// affected set for a change; callers that also want the changed packages
+    /// themselves add them back explicitly.
+    ///
+    /// There is deliberately no upstream twin: the executor walks upstream one
+    /// hop at a time through [`Self::deps_of`], so that each package's own
+    /// command is interleaved at the right point rather than run as a bulk set.
     pub fn downstream_closure(&self, roots: &[usize]) -> Vec<usize> {
         self.closure(roots, &self.dependents)
     }
@@ -255,7 +238,7 @@ mod tests {
         let web = g.index_of("@scope/web").unwrap();
         let ui = g.index_of("packages/ui").unwrap();
         assert_eq!(g.deps_of(web), &[ui]);
-        assert_eq!(g.dependents_of(ui), &[web]);
+        assert_eq!(g.downstream_closure(&[ui]), vec![web]);
         // `react` matched no workspace package, so it produced no edge.
         assert_eq!(g.deps_of(ui), &[] as &[usize]);
     }
@@ -378,8 +361,8 @@ mod tests {
     }
 
     #[test]
-    fn closures_are_transitive_in_both_directions() {
-        // web → ui → tokens
+    fn downstream_closure_is_transitive() {
+        // web → ui → tokens, so a change to tokens reaches web through ui.
         let g = graph(
             &["apps/*", "packages/*"],
             &[
@@ -388,16 +371,14 @@ mod tests {
                 ("packages/tokens", "package.json", &pkg_json("tokens", &[])),
             ],
         );
-        let web = g.index_of("web").unwrap();
         let tokens = g.index_of("tokens").unwrap();
-        assert_eq!(
-            rels(&g, &g.upstream_closure(&[web])),
-            vec!["packages/tokens", "packages/ui"]
-        );
         assert_eq!(
             rels(&g, &g.downstream_closure(&[tokens])),
             vec!["apps/web", "packages/ui"]
         );
+        // Direction matters: nothing depends on the app itself.
+        let web = g.index_of("web").unwrap();
+        assert!(g.downstream_closure(&[web]).is_empty());
     }
 
     #[test]
@@ -425,10 +406,10 @@ mod tests {
             ],
         );
         // Construction and traversal still work — only ordering is impossible.
-        // The walk terminates, and `a` stays out of its own upstream set even
+        // The walk terminates, and `a` stays out of its own affected set even
         // though the cycle leads back to it.
         let a = g.index_of("a").unwrap();
-        assert_eq!(rels(&g, &g.upstream_closure(&[a])), vec!["packages/b"]);
+        assert_eq!(rels(&g, &g.downstream_closure(&[a])), vec!["packages/b"]);
 
         let err = g.topo_order().unwrap_err();
         assert!(err.to_string().contains("cycle"), "{err}");
@@ -486,7 +467,7 @@ mod tests {
         let g = PackageGraph::from_packages(Vec::new());
         assert!(g.packages().is_empty());
         assert!(g.topo_order().unwrap().is_empty());
-        assert!(g.upstream_closure(&[]).is_empty());
+        assert!(g.downstream_closure(&[]).is_empty());
     }
 
     #[test]
