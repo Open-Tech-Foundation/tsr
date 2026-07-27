@@ -1,9 +1,21 @@
 name: CI
 
+# `website/` is a separate Node project that cargo never builds, so a docs-only
+# change cannot affect these jobs. Skipping them there saves a three-OS matrix
+# per docs commit. Everything else — including `.github/**` itself — still runs.
+#
+# Note: the release workflow is deliberately *not* filtered this way. It gates on
+# a version bump rather than on paths, and a release commit often touches
+# `website/` too (the docs version badge), so ignoring those paths there could
+# silently skip a real release.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "website/**"
   pull_request:
+    paths-ignore:
+      - "website/**"
 
 # Cancel superseded runs on the same ref.
 concurrency:

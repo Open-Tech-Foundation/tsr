@@ -9,7 +9,7 @@ export default defineDocsConfig({
   site: { url: "https://tsr.opentechf.org" },
   docs: {
     title: "tsr",
-    version: "v0.2.0",
+    version: "v0.6.0",
     dir: "docs",
     homeUrl: "/",
     github: "https://github.com/Open-Tech-Foundation/tsr",
