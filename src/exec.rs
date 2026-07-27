@@ -1060,6 +1060,60 @@ mod tests {
     }
 
     #[test]
+    fn no_bail_does_not_kill_a_parallel_sibling() {
+        // The mirror of `parallel_fail_fast_kills_slow_sibling`: with --no-bail
+        // the abort flag is never set, so the slow sibling runs to completion
+        // and leaves its marker — while the failure still propagates.
+        let root = scratch_root();
+        let marker = root.join("slow-finished");
+        let toml = format!(
+            "[tasks.top]\ndeps = [\"fast\", \"slow\"]\nparallel = true\n\
+             [tasks.fast]\nrun = \"false\"\n\
+             [tasks.slow]\nrun = \"sleep 1 && touch {}\"\n",
+            marker.display()
+        );
+        std::fs::write(root.join("tasks.toml"), &toml).unwrap();
+        let cfg = Config::load(&root.join("tasks.toml")).unwrap();
+        graph::validate(&cfg, "top").unwrap();
+
+        let opts = RunOptions {
+            no_bail: true,
+            ..RunOptions::default()
+        };
+        let code = run(&cfg, "top", &[], Selection::plain(&opts));
+        assert_eq!(code, 1, "the first failure still propagates");
+        assert!(
+            marker.exists(),
+            "--no-bail must let a parallel sibling finish"
+        );
+    }
+
+    #[test]
+    fn no_bail_runs_every_package_of_a_failing_fan_out() {
+        // A fan-out is a batch too: --no-bail must not stop at the first
+        // package that fails.
+        let root = scratch_root();
+        for pkg in ["a", "b"] {
+            let dir = root.join("packages").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("package.json"), format!("{{\"name\":\"{pkg}\"}}")).unwrap();
+        }
+        let toml = "[workspace]\nmembers = [\"packages/*\"]\n\
+                    [tasks.build]\npackages = [\"packages/*\"]\nrun = \"false\"\n";
+        std::fs::write(root.join("tasks.toml"), toml).unwrap();
+        let cfg = Config::load(&root.join("tasks.toml")).unwrap();
+
+        let opts = RunOptions {
+            no_bail: true,
+            ..RunOptions::default()
+        };
+        let ctx = Ctx::new(&cfg, Selection::plain(&opts));
+        assert_eq!(ctx.run_task("build", &[], true), Status::Failed(1));
+        // Both packages were attempted, not just the first.
+        assert_eq!(ctx.results.lock().unwrap().len(), 2);
+    }
+
+    #[test]
     fn passthrough_and_args_ordering() {
         // args prepended before CLI passthrough, appended to the resolved command.
         let (cfg, _r) = setup("[tasks.t]\nrun = \"vitest\"\nargs = [\"--color\"]\n");

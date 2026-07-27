@@ -154,14 +154,26 @@ fn cargo_deps(path: &Path) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    push_cargo_dep_tables(doc.as_item(), &mut out);
+    let mut inherited = Vec::new();
+    push_cargo_dep_tables(doc.as_item(), &mut out, &mut inherited);
 
     // `[target.'cfg(windows)'.dependencies]` and friends. A sibling crate
     // declared only for some platforms is still a workspace edge; missing it
     // would silently produce the wrong build order rather than an error.
     if let Some(targets) = doc.get("target").and_then(|i| i.as_table_like()) {
         for (_, cfg) in targets.iter() {
-            push_cargo_dep_tables(cfg, &mut out);
+            push_cargo_dep_tables(cfg, &mut out, &mut inherited);
+        }
+    }
+
+    // `dep = { workspace = true }` inherits from the workspace root, which is
+    // also where a `package = "…"` rename would live — so the member's key can
+    // differ from the real crate name. Resolve those against the root, falling
+    // back to the key when there is nothing to resolve against.
+    if !inherited.is_empty() {
+        let renames = cargo_workspace_dep_names(path);
+        for key in inherited {
+            out.push(renames.get(&key).cloned().unwrap_or(key));
         }
     }
     out
@@ -169,17 +181,57 @@ fn cargo_deps(path: &Path) -> Vec<String> {
 
 /// Push the dependency names from a container's three dependency tables. The
 /// container is either the manifest root or one `[target.<cfg>]` table.
-fn push_cargo_dep_tables(container: &toml_edit::Item, out: &mut Vec<String>) {
+/// Entries deferring to the workspace are collected into `inherited` instead,
+/// since resolving them needs the workspace root manifest.
+fn push_cargo_dep_tables(
+    container: &toml_edit::Item,
+    out: &mut Vec<String>,
+    inherited: &mut Vec<String>,
+) {
     const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
     for kind in KINDS {
         let Some(table) = container.get(kind).and_then(|i| i.as_table_like()) else {
             continue;
         };
         for (key, item) in table.iter() {
-            let name = item.get("package").and_then(|p| p.as_str()).unwrap_or(key);
-            out.push(name.to_string());
+            match item.get("package").and_then(|p| p.as_str()) {
+                // An explicit rename on the member always wins.
+                Some(name) => out.push(name.to_string()),
+                None if item.get("workspace").and_then(|w| w.as_bool()) == Some(true) => {
+                    inherited.push(key.to_string());
+                }
+                None => out.push(key.to_string()),
+            }
         }
     }
+}
+
+/// Map each `[workspace.dependencies]` key to the crate name it really refers
+/// to, found by walking up from a member manifest to the nearest `Cargo.toml`
+/// carrying a `[workspace]` table — the same search Cargo itself performs.
+///
+/// Only keys that are *renamed* need to appear; everything else resolves to
+/// itself, so the common case costs one file read and no allocations beyond it.
+fn cargo_workspace_dep_names(member: &Path) -> std::collections::HashMap<String, String> {
+    let mut names = std::collections::HashMap::new();
+    let mut dir = member.parent();
+    while let Some(d) = dir {
+        let manifest = d.join("Cargo.toml");
+        if let Some(doc) = toml_doc(&manifest)
+            && let Some(ws) = doc.get("workspace").and_then(|i| i.as_table_like())
+        {
+            if let Some(deps) = ws.get("dependencies").and_then(|i| i.as_table_like()) {
+                for (key, item) in deps.iter() {
+                    if let Some(real) = item.get("package").and_then(|p| p.as_str()) {
+                        names.insert(key.to_string(), real.to_string());
+                    }
+                }
+            }
+            break; // the nearest workspace root is the one that applies
+        }
+        dir = d.parent();
+    }
+    names
 }
 
 /// Collect distribution names from a `pyproject.toml`, covering PEP 621
@@ -454,6 +506,49 @@ mod tests {
                 "{expected} missing: {deps:?}"
             );
         }
+    }
+
+    /// `dep = { workspace = true }` inherits from the workspace root — including
+    /// a `package = "…"` rename declared there, which makes the member's key
+    /// differ from the real crate name.
+    #[test]
+    fn resolves_cargo_workspace_inherited_dependencies() {
+        let root = scratch();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n[workspace.dependencies]\n\
+             mylib = { path = \"crates/mylib\" }\n\
+             alias = { package = \"real\", path = \"crates/real\" }\n",
+        )
+        .unwrap();
+        let member = root.join("crates/app");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n[dependencies]\n\
+             mylib = { workspace = true }\nalias = { workspace = true }\nserde = \"1\"\n",
+        )
+        .unwrap();
+
+        let deps = manifest_deps(&member, Ecosystem::Cargo);
+        // Un-renamed inheritance keeps its key…
+        assert!(deps.contains(&"mylib".to_string()), "{deps:?}");
+        // …and a renamed one resolves to the real crate name, not the alias.
+        assert!(deps.contains(&"real".to_string()), "{deps:?}");
+        assert!(!deps.contains(&"alias".to_string()), "{deps:?}");
+    }
+
+    /// With no workspace root to inherit from, the key is the best answer
+    /// available — never a panic and never a dropped dependency.
+    #[test]
+    fn inherited_dependency_without_a_workspace_root_falls_back_to_its_key() {
+        let d = scratch();
+        fs::write(
+            d.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n[dependencies]\nmylib = { workspace = true }\n",
+        )
+        .unwrap();
+        assert_eq!(manifest_deps(&d, Ecosystem::Cargo), vec!["mylib"]);
     }
 
     /// PEP 508 requirements carry extras, specifiers and markers; only the

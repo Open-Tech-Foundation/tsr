@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never read, so a crate depending on a workspace sibling only on some platforms
   got no edge — producing a silently wrong build order rather than an error.
 
+- **Cargo workspace-inherited dependencies could lose their edge.**
+  `dep = { workspace = true }` takes its real crate name from the workspace
+  root, so a `package = "…"` rename declared there left the member's key
+  pointing at nothing — again a silently wrong build order. Inherited entries
+  are now resolved against the nearest ancestor `Cargo.toml` carrying a
+  `[workspace]` table, the same search Cargo performs.
+
 - **The `--config` TUI reported a valid `^task` config as broken.** The graph
   preview looked `^build` up as a task key, and since task names can never
   contain `^` the lookup always missed, rendering `● ^build (undefined task)` in

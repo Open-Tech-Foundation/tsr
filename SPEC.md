@@ -408,7 +408,7 @@ One rule spans every ecosystem: an edge exists exactly when a **declared depende
 | Ecosystem | Dependency fields read |
 |-----------|------------------------|
 | npm / bun | `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
-| cargo | `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, the same three under any `[target.<cfg>]`, following `package = "…"` renames |
+| cargo | `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, the same three under any `[target.<cfg>]`, following `package = "…"` renames and resolving `{ workspace = true }` against the workspace root |
 | go | `require` and `replace`, single-line and block form |
 | python | PEP 621 `[project]` + optional groups, PEP 735 `[dependency-groups]`, Poetry's tables |
 

@@ -1489,3 +1489,52 @@ fn resume_from_an_unknown_package_is_a_runner_error() {
         stderr(&out)
     );
 }
+
+#[test]
+fn upstream_deps_follow_cargo_workspace_inheritance() {
+    // `alias = { workspace = true }` where the root renames it to `real`: the
+    // member's key is not the crate name, so resolving through the workspace
+    // root is what produces the edge at all.
+    let ws = workspace();
+    write(
+        &ws,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/*\"]\n[workspace.dependencies]\n\
+         plain = { path = \"crates/plain\" }\n\
+         alias = { package = \"real\", path = \"crates/real\" }\n",
+    );
+    write(
+        &ws,
+        "crates/app/Cargo.toml",
+        "[package]\nname = \"app\"\n[dependencies]\n\
+         plain = { workspace = true }\nalias = { workspace = true }\n",
+    );
+    write(
+        &ws,
+        "crates/plain/Cargo.toml",
+        "[package]\nname = \"plain\"\n",
+    );
+    write(
+        &ws,
+        "crates/real/Cargo.toml",
+        "[package]\nname = \"real\"\n",
+    );
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"crates/*\"]\n\
+         [tasks.build]\npackages = [\"crates/*\"]\ndeps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(
+        line_of(&s, "crates/plain") < line_of(&s, "crates/app"),
+        "{s}"
+    );
+    assert!(
+        line_of(&s, "crates/real") < line_of(&s, "crates/app"),
+        "{s}"
+    );
+}
