@@ -861,3 +861,175 @@ fn globstar_matches_across_directories() {
     );
     assert!(!stdout(&out).contains("skip.ts"), "{}", stdout(&out));
 }
+
+// --- topological deps (`^task`, SPEC §4.2, §5) -------------------------------
+//
+// Every package's task is `run = "pwd"`, a builtin that prints the job's own
+// directory. Because the fan-out is sequential by default, the order of `pwd`
+// lines *is* the execution order — a portable ordering probe that needs no
+// external binary and no shell redirection.
+
+/// A `package.json` declaring workspace dependencies.
+fn manifest(name: &str, deps: &[&str]) -> String {
+    let entries = deps
+        .iter()
+        .map(|d| format!("\"{d}\": \"workspace:*\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{\"name\": \"{name}\", \"dependencies\": {{{entries}}}}}")
+}
+
+/// Index of the `pwd` line naming `rel`, for order assertions.
+fn line_of(out: &str, rel: &str) -> usize {
+    let needle = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+    out.lines()
+        .position(|l| l.trim_end().ends_with(&needle))
+        .unwrap_or_else(|| panic!("no output line for '{rel}' in:\n{out}"))
+}
+
+#[test]
+fn upstream_deps_run_in_topological_order() {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(
+        &ws,
+        "packages/ui/package.json",
+        &manifest("ui", &["tokens"]),
+    );
+    write(
+        &ws,
+        "packages/tokens/package.json",
+        &manifest("tokens", &[]),
+    );
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\", \"packages/*\"]\n\
+         deps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    // tokens → ui → web: each package strictly after everything it depends on.
+    assert!(
+        line_of(&s, "packages/tokens") < line_of(&s, "packages/ui"),
+        "{s}"
+    );
+    assert!(line_of(&s, "packages/ui") < line_of(&s, "apps/web"), "{s}");
+}
+
+#[test]
+fn upstream_deps_reach_packages_outside_the_selection() {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        // Only `apps/*` is selected, but building web requires building ui.
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\"]\ndeps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(line_of(&s, "packages/ui") < line_of(&s, "apps/web"), "{s}");
+}
+
+#[test]
+fn shared_upstream_package_builds_once() {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(&ws, "apps/admin/package.json", &manifest("admin", &["ui"]));
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\", \"packages/*\"]\n\
+         deps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    let ui = format!("packages{}ui", std::path::MAIN_SEPARATOR_STR);
+    let hits = s.lines().filter(|l| l.trim_end().ends_with(&ui)).count();
+    assert_eq!(hits, 1, "shared upstream should build once:\n{s}");
+}
+
+#[test]
+fn upstream_failure_skips_the_dependent_package() {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        // `false` fails in every package; ui is built first, so web never runs.
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\"]\ndeps = [\"^build\"]\nrun = \"false\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 1, "stderr {}", stderr(&out));
+    let all = format!("{}{}", stdout(&out), stderr(&out));
+    // The upstream package is what failed...
+    assert!(all.contains("packages/ui"), "{all}");
+    // ...and the dependent never launched, so it contributes no result line.
+    // (A task whose deps failed is likewise absent from a v1 summary.)
+    assert!(!all.contains("apps/web"), "web should not have run:\n{all}");
+}
+
+#[test]
+fn upstream_dep_without_packages_is_a_config_error() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.ci]\ndeps = [\"^build\"]\n");
+    let out = tsr(&ws, &["ci"]);
+    assert_eq!(code(&out), 64);
+    assert!(
+        stderr(&out).contains("requires 'packages'"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn package_dependency_cycle_is_a_runner_error() {
+    let ws = workspace();
+    write(&ws, "packages/a/package.json", &manifest("a", &["b"]));
+    write(&ws, "packages/b/package.json", &manifest("b", &["a"]));
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"packages/*\"]\n\
+         [tasks.build]\npackages = [\"packages/*\"]\ndeps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("cycle"), "{}", stderr(&out));
+}
+
+#[test]
+fn upstream_marker_can_name_a_different_task() {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        // web's `build` waits on `codegen` in its upstream packages.
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\"]\ndeps = [\"^codegen\"]\nrun = \"pwd\"\n\
+         [tasks.codegen]\npackages = [\"packages/*\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(line_of(&s, "packages/ui") < line_of(&s, "apps/web"), "{s}");
+}

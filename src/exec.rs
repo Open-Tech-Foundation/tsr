@@ -18,9 +18,10 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::builtins;
-use crate::config::{Config, Task};
+use crate::config::{Config, Task, upstream_dep};
 use crate::env;
 use crate::error::TsrError;
+use crate::pkggraph::PackageGraph;
 use crate::resolve::{self, Invocation};
 use crate::shell::{self, Arg, ExecPlan, ExpandedCommand, RunPlan};
 use crate::workspace;
@@ -177,28 +178,33 @@ impl<'a> Ctx<'a> {
 
     // --- task execution ---
 
-    /// Run a task by key, memoising so it executes at most once.
-    fn run_task(&self, key: &str, passthrough: &[String], is_root: bool) -> Status {
+    /// Run `f` under `key`, memoising so that unit of work executes at most once
+    /// even when several dependents reach it at the same time (diamond-safe).
+    ///
+    /// Keys are task keys for whole tasks and `"<task> (<pkg>)"` labels for the
+    /// per-package nodes of a topological fan-out. The two namespaces cannot
+    /// collide: task names admit neither spaces nor parentheses (SPEC §4.1).
+    fn memoized(&self, key: String, f: impl FnOnce() -> Status) -> Status {
         use std::sync::Arc;
 
         // Claim or find the memo slot.
         let (slot, owner) = {
             let mut memo = self.memo.lock().unwrap();
-            match memo.get(key) {
+            match memo.get(&key) {
                 Some(s) => (s.clone(), false),
                 None => {
                     let s = Arc::new(TaskSlot {
                         state: Mutex::new(SlotState::Running),
                         done: Condvar::new(),
                     });
-                    memo.insert(key.to_string(), s.clone());
+                    memo.insert(key, s.clone());
                     (s, true)
                 }
             }
         };
 
         if !owner {
-            // Another invocation owns this task; wait for its result.
+            // Another invocation owns this work; wait for its result.
             let mut st = slot.state.lock().unwrap();
             loop {
                 match &*st {
@@ -208,11 +214,18 @@ impl<'a> Ctx<'a> {
             }
         }
 
-        let status = self.run_task_inner(key, passthrough, is_root);
+        let status = f();
         let mut st = slot.state.lock().unwrap();
         *st = SlotState::Done(status);
         slot.done.notify_all();
         status
+    }
+
+    /// Run a task by key, memoising so it executes at most once.
+    fn run_task(&self, key: &str, passthrough: &[String], is_root: bool) -> Status {
+        self.memoized(key.to_string(), || {
+            self.run_task_inner(key, passthrough, is_root)
+        })
     }
 
     fn run_task_inner(&self, key: &str, passthrough: &[String], _is_root: bool) -> Status {
@@ -227,10 +240,13 @@ impl<'a> Ctx<'a> {
             }
         };
 
-        // 1. Dependencies first (SPEC §5). Their batch honours *this* task's
-        //    `parallel` flag. A dep failure fails the task (own command skipped).
-        if !task.deps.is_empty() {
-            let dep_status = self.run_task_batch(&task.deps, task.parallel);
+        // 1. Ordinary dependencies first (SPEC §5). Their batch honours *this*
+        //    task's `parallel` flag. A dep failure fails the task (own command
+        //    skipped). `^upstream` deps are *not* run here: they are relative to
+        //    each package of the fan-out, so they belong to step 2.
+        let plain = plain_deps(task);
+        if !plain.is_empty() {
+            let dep_status = self.run_task_batch(&plain, task.parallel);
             if !dep_status.is_ok() {
                 return dep_status;
             }
@@ -266,6 +282,10 @@ impl<'a> Ctx<'a> {
 
     /// Fan the task out across matching packages (SPEC §9.1), as a batch that
     /// honours the task's `parallel` flag.
+    ///
+    /// With no `^upstream` deps the packages are independent and the fan-out is
+    /// a flat batch. With them, order matters, and the fan-out becomes a walk of
+    /// the package graph instead (SPEC §4.2, §5).
     fn run_packages(&self, task: &Task, patterns: &[String], passthrough: &[String]) -> Status {
         let pkgs = match workspace::match_packages(self.cfg, patterns, &task.key) {
             Ok(p) => p,
@@ -274,6 +294,10 @@ impl<'a> Ctx<'a> {
                 return Status::Runner;
             }
         };
+
+        if task.deps.iter().any(|d| upstream_dep(d).is_some()) {
+            return self.run_packages_topological(task, &pkgs, passthrough);
+        }
 
         let mut jobs = Vec::with_capacity(pkgs.len());
         for pkg in &pkgs {
@@ -287,6 +311,137 @@ impl<'a> Ctx<'a> {
             }
         }
         self.run_job_batch(jobs, task.parallel)
+    }
+
+    /// Fan out in package-dependency order: each selected package becomes a node
+    /// that runs its `^`-named tasks in every package it depends on before its
+    /// own command (SPEC §4.2).
+    ///
+    /// Upstream packages are visited whether or not they were selected — that is
+    /// the point of `^`: building `apps/web` must build the libraries it uses
+    /// even when the pattern only named `apps/*`.
+    fn run_packages_topological(
+        &self,
+        task: &Task,
+        selected: &[workspace::Package],
+        passthrough: &[String],
+    ) -> Status {
+        let graph = PackageGraph::build(self.cfg);
+        // A cyclic package graph admits no order; refuse rather than pick one.
+        if let Err(e) = graph.topo_order() {
+            self.note_runner(strip_error(&e));
+            return Status::Runner;
+        }
+
+        let mut nodes = Vec::with_capacity(selected.len());
+        for pkg in selected {
+            match graph.index_of(&pkg.rel) {
+                Some(i) => nodes.push(i),
+                None => {
+                    // `match_packages` and the graph both enumerate via
+                    // `workspace::packages`, so this is unreachable in practice.
+                    self.note_runner(format!(
+                        "task '{}': package '{}' is not in the package graph",
+                        task.key, pkg.rel
+                    ));
+                    return Status::Runner;
+                }
+            }
+        }
+        self.run_node_batch(task, &graph, &nodes, task.parallel, passthrough)
+    }
+
+    /// One package's slice of a topological fan-out: upstream work first, then
+    /// this package's own command. Memoised per `(task, package)`, so a library
+    /// shared by several dependents is built once.
+    fn run_pkg_node(
+        &self,
+        task: &Task,
+        graph: &PackageGraph,
+        index: usize,
+        passthrough: &[String],
+    ) -> Status {
+        let pkg = graph.get(index);
+        let label = format!("{} ({})", task.key, pkg.rel);
+        self.memoized(label.clone(), || {
+            if self.aborted() {
+                return Status::Skipped;
+            }
+
+            // 1. This task's ordinary deps. Memoised by task key, so a fan-out
+            //    across N packages still runs them exactly once.
+            let plain = plain_deps(task);
+            if !plain.is_empty() {
+                let status = self.run_task_batch(&plain, task.parallel);
+                if !status.is_ok() {
+                    return status;
+                }
+            }
+
+            // 2. Each `^name`, in every package this one directly depends on.
+            //    Recursion carries the marker up the graph, so a transitive
+            //    upstream is reached through its own dependents' nodes.
+            let upstream = graph.deps_of(index);
+            if !upstream.is_empty() {
+                for dep in &task.deps {
+                    let Some(name) = upstream_dep(dep) else {
+                        continue;
+                    };
+                    let up_task = match self.cfg.task(name) {
+                        Some(t) => t,
+                        None => {
+                            self.note_runner(format!(
+                                "task '{}': upstream dep '{dep}' names no task '{name}'",
+                                task.key
+                            ));
+                            return Status::Runner;
+                        }
+                    };
+                    let status = self.run_node_batch(up_task, graph, upstream, task.parallel, &[]);
+                    if !status.is_ok() {
+                        return status;
+                    }
+                }
+            }
+
+            if self.aborted() {
+                return Status::Skipped;
+            }
+
+            // 3. This package's own command.
+            match self.build_job(task, &pkg.path, label.clone(), passthrough) {
+                Ok(job) => self.run_leaf(job),
+                Err(msg) => {
+                    self.note_runner(msg);
+                    Status::Runner
+                }
+            }
+        })
+    }
+
+    /// Run `task` across a set of package nodes, fail-fast, honouring `parallel`.
+    fn run_node_batch(
+        &self,
+        task: &Task,
+        graph: &PackageGraph,
+        nodes: &[usize],
+        parallel: bool,
+        passthrough: &[String],
+    ) -> Status {
+        if parallel {
+            let statuses: Vec<Status> = std::thread::scope(|scope| {
+                let handles: Vec<_> = nodes
+                    .iter()
+                    .map(|&i| scope.spawn(move || self.run_pkg_node(task, graph, i, passthrough)))
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            self.combine(&statuses)
+        } else {
+            self.run_sequential(nodes.len(), |k| {
+                self.run_pkg_node(task, graph, nodes[k], passthrough)
+            })
+        }
     }
 
     fn task_dir(&self, task: &Task) -> PathBuf {
@@ -581,6 +736,16 @@ enum LeafWait {
 
 /// Append extra args (task `args` + CLI passthrough) to the final command of a
 /// mini-shell sequence — the "resolved command" that passthrough targets.
+/// A task's ordinary `deps` — everything that is not an `^upstream` marker.
+/// Those are resolved per package during the fan-out, not as task-key edges.
+fn plain_deps(task: &Task) -> Vec<String> {
+    task.deps
+        .iter()
+        .filter(|d| upstream_dep(d).is_none())
+        .cloned()
+        .collect()
+}
+
 fn append_to_last(plan: &mut ExecPlan, extra: &[String]) {
     if extra.is_empty() {
         return;

@@ -107,7 +107,7 @@ deps = ["ui#build"]
 | `delegate` | string \| table | Backend to hand off to (form 1). String → `<bin> run <task>`. Table → `{ bin = "...", args = [...] }`. |
 | `dir` | string | Directory to run in. Defaults to workspace root. Mutually exclusive with `packages`. |
 | `packages` | array | Fan out across matching packages (globs or exact names). Mutually exclusive with `dir`. |
-| `deps` | array | Tasks that must run before this one (the dependency graph). |
+| `deps` | array | Tasks that must run before this one (the dependency graph). Accepts `task`, `pkg#task`, and `^task` (§5.0). |
 | `parallel` | bool | Run `deps` / `packages` concurrently. Default `false` (sequential). |
 | `args` | array | Default args prepended to the resolved command, before CLI passthrough. |
 | `env` | table | Per-task env; overrides `[env]` (see §7). |
@@ -131,7 +131,7 @@ Legal task-name characters: `[a-zA-Z0-9_-:]+` — letters, digits, `_`, `-`, `:`
 | Symbol | Meaning | Example |
 |--------|---------|---------|
 | `#` | Package↔task separator: run this exact task in this named package. | `web#build`, `web#build:prod` |
-| `^` | Upstream marker: run this task in the package's dependencies first (v1.1). | `^build` |
+| `^` | Upstream marker: run this task in the package's dependencies first (§5.0). Requires `packages`. | `^build` |
 | `*` | Glob wildcard in `members` / `packages`. | `apps/*` |
 
 Parsing rule: split on `#` first (package vs task), then the task portion may freely contain `:`. `web#build:update` → package `web`, task `build:update`. `^test:watch` → task `test:watch` in upstream deps.
@@ -144,7 +144,24 @@ Parsing rule: split on `#` first (package vs task), then the task portion may fr
 
 - `deps` lists the tasks that must complete before a task runs — these edges form the DAG.
 - **Explicit cross-package edges** (`pkg#task`, e.g. `ui#build`) ship in **v1**; they require no graph inference.
-- **Topological edges** (`^task`) are deferred to **v1.1**, because resolving "upstream dependencies" requires reading each package's manifest to build the dependency graph. See §9.
+- **Topological edges** (`^task`) resolve against the package dependency graph (§9).
+
+### 5.0 Topological edges (`^task`)
+
+`^name` inside `deps` means: *before this task runs in a package, run task `name` in every package that package depends on.*
+
+```toml
+[tasks.build]
+packages = ["apps/*", "packages/*"]
+deps = ["^build"]
+```
+
+- **`packages` is required.** `^` is relative to "the package this is running in", and only a fan-out supplies one. On a task that runs once in a single directory it is a config error (exit `64`).
+- **Upstream packages are visited even when the pattern did not select them.** Building `apps/*` builds the libraries those apps import; that is the entire point of the marker.
+- **`^name` may differ from the task's own name** (`deps = ["^codegen"]`), in which case `name` is looked up as an ordinary task and run in each upstream package.
+- Each `(task, package)` pair runs **at most once**, so a library shared by several dependents is built once.
+- Ordinary `deps` alongside `^` deps still run once, globally, before the fan-out.
+- A **cycle in the package graph** is a runner error (exit `64`): no valid order exists, and silently choosing one would be wrong. Note that package graphs are not otherwise required to be acyclic — the error is raised only when an order is actually needed.
 
 ### 5.1 Parallelism
 
@@ -346,7 +363,18 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 ## 9. Detection layer
 
 - **v1** — detect each package's **ecosystem** (via marker files: `package.json` → npm/bun, `Cargo.toml` → cargo, `go.mod` → go, `pyproject.toml` → uv/poetry) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
-- **v1.1** — additionally read **dependency edges** from each manifest (path/workspace deps) to build the package dependency graph that `^task`, affected-detection, and cross-package ordering require.
+- **v1.1** — additionally read **dependency edges** from each manifest to build the package dependency graph that `^task`, affected-detection, and cross-package ordering require.
+
+One rule spans every ecosystem: an edge exists exactly when a **declared dependency name matches another workspace package's manifest name**. Version specifiers and protocols are never inspected, so `workspace:*`, `path = "../ui"`, `replace` directives and plain ranges all resolve identically, and external registry dependencies drop out because nothing matches them.
+
+| Ecosystem | Dependency fields read |
+|-----------|------------------------|
+| npm / bun | `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
+| cargo | `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, following `package = "…"` renames |
+| go | `require` and `replace`, single-line and block form |
+| python | PEP 621 `[project]` + optional groups, PEP 735 `[dependency-groups]`, Poetry's tables |
+
+A malformed or absent manifest contributes no edges rather than failing discovery: the native runner reports a broken manifest far better than `tsr` could.
 
 ### 9.1 `packages` matching
 
@@ -386,11 +414,13 @@ The distinction lets pipelines tell "my task failed" (child code) apart from "th
 | Explicit cross-package deps (`pkg#task`) | ✓ | |
 | Opt-in `parallel`, fail-fast | ✓ | |
 | Env model + root `.env` | ✓ | |
-| Package **dependency graph** | | ✓ |
-| Topological deps (`^task`) | | ✓ |
-| Affected / changed detection | | ✓ |
+| Package **dependency graph** | | ✓ *(landed)* |
+| Topological deps (`^task`) | | ✓ *(landed)* |
+| Affected / changed detection | | ✓ *(pending)* |
 
 The arrival of the dependency graph *is* what defines v1.1 as "the monorepo release." v1 stays deliberately graph-free (beyond explicit `pkg#task` edges) to remain lightweight.
+
+Affected / changed detection is the one v1.1 capability still outstanding; the graph it needs is in place and already exposes the downstream direction.
 
 ### Explicitly out of scope (delegated, not built)
 

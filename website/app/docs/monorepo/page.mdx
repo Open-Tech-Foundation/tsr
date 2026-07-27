@@ -78,5 +78,20 @@ dir = "apps/web"
 deps = ["ui#build"]
 ```
 
-Topological deps (`^task`), affected/changed detection, and the package
-dependency graph arrive in **v1.1** — the "monorepo release."
+## Topological deps
+
+The package dependency graph and the upstream marker `^task` have landed: `tsr`
+reads each package's manifest, resolves the edges between workspace members, and
+runs a fan-out in dependency order.
+
+```toml
+[tasks.build]
+packages = ["apps/*", "packages/*"]
+deps = ["^build"]
+```
+
+Every package's dependencies build before it does, a shared library builds once,
+and upstream packages are built even when the pattern didn't select them. See
+[the graph docs](/docs/graph) for the full rules.
+
+Affected/changed detection is the remaining **v1.1** item.

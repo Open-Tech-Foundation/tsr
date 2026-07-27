@@ -360,6 +360,17 @@ impl Config {
 
             for dep in &task.deps {
                 validate_dep_ref(&task.key, dep)?;
+                // `^` means "in *this package's* dependencies", so it needs a
+                // package to be relative to. Only a `packages` fan-out supplies
+                // one — a task that runs once in a single directory has no
+                // upstream to speak of (SPEC §5).
+                if upstream_dep(dep).is_some() && task.packages.is_none() {
+                    return Err(TsrError::config(format!(
+                        "task '{}': upstream dep '{dep}' requires 'packages' — '^' resolves \
+                         against the package each fan-out runs in",
+                        task.key
+                    )));
+                }
             }
 
             // Reject unsupported mini-shell metacharacters at load time (SPEC
@@ -400,13 +411,25 @@ fn validate_task_key(key: &str) -> Result<()> {
     }
 }
 
-/// A dependency reference: `task`, `pkg#task`. The `^upstream` form is v1.1 and
-/// is rejected here with a pointer to the version boundary (SPEC §5, §11).
+/// The task name an upstream dep refers to: `^build` → `build`. `None` for an
+/// ordinary dep (SPEC §4.2).
+pub fn upstream_dep(dep: &str) -> Option<&str> {
+    dep.strip_prefix('^')
+}
+
+/// A dependency reference: `task`, `pkg#task` or `^task` (SPEC §4.2, §5).
+///
+/// `^pkg#task` is rejected: the upstream marker resolves its packages from the
+/// package graph, so naming one explicitly is contradictory.
 fn validate_dep_ref(owner: &str, dep: &str) -> Result<()> {
-    if dep.starts_with('^') {
-        return Err(TsrError::config(format!(
-            "task '{owner}': upstream dep '{dep}' (the '^' marker) is a v1.1 feature"
-        )));
+    if let Some(name) = upstream_dep(dep) {
+        if name.contains('#') {
+            return Err(TsrError::config(format!(
+                "task '{owner}': upstream dep '{dep}' cannot name a package — '^' already \
+                 means \"in this package's dependencies\""
+            )));
+        }
+        return validate_name_segment(dep, name);
     }
     validate_task_key(dep)
         .map_err(|_| TsrError::config(format!("task '{owner}': invalid dependency '{dep}'")))
@@ -557,9 +580,41 @@ mod tests {
     }
 
     #[test]
-    fn rejects_upstream_dep_as_v1_1() {
+    fn accepts_upstream_dep_on_a_fan_out() {
+        let cfg = load(
+            "[tasks.build]\npackages = [\"*\"]\ndeps = [\"^build\", \"codegen\"]\n\
+                        [tasks.codegen]\nrun = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.task("build").unwrap().deps, vec!["^build", "codegen"]);
+    }
+
+    #[test]
+    fn upstream_dep_requires_packages() {
+        // Without a fan-out there is no package for `^` to be relative to.
         let err = load("[tasks.ci]\ndeps = [\"^build\"]\n").unwrap_err();
-        assert!(err.to_string().contains("v1.1"));
+        assert!(err.to_string().contains("requires 'packages'"), "{err}");
+        assert_eq!(err.exit_code(), crate::error::EXIT_RUNNER_ERROR);
+    }
+
+    #[test]
+    fn rejects_package_qualified_upstream_dep() {
+        let err = load("[tasks.build]\npackages = [\"*\"]\ndeps = [\"^ui#build\"]\n").unwrap_err();
+        assert!(err.to_string().contains("cannot name a package"), "{err}");
+    }
+
+    #[test]
+    fn rejects_bare_upstream_marker() {
+        let err = load("[tasks.build]\npackages = [\"*\"]\ndeps = [\"^\"]\n").unwrap_err();
+        assert!(err.to_string().contains("empty name segment"), "{err}");
+    }
+
+    #[test]
+    fn upstream_dep_helper_splits_the_marker() {
+        assert_eq!(upstream_dep("^build"), Some("build"));
+        assert_eq!(upstream_dep("^test:watch"), Some("test:watch"));
+        assert_eq!(upstream_dep("build"), None);
+        assert_eq!(upstream_dep("ui#build"), None);
     }
 
     #[test]

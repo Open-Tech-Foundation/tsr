@@ -7,8 +7,16 @@
 
 use std::collections::HashSet;
 
-use crate::config::Config;
+use crate::config::{Config, Task, upstream_dep};
 use crate::error::{Result, TsrError};
+
+/// A task's ordinary `deps` — the edges of *this* graph. `^upstream` deps are
+/// excluded: they name a task to run in other **packages**, resolved against the
+/// package graph at execution time (SPEC §4.2), so they are not task-key edges
+/// and must not be looked up as one.
+fn plain_deps(task: &Task) -> impl Iterator<Item = &String> {
+    task.deps.iter().filter(|d| upstream_dep(d).is_none())
+}
 
 /// Validate the dependency subgraph reachable from `root`: every dep must name a
 /// defined task, and the graph must be acyclic.
@@ -33,7 +41,7 @@ pub fn reachable(cfg: &Config, root: &str) -> Vec<String> {
         }
         order.push(key.clone());
         if let Some(task) = cfg.task(&key) {
-            for dep in &task.deps {
+            for dep in plain_deps(task) {
                 stack.push(dep.clone());
             }
         }
@@ -63,7 +71,7 @@ fn dfs(
         .ok_or_else(|| TsrError::config(format!("task depends on unknown task '{key}'")))?;
 
     on_stack.push(key.to_string());
-    for dep in &task.deps {
+    for dep in plain_deps(task) {
         dfs(cfg, dep, on_stack, visited)?;
     }
     on_stack.pop();

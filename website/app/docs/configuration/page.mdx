@@ -44,7 +44,7 @@ Each task is a `[tasks.<name>]` table. The full field list:
 | `delegate` | string \| table | Backend to hand off to (form 1). |
 | `dir` | string | Directory to run in. Defaults to the workspace root. **Mutually exclusive with `packages`.** |
 | `packages` | array | Fan out across matching packages (globs or names). **Mutually exclusive with `dir`.** |
-| `deps` | array | Tasks that must run before this one (the dependency graph). |
+| `deps` | array | Tasks that must run before this one (the dependency graph). Accepts `task`, `pkg#task`, and `^task` (upstream — requires `packages`). |
 | `parallel` | bool | Run `deps` / `packages` concurrently. Default `false`. |
 | `args` | array | Default args prepended to the resolved command, before CLI passthrough. |
 | `env` | table | Per-task env; overrides `[env]`. |

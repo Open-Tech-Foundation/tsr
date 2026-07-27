@@ -9,10 +9,6 @@ mod error;
 mod exec;
 mod graph;
 mod path;
-/// The package dependency graph (SPEC §9, §11 — v1.1). Landed and unit-tested
-/// ahead of the two features that consume it, `^task` expansion and affected
-/// detection; nothing in the v1 execution path reads it yet.
-#[allow(dead_code)]
 mod pkggraph;
 mod resolve;
 mod shell;

@@ -28,10 +28,36 @@ deps = ["ui#build"]          # explicit cross-package edge
   `ci → b → base`), `base` runs **once**.
 - A dependency **cycle** is a config error, caught before execution, exit `64`.
 
-<Callout type="info" title="Topological deps are v1.1">
-  The upstream marker <code>^task</code> ("run this task in the package's
-  dependencies first") is deferred to v1.1, because it requires reading each
-  package's manifest to build the package dependency graph.
+## Topological deps (`^task`)
+
+The upstream marker `^task` means *"run this task in the package's dependencies
+first."* `tsr` reads each package's manifest to build the package dependency
+graph, then walks it:
+
+```toml
+[tasks.build]
+packages = ["apps/*", "packages/*"]
+deps = ["^build"]            # every dependency builds first
+```
+
+- **`packages` is required.** `^` is relative to the package it runs in, and
+  only a fan-out supplies one — on a single-directory task it is a config
+  error, exit `64`.
+- **Upstream packages are built even when the pattern didn't select them.**
+  `packages = ["apps/*"]` still builds the libraries those apps import.
+- **`^name` may name a different task** than the one declaring it, e.g.
+  `deps = ["^codegen"]`.
+- A shared library is built **once**, however many dependents need it.
+- A **cycle between packages** is a runner error, exit `64`.
+
+An edge exists when a declared dependency name matches another workspace
+package's manifest name — so `workspace:*`, `path = "../ui"`, `replace`
+directives and plain version ranges all work the same way, across npm/bun,
+cargo, go and python.
+
+<Callout type="info" title="Affected detection is still v1.1">
+  Selecting only the packages touched by a change (`--since`-style filtering)
+  is the one monorepo capability not yet implemented.
 </Callout>
 
 ## Sequential by default

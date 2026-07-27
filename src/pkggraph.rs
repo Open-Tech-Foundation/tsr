@@ -30,7 +30,10 @@ pub struct PackageGraph {
     packages: Vec<Package>,
     /// `deps[i]` — packages that `i` depends on (upstream).
     deps: Vec<Vec<usize>>,
-    /// `dependents[i]` — packages that depend on `i` (downstream).
+    /// `dependents[i]` — packages that depend on `i` (downstream). Maintained
+    /// for affected-detection, the last v1.1 item, which walks the graph in this
+    /// direction; `^task` only ever walks upstream.
+    #[allow(dead_code)]
     dependents: Vec<Vec<usize>>,
     by_rel: HashMap<String, usize>,
     by_name: HashMap<String, usize>,
@@ -83,6 +86,7 @@ impl PackageGraph {
     }
 
     /// Every package in the workspace, ordered by relative path.
+    #[allow(dead_code)]
     pub fn packages(&self) -> &[Package] {
         &self.packages
     }
@@ -106,6 +110,7 @@ impl PackageGraph {
     }
 
     /// Direct downstream dependents of `index` — what a change to it affects.
+    #[allow(dead_code)]
     pub fn dependents_of(&self, index: usize) -> &[usize] {
         &self.dependents[index]
     }
@@ -113,6 +118,11 @@ impl PackageGraph {
     /// Every package reachable upstream from `roots`, **always excluding** the
     /// roots themselves — even where a cycle leads back to one. `^task` means
     /// "my dependencies", never "me".
+    ///
+    /// The executor does not use this: it recurses one hop at a time through
+    /// [`Self::deps_of`] so that each package's own command is interleaved at the
+    /// right point. This is the bulk answer, for callers that want the set.
+    #[allow(dead_code)]
     pub fn upstream_closure(&self, roots: &[usize]) -> Vec<usize> {
         self.closure(roots, &self.deps)
     }
@@ -120,6 +130,7 @@ impl PackageGraph {
     /// Every package reachable downstream from `roots`, **always excluding** the
     /// roots themselves. This is the affected set for a given change; callers
     /// that also want the changed packages add them back explicitly.
+    #[allow(dead_code)]
     pub fn downstream_closure(&self, roots: &[usize]) -> Vec<usize> {
         self.closure(roots, &self.dependents)
     }

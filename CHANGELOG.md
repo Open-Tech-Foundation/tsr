@@ -30,9 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports a cycle, as a runner error (exit `64`). Malformed or absent manifests
   contribute no edges rather than failing discovery.
 
-  This is internal groundwork with no CLI surface of its own: `^task` and
-  affected-detection, the two features that consume it, remain v1.1 and are
-  still rejected/unavailable as before.
+- **Topological deps — the `^task` upstream marker (SPEC §4.2, §5.0).**
+  `deps = ["^build"]` now means "run `build` in every package this one depends
+  on, first". A `packages` fan-out becomes a walk of the package graph instead
+  of a flat batch.
+
+  ```toml
+  [tasks.build]
+  packages = ["apps/*", "packages/*"]
+  deps = ["^build"]
+  ```
+
+  - `packages` is **required**: `^` is relative to the package it runs in, and
+    only a fan-out supplies one. Otherwise it is a config error (exit `64`).
+  - Upstream packages are visited **even when the pattern did not select them** —
+    building `apps/*` builds the libraries those apps import.
+  - `^name` may name a task other than the one declaring it (`^codegen`).
+  - Each `(task, package)` pair runs at most once, so a library shared by several
+    dependents is built once.
+  - Ordinary `deps` alongside `^` deps still run once, globally, before the
+    fan-out; `parallel` and fail-fast behave exactly as they do for any batch.
+  - A cycle in the package graph is a runner error (exit `64`).
 
 ### Changed
 
