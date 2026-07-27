@@ -1,5 +1,7 @@
-//! Ecosystem detection via marker files, and the convention-based mapping from
-//! a bare task name to its native runner (SPEC §3.1 form 3, §9).
+//! Ecosystem detection via marker files, the convention-based mapping from a
+//! bare task name to its native runner (SPEC §3.1 form 3, §9), and the manifest
+//! reads that back it: the package's declared **name** (v1) and its declared
+//! **dependency names** (v1.1, the raw material for [`crate::pkggraph`]).
 
 use std::path::Path;
 
@@ -73,10 +75,38 @@ pub fn manifest_name(dir: &Path, eco: Ecosystem) -> Option<String> {
     }
 }
 
+/// Read the names of the package's **declared dependencies** (SPEC §9, v1.1).
+///
+/// Only names are collected — version specifiers, ranges and protocols are all
+/// irrelevant here, because a workspace edge exists exactly when a declared name
+/// matches another workspace package's manifest name. That keeps one rule across
+/// every ecosystem and sidesteps `workspace:*` vs `^1.2.3` vs `path = "…"`.
+///
+/// Unreadable or malformed manifests yield no dependencies rather than an error:
+/// package discovery must stay total, and the native runner gives a far better
+/// diagnostic for a broken manifest than we could.
+///
+/// The result is grouped by dependency kind in the order listed by each reader.
+/// Ordering *within* a kind follows the manifest for the TOML ecosystems and is
+/// alphabetical for JSON — deterministic either way, which is what the graph
+/// needs; reformatting a manifest never reorders a fan-out.
+pub fn manifest_deps(dir: &Path, eco: Ecosystem) -> Vec<String> {
+    match eco {
+        Ecosystem::Npm | Ecosystem::Bun => json_deps(&dir.join("package.json")),
+        Ecosystem::Cargo => cargo_deps(&dir.join("Cargo.toml")),
+        Ecosystem::Python => python_deps(&dir.join("pyproject.toml")),
+        Ecosystem::Go => go_deps(&dir.join("go.mod")),
+    }
+}
+
+/// Parse a TOML manifest, or `None` when it is unreadable or malformed.
+fn toml_doc(path: &Path) -> Option<toml_edit::DocumentMut> {
+    std::fs::read_to_string(path).ok()?.parse().ok()
+}
+
 /// Read `[table…].name` from a TOML manifest via `toml_edit`.
 fn toml_name(path: &Path, table_path: &[&str]) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let doc: toml_edit::DocumentMut = text.parse().ok()?;
+    let doc = toml_doc(path)?;
     let mut item = doc.as_item();
     for key in table_path {
         item = item.get(key)?;
@@ -84,78 +114,183 @@ fn toml_name(path: &Path, table_path: &[&str]) -> Option<String> {
     item.get("name")?.as_str().map(str::to_string)
 }
 
-/// Extract the top-level `"name"` string from `package.json` without pulling in
-/// a full JSON parser: find the first `"name"` key at object depth 1.
-fn json_name(path: &Path) -> Option<String> {
+/// Parse a JSON manifest. `None` when it is unreadable or malformed — a broken
+/// `package.json` is the native runner's problem to report, not ours.
+fn json_doc(path: &Path) -> Option<serde_json::Value> {
     let text = std::fs::read_to_string(path).ok()?;
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut esc = false;
-    // Track key strings at depth 1 followed by `:`.
-    while i < bytes.len() {
-        let c = bytes[i];
-        if in_str {
-            if esc {
-                esc = false;
-            } else if c == b'\\' {
-                esc = true;
-            } else if c == b'"' {
-                in_str = false;
-                // Is this the key "name" at depth 1?
-                if depth == 1 && text[..i].ends_with("\"name") {
-                    // Skip whitespace to ':' then read the value string.
-                    let mut j = i + 1;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    if j < bytes.len() && bytes[j] == b':' {
-                        return json_string_after(&text, j + 1);
-                    }
-                }
-            }
-        } else {
-            match c {
-                b'"' => in_str = true,
-                b'{' | b'[' => depth += 1,
-                b'}' | b']' => depth -= 1,
-                _ => {}
-            }
-        }
-        i += 1;
-    }
-    None
+    serde_json::from_str(&text).ok()
 }
 
-/// Read the next JSON string literal starting at/after `from`.
-fn json_string_after(text: &str, from: usize) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut i = from;
-    while i < bytes.len() && bytes[i] != b'"' {
-        i += 1;
-    }
-    if i >= bytes.len() {
-        return None;
-    }
-    i += 1; // opening quote
-    let mut out = String::new();
-    let mut esc = false;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        if esc {
-            out.push(c);
-            esc = false;
-        } else if c == '\\' {
-            esc = true;
-        } else if c == '"' {
-            return Some(out);
-        } else {
-            out.push(c);
+/// Extract the top-level `"name"` string from `package.json`.
+fn json_name(path: &Path) -> Option<String> {
+    json_doc(path)?.get("name")?.as_str().map(str::to_string)
+}
+
+/// Collect the keys of every dependency object in `package.json`.
+fn json_deps(path: &Path) -> Vec<String> {
+    const KINDS: [&str; 4] = [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ];
+    let Some(doc) = json_doc(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for kind in KINDS {
+        if let Some(obj) = doc.get(kind).and_then(serde_json::Value::as_object) {
+            out.extend(obj.keys().cloned());
         }
-        i += 1;
     }
-    None
+    out
+}
+
+/// Collect dependency names from a `Cargo.toml`'s three dependency tables. A
+/// renamed dependency (`ui = { package = "real-name" }`) contributes the *real*
+/// crate name, since that is what matches a workspace member's manifest name.
+fn cargo_deps(path: &Path) -> Vec<String> {
+    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let Some(doc) = toml_doc(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for kind in KINDS {
+        let Some(table) = doc.get(kind).and_then(|i| i.as_table_like()) else {
+            continue;
+        };
+        for (key, item) in table.iter() {
+            let name = item.get("package").and_then(|p| p.as_str()).unwrap_or(key);
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Collect distribution names from a `pyproject.toml`, covering PEP 621
+/// (`[project]`), PEP 735 (`[dependency-groups]`) and Poetry's own tables.
+fn python_deps(path: &Path) -> Vec<String> {
+    let Some(doc) = toml_doc(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+
+    if let Some(project) = doc.get("project").and_then(|i| i.as_table_like()) {
+        push_pep508(project.get("dependencies"), &mut out);
+        if let Some(extras) = project
+            .get("optional-dependencies")
+            .and_then(|i| i.as_table_like())
+        {
+            for (_, group) in extras.iter() {
+                push_pep508(Some(group), &mut out);
+            }
+        }
+    }
+
+    if let Some(groups) = doc.get("dependency-groups").and_then(|i| i.as_table_like()) {
+        for (_, group) in groups.iter() {
+            push_pep508(Some(group), &mut out);
+        }
+    }
+
+    // Poetry declares dependencies as table *keys*, not PEP 508 strings.
+    if let Some(poetry) = doc
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|i| i.as_table_like())
+    {
+        push_table_keys(poetry.get("dependencies"), &mut out);
+        if let Some(groups) = poetry.get("group").and_then(|i| i.as_table_like()) {
+            for (_, g) in groups.iter() {
+                push_table_keys(g.get("dependencies"), &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// Push the distribution names from an array of PEP 508 requirement strings.
+fn push_pep508(item: Option<&toml_edit::Item>, out: &mut Vec<String>) {
+    let Some(arr) = item.and_then(|i| i.as_array()) else {
+        return;
+    };
+    for value in arr.iter() {
+        if let Some(name) = value.as_str().and_then(pep508_name) {
+            out.push(name);
+        }
+    }
+}
+
+/// Push the keys of a dependency table.
+fn push_table_keys(item: Option<&toml_edit::Item>, out: &mut Vec<String>) {
+    if let Some(table) = item.and_then(|i| i.as_table_like()) {
+        out.extend(table.iter().map(|(k, _)| k.to_string()));
+    }
+}
+
+/// The distribution name of a PEP 508 requirement: the leading run before any
+/// extras, version specifier, environment marker or URL (`pkg[x]>=1 ; y` → `pkg`).
+fn pep508_name(req: &str) -> Option<String> {
+    let name: String = req
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Collect module paths from a `go.mod`'s `require` and `replace` directives,
+/// in both the single-line and parenthesised-block forms.
+fn go_deps(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut in_block = false;
+    for raw in text.lines() {
+        // Module paths never contain `//`, so this is a safe comment strip.
+        let line = raw.split("//").next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if in_block {
+            if line == ")" {
+                in_block = false;
+            } else {
+                push_first_word(line, &mut out);
+            }
+            continue;
+        }
+        for directive in ["require", "replace"] {
+            let Some(rest) = directive_body(line, directive) else {
+                continue;
+            };
+            if rest == "(" {
+                in_block = true;
+            } else {
+                push_first_word(rest, &mut out);
+            }
+            break;
+        }
+    }
+    out
+}
+
+/// The remainder of `line` after `directive`, if the line really opens with that
+/// directive (guards against `requirements ...` matching `require`).
+fn directive_body<'a>(line: &'a str, directive: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(directive)?;
+    if rest.starts_with(char::is_whitespace) || rest.starts_with('(') {
+        Some(rest.trim())
+    } else {
+        None
+    }
+}
+
+fn push_first_word(line: &str, out: &mut Vec<String>) {
+    if let Some(word) = line.split_whitespace().next() {
+        out.push(word.to_string());
+    }
 }
 
 /// Read the module path from a `go.mod` `module <path>` directive.
@@ -238,6 +373,96 @@ mod tests {
         let d = scratch();
         fs::write(d.join("pyproject.toml"), "[project]\nname = \"pkg\"\n").unwrap();
         assert_eq!(manifest_name(&d, Ecosystem::Python), Some("pkg".into()));
+    }
+
+    /// `manifest_deps` returns every *declared* name verbatim — filtering to
+    /// workspace members is the graph's job, not the reader's.
+    #[test]
+    fn reads_declared_dependency_names() {
+        let d = scratch();
+        fs::write(
+            d.join("package.json"),
+            r#"{"name": "app", "dependencies": {"ui": "workspace:*", "react": "^18"},
+                "devDependencies": {"vitest": "*"}}"#,
+        )
+        .unwrap();
+        // Names are grouped by dependency kind, alphabetical within each.
+        assert_eq!(
+            manifest_deps(&d, Ecosystem::Npm),
+            vec!["react", "ui", "vitest"]
+        );
+
+        let d = scratch();
+        fs::write(
+            d.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n[dependencies]\nserde = \"1\"\n\
+             alias = { package = \"real\", path = \"../real\" }\n[dev-dependencies]\ntempfile = \"3\"\n",
+        )
+        .unwrap();
+        // `alias` contributes the renamed crate's real name, `real`.
+        assert_eq!(
+            manifest_deps(&d, Ecosystem::Cargo),
+            vec!["serde", "real", "tempfile"]
+        );
+
+        let d = scratch();
+        fs::write(
+            d.join("go.mod"),
+            "module example.com/app\n\nrequire single.example/one v1.0.0\n\n\
+             require (\n\tex.com/a v0.1.0 // indirect\n\tex.com/b v2.0.0\n)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            manifest_deps(&d, Ecosystem::Go),
+            vec!["single.example/one", "ex.com/a", "ex.com/b"]
+        );
+    }
+
+    /// PEP 508 requirements carry extras, specifiers and markers; only the
+    /// distribution name identifies the package.
+    #[test]
+    fn strips_pep508_decoration() {
+        let d = scratch();
+        fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"app\"\n\
+             dependencies = [\"core>=1.0,<2\", \"web[async]\", \"tool ; python_version >= '3.11'\", \"plain\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            manifest_deps(&d, Ecosystem::Python),
+            vec!["core", "web", "tool", "plain"]
+        );
+    }
+
+    /// A `go.mod` directive is only a directive when the keyword stands alone.
+    #[test]
+    fn go_reader_ignores_lookalike_directives() {
+        let d = scratch();
+        fs::write(
+            d.join("go.mod"),
+            "module example.com/app\n\nrequirements v1\nreplacement v2\nrequire real.example/x v1.0.0\n",
+        )
+        .unwrap();
+        assert_eq!(manifest_deps(&d, Ecosystem::Go), vec!["real.example/x"]);
+    }
+
+    /// Manifest reads must never panic or error out: discovery has to stay total.
+    #[test]
+    fn malformed_manifests_yield_nothing() {
+        let d = scratch();
+        fs::write(d.join("package.json"), "{ this is not json").unwrap();
+        assert_eq!(manifest_name(&d, Ecosystem::Npm), None);
+        assert!(manifest_deps(&d, Ecosystem::Npm).is_empty());
+
+        let d = scratch();
+        fs::write(d.join("Cargo.toml"), "[package\nname =").unwrap();
+        assert_eq!(manifest_name(&d, Ecosystem::Cargo), None);
+        assert!(manifest_deps(&d, Ecosystem::Cargo).is_empty());
+
+        // A manifest that is absent entirely is equally inert.
+        let d = scratch();
+        assert!(manifest_deps(&d, Ecosystem::Go).is_empty());
     }
 
     #[test]

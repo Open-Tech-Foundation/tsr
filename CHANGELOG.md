@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Package dependency graph (SPEC §9, §11) — the foundation of v1.1.**
+  `tsr` now reads each workspace package's *declared dependencies* from its
+  manifest, in addition to the ecosystem and name it already read, and resolves
+  the edges between workspace members. One rule spans all five ecosystems: an
+  edge exists exactly when a declared dependency name matches another workspace
+  package's manifest name, so `workspace:*`, `path = "../ui"`, `replace`
+  directives and plain version ranges all resolve identically, and external
+  registry dependencies drop out on their own.
+  - npm/bun — `dependencies`, `devDependencies`, `peerDependencies`,
+    `optionalDependencies`
+  - cargo — `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`,
+    following `package = "…"` renames to the real crate name
+  - go — `require` and `replace`, in both single-line and block form
+  - python — PEP 621 `[project]` (including optional groups), PEP 735
+    `[dependency-groups]`, and Poetry's own tables
+  
+  Package graphs are not required to be acyclic — npm tolerates cycles and real
+  repos ship them — so construction never fails; only topological ordering
+  reports a cycle, as a runner error (exit `64`). Malformed or absent manifests
+  contribute no edges rather than failing discovery.
+
+  This is internal groundwork with no CLI surface of its own: `^task` and
+  affected-detection, the two features that consume it, remain v1.1 and are
+  still rejected/unavailable as before.
+
+### Changed
+
+- **`package.json` is now parsed with `serde_json`** instead of the hand-rolled
+  depth-1 key scanner, which could not read nested dependency objects. Names
+  are now read from strictly-valid JSON only — a malformed `package.json` no
+  longer yields a name by accident.
+
 ## [0.4.0] - 2026-07-26
 
 ### Changed

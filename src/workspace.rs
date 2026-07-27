@@ -22,9 +22,9 @@ pub struct Package {
     pub rel: String,
     /// Declared manifest name, if any (e.g. `@scope/web`).
     pub name: Option<String>,
-    /// Detected ecosystem. Retained for diagnostics/`list`; the per-package
-    /// command is re-resolved against the package dir at run time.
-    #[allow(dead_code)]
+    /// Detected ecosystem. Selects which manifest the package graph reads for
+    /// dependency edges; the per-package *command* is still re-resolved against
+    /// the package dir at run time.
     pub eco: Ecosystem,
 }
 
