@@ -106,11 +106,26 @@ fn run() -> error::Result<i32> {
                 _ => None,
             };
 
+            // Create the reporter file up front: discovering it is unwritable
+            // after a long build has already run would be useless.
+            let events = match &opts.reporter_file {
+                Some(path) => Some(std::sync::Mutex::new(std::fs::File::create(path).map_err(
+                    |e| {
+                        TsrError::runtime(format!(
+                            "cannot create reporter file '{}': {e}",
+                            path.display()
+                        ))
+                    },
+                )?)),
+                None => None,
+            };
+
             // exec::run owns its own failure reporting and returns the exit code.
             let selection = exec::Selection {
                 affected: affected.as_ref(),
                 skip: skip.as_ref(),
                 opts: &opts,
+                events: events.as_ref(),
             };
             Ok(exec::run(&cfg, &task, &passthrough, selection))
         }

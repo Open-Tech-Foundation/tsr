@@ -17,15 +17,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error still stops the run, since a missing `delegate` binary will be missing
   for every package too.
 
-- **`--reporter ndjson` — machine-readable output (SPEC §6.2).**
-  One JSON object per line on **stderr**: a `task` event as each unit of work
-  finishes, then a `summary`. Events go to stderr because children inherit stdio
-  and own stdout — that separation is what makes the stream parseable.
+- **`--reporter ndjson` and `--reporter-file <path>` — machine-readable output
+  (SPEC §6.2).** A `task` event as each unit of work finishes, then a `summary`.
 
   ```json
   {"durationMs":12.4,"exitCode":null,"label":"build (packages/ui)","status":"ok","type":"task"}
   {"durationMs":48.9,"exitCode":1,"failed":1,"ok":3,"runnerError":null,"skipped":2,"status":"failed","task":"build","type":"summary"}
   ```
+
+  Two independent sinks. `--reporter` chooses the **terminal** format; the
+  `ndjson` value writes events to stderr, which is fine to read but **not** safe
+  to parse — children inherit stdio, and one that logs JSON (pino, `jest --json`,
+  `tracing`) emits lines indistinguishable from reporter events, `type` field and
+  all. `--reporter-file <path>` is the sink to script against, because nothing
+  else writes to it. It works on its own, so the terminal keeps the human summary
+  while the file gets the machine-readable record:
+
+  ```sh
+  tsr ci --no-bail --reporter-file results.ndjson
+  ```
+
+  A file that cannot be created is a runner error (exit `64`) raised **before any
+  task runs**.
 
 - **`--resume-from <pkg>` — carry on from a package (SPEC §9.4).**
   Treats every package ordered before `<pkg>` as already built. The skipped

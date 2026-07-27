@@ -55,13 +55,13 @@ pub fn run(cfg: &Config, root: &str, passthrough: &[String], sel: Selection<'_>)
         (None, None) => 0,
     };
 
-    match ctx.sel.opts.reporter {
-        Reporter::Ndjson => ctx.emit_summary(root, code, runner_error.as_deref(), started),
-        Reporter::Human => {
-            if code != 0 {
-                ctx.print_summary(root, code, runner_error.as_deref());
-            }
-        }
+    if ctx.events_enabled() {
+        ctx.emit_summary(root, code, runner_error.as_deref(), started);
+    }
+    // The human summary is still printed on failure unless the terminal itself
+    // is carrying the NDJSON stream.
+    if ctx.sel.opts.reporter == Reporter::Human && code != 0 {
+        ctx.print_summary(root, code, runner_error.as_deref());
     }
     code
 }
@@ -76,6 +76,10 @@ pub struct Selection<'a> {
     /// `--resume-from`: packages to treat as already done (SPEC §9.4).
     pub skip: Option<&'a HashSet<String>>,
     pub opts: &'a RunOptions,
+    /// `--reporter-file`: an opened NDJSON sink. Owned by the caller so that a
+    /// failure to create it is reported before any task runs, rather than after
+    /// a long build has already happened.
+    pub events: Option<&'a Mutex<std::fs::File>>,
 }
 
 impl<'a> Selection<'a> {
@@ -88,6 +92,7 @@ impl<'a> Selection<'a> {
             affected: None,
             skip: None,
             opts,
+            events: None,
         }
     }
 }
@@ -224,7 +229,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn record(&self, label: &str, kind: ResultKind, dur: Option<Duration>) {
-        if self.sel.opts.reporter == Reporter::Ndjson {
+        if self.events_enabled() {
             self.emit(serde_json::json!({
                 "type": "task",
                 "label": label,
@@ -240,11 +245,37 @@ impl<'a> Ctx<'a> {
         });
     }
 
-    /// Write one NDJSON event to **stderr**. Children inherit stdio, so stdout
-    /// belongs to them; keeping events on stderr is what makes the stream
-    /// parseable at all (SPEC §6.2).
+    /// Whether any NDJSON sink is configured — the stderr reporter, a
+    /// `--reporter-file`, or both. Emission is gated on this rather than on the
+    /// reporter alone, so `--reporter-file` works on its own: the terminal keeps
+    /// the human summary while the file gets the machine-readable stream.
+    fn events_enabled(&self) -> bool {
+        self.sel.opts.reporter == Reporter::Ndjson || self.sel.events.is_some()
+    }
+
+    /// Write one NDJSON event to each configured sink (SPEC §6.2).
+    ///
+    /// `--reporter ndjson` puts events on stderr, which is fine to read but not
+    /// to parse: children inherit stdio, so their output — including any JSON
+    /// they log — lands in the same stream. `--reporter-file` is the sink to
+    /// script against, because nothing else writes to it.
     fn emit(&self, value: serde_json::Value) {
-        eprintln!("{value}");
+        let line = value.to_string();
+        if self.sel.opts.reporter == Reporter::Ndjson {
+            eprintln!("{line}");
+        }
+        if let Some(file) = self.sel.events {
+            use std::io::Write;
+            let mut f = file.lock().unwrap();
+            if let Err(e) = writeln!(f, "{line}") {
+                // Losing results silently is worse than failing: a CI job would
+                // read a truncated file and draw the wrong conclusion. (A
+                // failure while writing the *summary* cannot change the exit
+                // code, which is already computed by then — it still reports.)
+                drop(f);
+                self.note_runner(format!("cannot write reporter file: {e}"));
+            }
+        }
     }
 
     /// Final NDJSON event: the run's verdict and result tallies.
@@ -933,6 +964,7 @@ mod tests {
         resume_from: None,
         no_bail: false,
         reporter: Reporter::Human,
+        reporter_file: None,
     };
 
     fn scratch_root() -> PathBuf {

@@ -1538,3 +1538,99 @@ fn upstream_deps_follow_cargo_workspace_inheritance() {
         "{s}"
     );
 }
+
+/// The reason `--reporter-file` exists: a child that logs JSON to stderr is
+/// indistinguishable from a reporter event when both share a stream. The file
+/// sink is written by nobody else, so it stays parseable.
+#[cfg(unix)]
+#[test]
+fn reporter_file_is_not_polluted_by_child_output() {
+    let ws = workspace();
+    let noisy = ws.join("noisy.sh");
+    write(
+        &ws,
+        "noisy.sh",
+        "#!/bin/sh\n\
+         echo 'warning: unused variable x' >&2\n\
+         echo '{\"level\":\"info\",\"type\":\"summary\",\"msg\":\"child log\"}' >&2\n\
+         exit 0\n",
+    );
+    fs::set_permissions(
+        &noisy,
+        <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    write(
+        &ws,
+        "tasks.toml",
+        &format!("[tasks.ci]\nrun = \"{}\"\n", noisy.display()),
+    );
+
+    let out = tsr(&ws, &["ci", "--reporter-file", "results.ndjson"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+
+    // The child's noise reached the terminal…
+    assert!(
+        stderr(&out).contains("unused variable x"),
+        "{}",
+        stderr(&out)
+    );
+
+    // …but every line of the file is one of *our* events.
+    let text = fs::read_to_string(ws.join("results.ndjson")).unwrap();
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON: {l:?} ({e})")))
+        .collect();
+    assert!(!events.is_empty(), "no events written");
+    assert!(
+        !text.contains("child log"),
+        "child output leaked into the reporter file:\n{text}"
+    );
+    let summaries: Vec<&serde_json::Value> =
+        events.iter().filter(|e| e["type"] == "summary").collect();
+    assert_eq!(summaries.len(), 1, "exactly one summary: {events:?}");
+    assert_eq!(summaries[0]["exitCode"], 0);
+}
+
+#[test]
+fn reporter_file_works_without_the_ndjson_reporter() {
+    // The sinks are independent: the terminal keeps the human reporter while the
+    // file gets the machine-readable stream.
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.ok]\nrun = \"true\"\n");
+    let out = tsr(&ws, &["ok", "--reporter-file", "events.ndjson"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    // Human reporter prints nothing on success, so stderr carries no events.
+    assert!(!stderr(&out).contains("\"type\""), "{}", stderr(&out));
+
+    let text = fs::read_to_string(ws.join("events.ndjson")).unwrap();
+    assert!(text.contains("\"type\":\"summary\""), "{text}");
+}
+
+#[test]
+fn reporter_file_records_failures_too() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.boom]\nrun = \"false\"\n");
+    let out = tsr(&ws, &["boom", "--reporter-file", "events.ndjson"]);
+    assert_eq!(code(&out), 1);
+
+    let text = fs::read_to_string(ws.join("events.ndjson")).unwrap();
+    let last: serde_json::Value =
+        serde_json::from_str(text.lines().rfind(|l| !l.trim().is_empty()).unwrap()).unwrap();
+    assert_eq!(last["status"], "failed");
+    assert_eq!(last["exitCode"], 1);
+    assert_eq!(last["failed"], 1);
+}
+
+#[test]
+fn an_uncreatable_reporter_file_fails_before_running_anything() {
+    // Discovering the sink is unwritable *after* a long build would be useless.
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.mark]\nrun = \"touch ran.txt\"\n");
+    let out = tsr(&ws, &["mark", "--reporter-file", "no/such/dir/out.ndjson"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("reporter file"), "{}", stderr(&out));
+    assert!(!ws.join("ran.txt").exists(), "the task must not have run");
+}

@@ -3,6 +3,8 @@ title: CLI reference
 description: Every tsr command, option and exit code — running tasks, passthrough, affected detection, resuming, reporters, --list, --config and --init.
 ---
 
+import { Callout } from "@opentf/web-docs";
+
 # CLI reference
 
 ```text
@@ -26,7 +28,8 @@ Four options may follow a task name. Each accepts `--flag value` or
 | [`--since <ref>`](#tsr-task-since-ref) | — | Run only in packages affected since a git ref. |
 | [`--resume-from <pkg>`](#tsr-task-resume-from-pkg) | — | Skip packages ordered before `<pkg>`. |
 | [`--no-bail`](#tsr-task-no-bail) | off | Run everything; don't stop at the first failure. |
-| [`--reporter <fmt>`](#tsr-task-reporter-fmt) | `human` | `human` or `ndjson`. |
+| [`--reporter <fmt>`](#tsr-task-reporter-fmt) | `human` | Terminal format: `human` or `ndjson`. |
+| [`--reporter-file <path>`](#tsr-task-reporter-file-path) | — | Also write the NDJSON stream to a file. |
 
 | Builtin | Summary |
 |---------|---------|
@@ -134,8 +137,10 @@ package too.
 
 ## `tsr <task> --reporter <fmt>`
 
-| Format | Output |
-|--------|--------|
+Chooses what the **terminal** gets.
+
+| Format | Terminal output |
+|--------|-----------------|
 | `human` *(default)* | Nothing on success; a result table on failure. |
 | `ndjson` | One JSON object per line on **stderr**, always — success included. |
 
@@ -143,24 +148,47 @@ package too.
 tsr ci --reporter ndjson
 ```
 
-`ndjson` emits a `task` event as each unit of work finishes, then one `summary`:
+Both formats emit a `task` event as each unit of work finishes, then one
+`summary`:
 
 ```json
 {"durationMs":12.4,"exitCode":null,"label":"build (packages/ui)","status":"ok","type":"task"}
 {"durationMs":48.9,"exitCode":1,"failed":1,"ok":3,"runnerError":null,"skipped":2,"status":"failed","task":"build","type":"summary"}
 ```
 
-`status` is `ok`, `failed`, or `skipped`. Events go to **stderr** because child
-processes inherit stdio and own stdout — that separation is what makes the stream
-parseable at all. Child *stderr* is still interleaved, so parse per line and skip
-lines that aren't JSON objects.
+`status` is `ok`, `failed`, or `skipped`; `exitCode` is `null` unless the unit
+failed.
 
-Pairs naturally with `--no-bail`, which makes the event stream cover every task
-rather than stopping at the first failure:
+<Callout type="warning" title="Don't parse the terminal stream">
+  Child processes inherit stdio, so `--reporter ndjson` shares stderr with
+  whatever your tasks print. A child that logs JSON — pino, `jest --json`,
+  Rust's `tracing` — emits lines indistinguishable from reporter events, `type`
+  field and all. Filtering by "is this line JSON?" is **not** enough. Use
+  `--reporter-file` for anything you intend to parse.
+</Callout>
+
+## `tsr <task> --reporter-file <path>`
+
+Writes the NDJSON stream to a file. Nothing else writes there, so it is the sink
+that is actually safe to parse.
 
 ```sh
-tsr ci --no-bail --reporter ndjson 2> results.ndjson
+tsr ci --reporter-file results.ndjson
 ```
+
+It is **independent** of `--reporter`, so on its own you get the human summary on
+your terminal *and* a machine-readable record of the same run — which is usually
+what you want in CI:
+
+```sh
+tsr ci --no-bail --reporter-file results.ndjson
+```
+
+Pairing it with `--no-bail` makes the record cover every task rather than
+stopping at the first failure.
+
+If the file cannot be created, `tsr` exits `64` **before running anything** —
+finding out the sink is unwritable after a long build would be useless.
 
 ## `tsr --list`
 

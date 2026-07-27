@@ -23,6 +23,7 @@ OPTIONS (after a task name):
     --resume-from <pkg>    skip packages ordered before <pkg>
     --no-bail              keep going after a failure instead of stopping
     --reporter <fmt>       'human' (default) or 'ndjson' (JSON lines on stderr)
+    --reporter-file <path> also write JSON lines to <path> (safe to parse)
 
 The first argument is always a task name — every builtin is a flag, so a task
 named `list` or `init` is never shadowed.
@@ -36,7 +37,7 @@ EXAMPLES:
     tsr test -- --watch
     tsr ci
     tsr build --since main
-    tsr test --no-bail --reporter ndjson";
+    tsr test --no-bail --reporter-file results.ndjson";
 
 /// The starter config written by `tsr --init`: reference comments only, no live
 /// tasks. Defining nothing keeps the scaffold from shadowing what the repo
@@ -88,6 +89,13 @@ pub struct RunOptions {
     pub no_bail: bool,
     /// `--reporter <fmt>`.
     pub reporter: Reporter,
+    /// `--reporter-file <path>`: an independent NDJSON sink (SPEC §6.2).
+    ///
+    /// Separate from `reporter` on purpose. Children inherit stdio, so anything
+    /// written to a shared stream can collide with their output — a child that
+    /// logs JSON to stderr is indistinguishable from a reporter event. A file
+    /// nobody else writes to is the only sink that is safe to parse.
+    pub reporter_file: Option<std::path::PathBuf>,
 }
 
 /// A parsed command line.
@@ -207,6 +215,18 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
             "--no-bail" => {
                 opts.no_bail = true;
                 i += 1;
+            }
+            "--reporter-file" => {
+                opts.reporter_file = Some(
+                    value_of(
+                        rest,
+                        &mut i,
+                        arg,
+                        "--reporter-file",
+                        "a path (e.g. `--reporter-file results.ndjson`)",
+                    )?
+                    .into(),
+                );
             }
             "--reporter" => {
                 let value = value_of(
@@ -332,6 +352,7 @@ fn describe(task: &Task) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn parse_ok(args: &[&str]) -> Cli {
         parse(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
@@ -616,6 +637,7 @@ mod tests {
                     resume_from: Some("packages/ui".into()),
                     no_bail: true,
                     reporter: Reporter::Ndjson,
+                    reporter_file: None,
                 },
             }
         );
@@ -655,6 +677,33 @@ mod tests {
             let err = parse_err(&["build", flag]).to_string();
             assert!(err.contains(flag), "{err}");
         }
+    }
+
+    #[test]
+    fn parses_reporter_file_independently_of_reporter() {
+        // The file sink stands alone: the terminal keeps the human reporter.
+        let Cli::Run { opts, .. } = parse_ok(&["ci", "--reporter-file", "out.ndjson"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(opts.reporter, Reporter::Human);
+        assert_eq!(opts.reporter_file.as_deref(), Some(Path::new("out.ndjson")));
+
+        let Cli::Run { opts, .. } =
+            parse_ok(&["ci", "--reporter=ndjson", "--reporter-file=out.ndjson"])
+        else {
+            panic!("expected a run");
+        };
+        assert_eq!(opts.reporter, Reporter::Ndjson);
+        assert_eq!(opts.reporter_file.as_deref(), Some(Path::new("out.ndjson")));
+    }
+
+    #[test]
+    fn reporter_file_needs_a_path() {
+        assert!(
+            parse_err(&["ci", "--reporter-file"])
+                .to_string()
+                .contains("--reporter-file")
+        );
     }
 
     #[test]

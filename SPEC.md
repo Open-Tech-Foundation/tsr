@@ -238,18 +238,35 @@ after `--`" error.
 | `--since <ref>` | Run only in packages affected by changes since a git ref (§9.3). |
 | `--resume-from <pkg>` | Skip every package ordered before `pkg` (§9.4). |
 | `--no-bail` | Run every batch to completion instead of stopping at the first failure (§5.2). |
-| `--reporter <fmt>` | `human` (default) or `ndjson` (§6.2). |
+| `--reporter <fmt>` | Terminal format: `human` (default) or `ndjson` (§6.2). |
+| `--reporter-file <path>` | Also write the NDJSON stream to `path` (§6.2). |
 
 Each accepts both `--flag value` and `--flag=value`.
 
 ### 6.2 Reporters
 
-| Reporter | Output |
-|----------|--------|
+There are two independent sinks. `--reporter` chooses what the **terminal** gets;
+`--reporter-file <path>` additionally writes the NDJSON stream to a file. Either
+may be used alone, and `--reporter-file` on its own is the common case: a human
+summary on the terminal *and* a machine-readable record.
+
+| Reporter | Terminal output |
+|----------|-----------------|
 | `human` *(default)* | Nothing on success; a result table on failure (§5.2). |
 | `ndjson` | One JSON object per line on **stderr**, always — success included. |
 
-`ndjson` emits a `task` event as each unit of work finishes, then one `summary`
+**Only `--reporter-file` produces a parseable stream.** Child processes inherit
+stdio, so anything written to stdout or stderr shares the stream with their
+output — and a child that logs JSON to stderr (pino, `jest --json`, `tracing`)
+emits lines indistinguishable from reporter events, including ones carrying a
+`type` field. Filtering by "is this line JSON?" is therefore *not* sufficient.
+`--reporter ndjson` is for reading; `--reporter-file` is for scripting, because
+nothing else writes to that file.
+
+A failure to create the file is reported **before any task runs** (exit `64`) —
+discovering the sink is unwritable after a long build would be useless.
+
+Both sinks emit a `task` event as each unit of work finishes, then one `summary`
 event:
 
 ```json
@@ -257,10 +274,8 @@ event:
 {"durationMs":48.9,"exitCode":1,"failed":1,"ok":3,"runnerError":null,"skipped":2,"status":"failed","task":"build","type":"summary"}
 ```
 
-`status` is one of `ok`, `failed`, `skipped`. Events go to **stderr** because
-children inherit stdio and own stdout — that separation is what keeps the stream
-parseable. Child *stderr* is still interleaved, so consumers should parse
-per-line and ignore lines that are not JSON objects.
+`status` is one of `ok`, `failed`, `skipped`. `exitCode` is `null` unless the
+unit failed.
 
 `--config` opens a TUI for authoring tasks with every option (form, `dir`/
 `packages`, `deps`, `parallel`, `args`, `env`, `env_file`). It opens on a menu of
