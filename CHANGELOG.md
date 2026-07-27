@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Website: docs version badge set to `v0.6.0`, the release these docs describe.
+- CI: the build/test/lint workflow now skips website-only changes
+  (`paths-ignore: website/**`) — `website/` is a separate Node project that cargo
+  never builds, so a docs commit no longer spends a three-OS matrix. The release
+  workflow is deliberately *not* filtered: it gates on a version bump, and
+  release commits often touch `website/` too.
+
 ## [0.6.0] - 2026-07-27
 
 ### Added
@@ -72,12 +81,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The "nothing to do" message for a filtered fan-out is now `no packages
   selected` (was `no affected packages`), since `--resume-from` can produce it too.
-- Website: docs version badge set to `v0.6.0`, the release these docs describe.
-- CI: the build/test/lint workflow now skips website-only changes
-  (`paths-ignore: website/**`) — `website/` is a separate Node project that cargo
-  never builds, so a docs commit no longer spends a three-OS matrix. The release
-  workflow is deliberately *not* filtered: it gates on a version bump, and
-  release commits often touch `website/` too.
 
 ## [0.5.0] - 2026-07-27
 
