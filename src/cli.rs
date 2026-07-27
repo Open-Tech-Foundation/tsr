@@ -12,12 +12,17 @@ pub const USAGE: &str = "\
 tsr — a lightweight, polyglot, repo-aware task runner
 
 USAGE:
-    tsr <task> [-- <args>...]   run a task; args after -- are forwarded
-    tsr <task> --since <ref>    run only in packages affected since a git ref
+    tsr <task> [options] [-- <args>...]   run a task; args after -- are forwarded
     tsr --list                  list the tasks defined in tasks.toml
     tsr --config                edit tasks.toml in an interactive TUI
     tsr --init                  create a starter tasks.toml here
     tsr --help | --version
+
+OPTIONS (after a task name):
+    --since <ref>          run only in packages affected since a git ref
+    --resume-from <pkg>    skip packages ordered before <pkg>
+    --no-bail              keep going after a failure instead of stopping
+    --reporter <fmt>       'human' (default) or 'ndjson' (JSON lines on stderr)
 
 The first argument is always a task name — every builtin is a flag, so a task
 named `list` or `init` is never shadowed.
@@ -30,7 +35,8 @@ EXAMPLES:
     tsr dev
     tsr test -- --watch
     tsr ci
-    tsr build --since main";
+    tsr build --since main
+    tsr test --no-bail --reporter ndjson";
 
 /// The starter config written by `tsr --init`: reference comments only, no live
 /// tasks. Defining nothing keeps the scaffold from shadowing what the repo
@@ -59,15 +65,38 @@ pub const INIT_TEMPLATE: &str = "\
 # parallel = true
 ";
 
+/// How run progress and results are reported (SPEC §6.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reporter {
+    /// Human-readable summary on failure (the default).
+    #[default]
+    Human,
+    /// One JSON object per line on **stderr**, for CI consumption.
+    Ndjson,
+}
+
+/// The options that may follow a task name (SPEC §6.1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RunOptions {
+    /// `--since <ref>`: restrict `packages` fan-outs to the packages affected by
+    /// changes since this git ref (SPEC §9.3).
+    pub since: Option<String>,
+    /// `--resume-from <pkg>`: skip every package ordered before `pkg`
+    /// (SPEC §9.4).
+    pub resume_from: Option<String>,
+    /// `--no-bail`: keep running siblings after a task fails (SPEC §5.2).
+    pub no_bail: bool,
+    /// `--reporter <fmt>`.
+    pub reporter: Reporter,
+}
+
 /// A parsed command line.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Cli {
     Run {
         task: String,
         passthrough: Vec<String>,
-        /// `--since <ref>`: restrict `packages` fan-outs to the packages
-        /// affected by changes since this git ref (SPEC §9.3).
-        since: Option<String>,
+        opts: RunOptions,
     },
     List,
     Init,
@@ -112,47 +141,99 @@ pub fn parse(args: &[String]) -> Result<Cli> {
         Some(flag) if flag.starts_with('-') => Err(TsrError::runtime(format!(
             "unknown flag '{flag}'\n\n{USAGE}"
         ))),
-        Some(task) => {
-            let since = parse_since(task, &head[1..])?;
-            Ok(Cli::Run {
-                task: task.to_string(),
-                passthrough: tail.to_vec(),
-                since,
-            })
-        }
+        Some(task) => Ok(Cli::Run {
+            task: task.to_string(),
+            passthrough: tail.to_vec(),
+            opts: parse_run_options(task, &head[1..])?,
+        }),
     }
 }
 
-/// Parse the options that may follow a task name. Only `--since <ref>` (or
-/// `--since=<ref>`) is accepted; anything else is still the "did you mean `--`?"
-/// error, since the bare-word namespace belongs to task names (SPEC §6.1).
-fn parse_since(task: &str, rest: &[String]) -> Result<Option<String>> {
-    let mut since: Option<String> = None;
+/// Parse the options that may follow a task name (SPEC §6.1). Every one is a
+/// flag, never a bare word, so the whole bare-word namespace stays available for
+/// task names — anything else here is still the "did you mean `--`?" error.
+fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
+    /// Take a flag's value from either `--flag=value` or `--flag value`.
+    fn value_of(
+        rest: &[String],
+        i: &mut usize,
+        arg: &str,
+        flag: &str,
+        hint: &str,
+    ) -> Result<String> {
+        let value = match arg.strip_prefix(&format!("{flag}=")) {
+            Some(v) => {
+                *i += 1;
+                v.to_string()
+            }
+            None => {
+                let v = rest
+                    .get(*i + 1)
+                    .ok_or_else(|| TsrError::runtime(format!("'{flag}' needs {hint}")))?;
+                *i += 2;
+                v.clone()
+            }
+        };
+        if value.is_empty() {
+            return Err(TsrError::runtime(format!("'{flag}' needs {hint}")));
+        }
+        Ok(value)
+    }
+
+    let mut opts = RunOptions::default();
     let mut i = 0;
     while i < rest.len() {
         let arg = rest[i].as_str();
-        let value = if let Some(v) = arg.strip_prefix("--since=") {
-            i += 1;
-            v.to_string()
-        } else if arg == "--since" {
-            let v = rest.get(i + 1).ok_or_else(|| {
-                TsrError::runtime("'--since' needs a git ref (e.g. `--since main`)")
-            })?;
-            i += 2;
-            v.clone()
-        } else {
-            return Err(TsrError::runtime(format!(
-                "unexpected argument '{arg}' — forward args after '--' (e.g. `tsr {task} -- {arg}`)"
-            )));
-        };
-        if value.is_empty() {
-            return Err(TsrError::runtime(
-                "'--since' needs a git ref (e.g. `--since main`)",
-            ));
+        let name = arg.split('=').next().unwrap_or(arg);
+        match name {
+            "--since" => {
+                opts.since = Some(value_of(
+                    rest,
+                    &mut i,
+                    arg,
+                    "--since",
+                    "a git ref (e.g. `--since main`)",
+                )?);
+            }
+            "--resume-from" => {
+                opts.resume_from = Some(value_of(
+                    rest,
+                    &mut i,
+                    arg,
+                    "--resume-from",
+                    "a package (e.g. `--resume-from packages/ui`)",
+                )?);
+            }
+            "--no-bail" => {
+                opts.no_bail = true;
+                i += 1;
+            }
+            "--reporter" => {
+                let value = value_of(
+                    rest,
+                    &mut i,
+                    arg,
+                    "--reporter",
+                    "a format ('human' or 'ndjson')",
+                )?;
+                opts.reporter = match value.as_str() {
+                    "human" => Reporter::Human,
+                    "ndjson" => Reporter::Ndjson,
+                    other => {
+                        return Err(TsrError::runtime(format!(
+                            "unknown reporter '{other}' — expected 'human' or 'ndjson'"
+                        )));
+                    }
+                };
+            }
+            _ => {
+                return Err(TsrError::runtime(format!(
+                    "unexpected argument '{arg}' — forward args after '--' (e.g. `tsr {task} -- {arg}`)"
+                )));
+            }
         }
-        since = Some(value);
     }
-    Ok(since)
+    Ok(opts)
 }
 
 /// Scaffold a starter `tasks.toml` in `dir`. Refuses to overwrite an existing
@@ -267,7 +348,7 @@ mod tests {
             Cli::Run {
                 task: "dev".into(),
                 passthrough: vec![],
-                since: None,
+                opts: RunOptions::default(),
             }
         );
     }
@@ -279,7 +360,7 @@ mod tests {
             Cli::Run {
                 task: "test".into(),
                 passthrough: vec!["--watch".into(), "-x".into()],
-                since: None,
+                opts: RunOptions::default(),
             }
         );
     }
@@ -291,7 +372,7 @@ mod tests {
             Cli::Run {
                 task: "test".into(),
                 passthrough: vec![],
-                since: None,
+                opts: RunOptions::default(),
             }
         );
     }
@@ -304,7 +385,7 @@ mod tests {
             Cli::Run {
                 task: "run".into(),
                 passthrough: vec!["list".into(), "--help".into()],
-                since: None,
+                opts: RunOptions::default(),
             }
         );
     }
@@ -345,7 +426,7 @@ mod tests {
             Cli::Run {
                 task: "list".into(),
                 passthrough: vec![],
-                since: None,
+                opts: RunOptions::default(),
             }
         );
         assert_eq!(
@@ -353,7 +434,7 @@ mod tests {
             Cli::Run {
                 task: "init".into(),
                 passthrough: vec!["--flag".into()],
-                since: None,
+                opts: RunOptions::default(),
             }
         );
     }
@@ -450,7 +531,10 @@ mod tests {
                 Cli::Run {
                     task: "build".into(),
                     passthrough: vec![],
-                    since: Some("main".into()),
+                    opts: RunOptions {
+                        since: Some("main".into()),
+                        ..Default::default()
+                    },
                 }
             );
         }
@@ -463,7 +547,10 @@ mod tests {
             Cli::Run {
                 task: "test".into(),
                 passthrough: vec!["--watch".into()],
-                since: Some("HEAD~1".into()),
+                opts: RunOptions {
+                    since: Some("HEAD~1".into()),
+                    ..Default::default()
+                },
             }
         );
     }
@@ -491,7 +578,10 @@ mod tests {
             Cli::Run {
                 task: "build".into(),
                 passthrough: vec![],
-                since: Some("--weird".into()),
+                opts: RunOptions {
+                    since: Some("--weird".into()),
+                    ..Default::default()
+                },
             }
         );
     }
@@ -503,5 +593,82 @@ mod tests {
         let err = parse_err(&["build", "extra"]).to_string();
         assert!(err.contains("unexpected argument"), "{err}");
         assert!(err.contains("--"), "{err}");
+    }
+
+    #[test]
+    fn parses_every_run_option() {
+        assert_eq!(
+            parse_ok(&[
+                "build",
+                "--since",
+                "main",
+                "--resume-from",
+                "packages/ui",
+                "--no-bail",
+                "--reporter",
+                "ndjson",
+            ]),
+            Cli::Run {
+                task: "build".into(),
+                passthrough: vec![],
+                opts: RunOptions {
+                    since: Some("main".into()),
+                    resume_from: Some("packages/ui".into()),
+                    no_bail: true,
+                    reporter: Reporter::Ndjson,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn options_accept_the_equals_spelling() {
+        let Cli::Run { opts, .. } = parse_ok(&[
+            "build",
+            "--since=main",
+            "--resume-from=ui",
+            "--reporter=ndjson",
+        ]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(opts.since.as_deref(), Some("main"));
+        assert_eq!(opts.resume_from.as_deref(), Some("ui"));
+        assert_eq!(opts.reporter, Reporter::Ndjson);
+    }
+
+    #[test]
+    fn reporter_defaults_to_human_and_rejects_unknown_formats() {
+        let Cli::Run { opts, .. } = parse_ok(&["build"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(opts.reporter, Reporter::Human);
+        assert!(!opts.no_bail);
+
+        let err = parse_err(&["build", "--reporter", "junit"]).to_string();
+        assert!(err.contains("unknown reporter"), "{err}");
+        assert!(err.contains("ndjson"), "{err}");
+    }
+
+    #[test]
+    fn value_taking_options_need_a_value() {
+        for flag in ["--since", "--resume-from", "--reporter"] {
+            let err = parse_err(&["build", flag]).to_string();
+            assert!(err.contains(flag), "{err}");
+        }
+    }
+
+    #[test]
+    fn options_combine_with_passthrough() {
+        assert_eq!(
+            parse_ok(&["test", "--no-bail", "--", "--watch"]),
+            Cli::Run {
+                task: "test".into(),
+                passthrough: vec!["--watch".into()],
+                opts: RunOptions {
+                    no_bail: true,
+                    ..Default::default()
+                },
+            }
+        );
     }
 }

@@ -1163,7 +1163,7 @@ fn since_with_no_changes_runs_nothing_and_succeeds() {
     let out = tsr(&ws, &["build", "--since", "HEAD"]);
     assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
     let s = stdout(&out);
-    assert!(s.contains("no affected packages"), "{s}");
+    assert!(s.contains("no packages selected"), "{s}");
     assert!(!ran(&s, "apps/web"), "{s}");
 }
 
@@ -1195,4 +1195,297 @@ fn without_since_every_package_still_runs() {
     for rel in ["apps/web", "apps/docs", "packages/ui"] {
         assert!(ran(&s, rel), "{rel} should run:\n{s}");
     }
+}
+
+// --- `^task` across every ecosystem (SPEC §9) --------------------------------
+//
+// The graph rule is the same everywhere — a declared dependency name matching a
+// workspace package's manifest name — but only npm was covered end to end. Each
+// task sets `run = "pwd"`, so no native runner (cargo/go/uv) is ever invoked:
+// the manifests exist purely to be read for names and edges.
+
+/// Build a workspace whose packages are `(rel, manifest_file, contents)`, run
+/// `build` with `^build`, and return the ordered `pwd` output.
+fn topo_order_of(members: &str, pkgs: &[(&str, &str, String)]) -> String {
+    let ws = workspace();
+    for (rel, file, contents) in pkgs {
+        write(&ws, &format!("{rel}/{file}"), contents);
+    }
+    write(
+        &ws,
+        "tasks.toml",
+        &format!(
+            "[workspace]\nmembers = [{members}]\n\
+             [tasks.build]\npackages = [{members}]\ndeps = [\"^build\"]\nrun = \"pwd\"\n"
+        ),
+    );
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    stdout(&out)
+}
+
+#[test]
+fn upstream_deps_order_a_cargo_workspace() {
+    let s = topo_order_of(
+        "\"crates/*\"",
+        &[
+            (
+                "crates/app",
+                "Cargo.toml",
+                "[package]\nname = \"app\"\n[dependencies]\ncore = { path = \"../core\" }\n"
+                    .to_string(),
+            ),
+            (
+                "crates/core",
+                "Cargo.toml",
+                "[package]\nname = \"core\"\n[dependencies]\nbase = { path = \"../base\" }\n"
+                    .to_string(),
+            ),
+            (
+                "crates/base",
+                "Cargo.toml",
+                "[package]\nname = \"base\"\n".to_string(),
+            ),
+        ],
+    );
+    assert!(
+        line_of(&s, "crates/base") < line_of(&s, "crates/core"),
+        "{s}"
+    );
+    assert!(
+        line_of(&s, "crates/core") < line_of(&s, "crates/app"),
+        "{s}"
+    );
+}
+
+#[test]
+fn upstream_deps_follow_cargo_target_specific_dependencies() {
+    // A sibling declared only under `[target.'cfg(...)']` is still an edge.
+    let s = topo_order_of(
+        "\"crates/*\"",
+        &[
+            (
+                "crates/app",
+                "Cargo.toml",
+                "[package]\nname = \"app\"\n\
+                 [target.'cfg(unix)'.dependencies]\nplat = { path = \"../plat\" }\n"
+                    .to_string(),
+            ),
+            (
+                "crates/plat",
+                "Cargo.toml",
+                "[package]\nname = \"plat\"\n".to_string(),
+            ),
+        ],
+    );
+    assert!(
+        line_of(&s, "crates/plat") < line_of(&s, "crates/app"),
+        "{s}"
+    );
+}
+
+#[test]
+fn upstream_deps_order_a_go_workspace() {
+    let s = topo_order_of(
+        "\"mods/*\"",
+        &[
+            (
+                "mods/api",
+                "go.mod",
+                "module example.com/api\n\ngo 1.22\n\nrequire (\n\texample.com/lib v0.1.0\n)\n"
+                    .to_string(),
+            ),
+            (
+                "mods/lib",
+                "go.mod",
+                "module example.com/lib\n\ngo 1.22\n".to_string(),
+            ),
+        ],
+    );
+    assert!(line_of(&s, "mods/lib") < line_of(&s, "mods/api"), "{s}");
+}
+
+#[test]
+fn upstream_deps_order_a_python_workspace() {
+    let s = topo_order_of(
+        "\"pkgs/*\"",
+        &[
+            (
+                "pkgs/app",
+                "pyproject.toml",
+                "[project]\nname = \"app\"\ndependencies = [\"core>=1.0\"]\n".to_string(),
+            ),
+            (
+                "pkgs/core",
+                "pyproject.toml",
+                "[project]\nname = \"core\"\n".to_string(),
+            ),
+        ],
+    );
+    assert!(line_of(&s, "pkgs/core") < line_of(&s, "pkgs/app"), "{s}");
+}
+
+// --- --no-bail, --reporter, --resume-from ------------------------------------
+
+#[test]
+fn no_bail_keeps_running_siblings_after_a_failure() {
+    let ws = workspace();
+    write(&ws, "packages/a/package.json", &manifest("a", &[]));
+    write(&ws, "packages/b/package.json", &manifest("b", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"packages/*\"]\n\
+         [tasks.ci]\ndeps = [\"boom\", \"after\"]\n\
+         [tasks.boom]\nrun = \"false\"\n\
+         [tasks.after]\nrun = \"echo AFTER-RAN\"\n",
+    );
+
+    // Default: fail-fast — `after` is never launched.
+    let out = tsr(&ws, &["ci"]);
+    assert_eq!(code(&out), 1, "stderr {}", stderr(&out));
+    assert!(!stdout(&out).contains("AFTER-RAN"), "{}", stdout(&out));
+
+    // --no-bail: the sibling still runs, and the failing code still propagates.
+    let out = tsr(&ws, &["ci", "--no-bail"]);
+    assert_eq!(code(&out), 1, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("AFTER-RAN"), "{}", stdout(&out));
+}
+
+#[test]
+fn no_bail_still_reports_the_failing_exit_code() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.ci]\ndeps = [\"a\", \"b\"]\n\
+         [tasks.a]\ndelegate = { bin = \"sh\", args = [\"-c\", \"exit 3\"] }\n\
+         [tasks.b]\nrun = \"true\"\n",
+    );
+    let out = tsr(&ws, &["ci", "--no-bail"]);
+    assert_eq!(code(&out), 3, "stderr {}", stderr(&out));
+}
+
+#[test]
+fn ndjson_reporter_emits_one_json_object_per_line_on_stderr() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.ci]\ndeps = [\"a\", \"b\"]\n\
+         [tasks.a]\nrun = \"true\"\n[tasks.b]\nrun = \"true\"\n",
+    );
+    let out = tsr(&ws, &["ci", "--reporter", "ndjson"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+
+    let lines: Vec<serde_json::Value> = stderr(&out)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON: {l:?} ({e})")))
+        .collect();
+    assert!(
+        lines.len() >= 3,
+        "expected task events + summary: {lines:?}"
+    );
+
+    let summary = lines.last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["exitCode"], 0);
+    assert_eq!(summary["task"], "ci");
+    assert!(summary["durationMs"].is_number(), "{summary}");
+
+    let tasks: Vec<&serde_json::Value> = lines.iter().filter(|l| l["type"] == "task").collect();
+    assert!(tasks.iter().all(|t| t["status"] == "ok"), "{tasks:?}");
+}
+
+#[test]
+fn ndjson_reporter_reports_failure_and_exit_code() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.boom]\nrun = \"false\"\n");
+    let out = tsr(&ws, &["boom", "--reporter=ndjson"]);
+    assert_eq!(code(&out), 1);
+
+    let last: serde_json::Value = stderr(&out)
+        .lines()
+        .rfind(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .expect("a summary line");
+    assert_eq!(last["status"], "failed");
+    assert_eq!(last["exitCode"], 1);
+    assert_eq!(last["failed"], 1);
+}
+
+#[test]
+fn resume_from_skips_packages_ordered_before_it() {
+    let ws = workspace();
+    // tokens → ui → web
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(
+        &ws,
+        "packages/ui/package.json",
+        &manifest("ui", &["tokens"]),
+    );
+    write(
+        &ws,
+        "packages/tokens/package.json",
+        &manifest("tokens", &[]),
+    );
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\", \"packages/*\"]\n\
+         deps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+
+    let out = tsr(&ws, &["build", "--resume-from", "packages/ui"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    // tokens precedes ui, so it is treated as already built — even though web
+    // reaches it as an upstream dependency.
+    assert!(
+        !ran(&s, "packages/tokens"),
+        "tokens should be skipped:\n{s}"
+    );
+    assert!(ran(&s, "packages/ui"), "the resume point must run:\n{s}");
+    assert!(ran(&s, "apps/web"), "dependents must still run:\n{s}");
+}
+
+#[test]
+fn resume_from_accepts_a_manifest_name() {
+    let ws = workspace();
+    write(&ws, "apps/web/package.json", &manifest("web", &["ui"]));
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+         [tasks.build]\npackages = [\"apps/*\", \"packages/*\"]\n\
+         deps = [\"^build\"]\nrun = \"pwd\"\n",
+    );
+    let out = tsr(&ws, &["build", "--resume-from=web"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(!ran(&s, "packages/ui"), "{s}");
+    assert!(ran(&s, "apps/web"), "{s}");
+}
+
+#[test]
+fn resume_from_an_unknown_package_is_a_runner_error() {
+    let ws = workspace();
+    write(&ws, "packages/ui/package.json", &manifest("ui", &[]));
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"packages/*\"]\n\
+         [tasks.build]\npackages = [\"packages/*\"]\nrun = \"pwd\"\n",
+    );
+    let out = tsr(&ws, &["build", "--resume-from", "packages/nope"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("matched no workspace package"),
+        "{}",
+        stderr(&out)
+    );
 }

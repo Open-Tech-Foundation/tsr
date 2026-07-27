@@ -77,6 +77,17 @@ dependents; changing an app does not select its libraries.
 - A missing repo, unknown ref, or missing git is a runner error, exit `64` —
   never a silent full or empty run.
 
+## Resuming a failed run (`--resume-from`)
+
+```bash
+tsr build --resume-from packages/ui
+```
+
+Treats every package ordered **before** `packages/ui` as already built and runs
+the rest — including keeping them skipped when a later package reaches them as an
+`^task` upstream dependency. `--since` and `--resume-from` compose: a package must
+survive both filters. Full rules in the [CLI reference](/docs/cli).
+
 ## Sequential by default
 
 Execution is **sequential by default**. Concurrency is opt-in via

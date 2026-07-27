@@ -150,13 +150,29 @@ fn json_deps(path: &Path) -> Vec<String> {
 /// renamed dependency (`ui = { package = "real-name" }`) contributes the *real*
 /// crate name, since that is what matches a workspace member's manifest name.
 fn cargo_deps(path: &Path) -> Vec<String> {
-    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
     let Some(doc) = toml_doc(path) else {
         return Vec::new();
     };
     let mut out = Vec::new();
+    push_cargo_dep_tables(doc.as_item(), &mut out);
+
+    // `[target.'cfg(windows)'.dependencies]` and friends. A sibling crate
+    // declared only for some platforms is still a workspace edge; missing it
+    // would silently produce the wrong build order rather than an error.
+    if let Some(targets) = doc.get("target").and_then(|i| i.as_table_like()) {
+        for (_, cfg) in targets.iter() {
+            push_cargo_dep_tables(cfg, &mut out);
+        }
+    }
+    out
+}
+
+/// Push the dependency names from a container's three dependency tables. The
+/// container is either the manifest root or one `[target.<cfg>]` table.
+fn push_cargo_dep_tables(container: &toml_edit::Item, out: &mut Vec<String>) {
+    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
     for kind in KINDS {
-        let Some(table) = doc.get(kind).and_then(|i| i.as_table_like()) else {
+        let Some(table) = container.get(kind).and_then(|i| i.as_table_like()) else {
             continue;
         };
         for (key, item) in table.iter() {
@@ -164,7 +180,6 @@ fn cargo_deps(path: &Path) -> Vec<String> {
             out.push(name.to_string());
         }
     }
-    out
 }
 
 /// Collect distribution names from a `pyproject.toml`, covering PEP 621
@@ -416,6 +431,29 @@ mod tests {
             manifest_deps(&d, Ecosystem::Go),
             vec!["single.example/one", "ex.com/a", "ex.com/b"]
         );
+    }
+
+    /// A sibling crate declared only for some platform is still a workspace
+    /// edge; missing it would silently produce the wrong build order.
+    #[test]
+    fn reads_cargo_target_specific_dependencies() {
+        let d = scratch();
+        fs::write(
+            d.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n\
+             [dependencies]\ncore = { path = \"../core\" }\n\
+             [target.'cfg(windows)'.dependencies]\nwinlib = { path = \"../winlib\" }\n\
+             [target.'cfg(unix)'.dev-dependencies]\nunixlib = { path = \"../unixlib\" }\n\
+             [target.'cfg(unix)'.dependencies]\naliased = { package = \"real\", path = \"../real\" }\n",
+        )
+        .unwrap();
+        let deps = manifest_deps(&d, Ecosystem::Cargo);
+        for expected in ["core", "winlib", "unixlib", "real"] {
+            assert!(
+                deps.contains(&expected.to_string()),
+                "{expected} missing: {deps:?}"
+            );
+        }
     }
 
     /// PEP 508 requirements carry extras, specifiers and markers; only the

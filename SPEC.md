@@ -188,6 +188,10 @@ exit code: 1
 
 In a parallel batch, "the failure" is whichever child exits non-zero first in wall-clock time; this is non-deterministic across runs and is expected. Fail-fast guarantees at most one failing child's code is reported.
 
+**`--no-bail`** opts out: every batch runs to completion, siblings are neither skipped nor killed, and the summary lists every failure. The propagated exit code is still the **first** failing child's, so CI sees the same signal either way. This is the flag for "tell me everything that is broken", not just the first thing.
+
+`--no-bail` covers **task** failures only. A runner-level error (§10) still stops the run, because it means `tsr` itself could not proceed — a missing `delegate` binary will be missing for every package, so continuing would only repeat the same error.
+
 ---
 
 ## 6. Argument passthrough
@@ -225,9 +229,38 @@ so a task named `list` or `init` is never shadowed — `tsr list` runs the user'
 `list` task. This keeps the entire bare-word namespace available for
 tasks/scripts, which is the point of the tool.
 
-`--since <ref>` is the one option that may follow a task name (§9.3). It is not a
-bare word, so it shadows nothing; anything else after a task name is still the
-"forward args after `--`" error.
+Four options may follow a task name. Every one is a flag, never a bare word, so
+none shadows anything; anything else after a task name is still the "forward args
+after `--`" error.
+
+| Option | Meaning |
+|--------|---------|
+| `--since <ref>` | Run only in packages affected by changes since a git ref (§9.3). |
+| `--resume-from <pkg>` | Skip every package ordered before `pkg` (§9.4). |
+| `--no-bail` | Run every batch to completion instead of stopping at the first failure (§5.2). |
+| `--reporter <fmt>` | `human` (default) or `ndjson` (§6.2). |
+
+Each accepts both `--flag value` and `--flag=value`.
+
+### 6.2 Reporters
+
+| Reporter | Output |
+|----------|--------|
+| `human` *(default)* | Nothing on success; a result table on failure (§5.2). |
+| `ndjson` | One JSON object per line on **stderr**, always — success included. |
+
+`ndjson` emits a `task` event as each unit of work finishes, then one `summary`
+event:
+
+```json
+{"durationMs":12.4,"exitCode":null,"label":"build (packages/ui)","status":"ok","type":"task"}
+{"durationMs":48.9,"exitCode":1,"failed":1,"ok":3,"runnerError":null,"skipped":2,"status":"failed","task":"build","type":"summary"}
+```
+
+`status` is one of `ok`, `failed`, `skipped`. Events go to **stderr** because
+children inherit stdio and own stdout — that separation is what keeps the stream
+parseable. Child *stderr* is still interleaved, so consumers should parse
+per-line and ignore lines that are not JSON objects.
 
 `--config` opens a TUI for authoring tasks with every option (form, `dir`/
 `packages`, `deps`, `parallel`, `args`, `env`, `env_file`). It opens on a menu of
@@ -375,7 +408,7 @@ One rule spans every ecosystem: an edge exists exactly when a **declared depende
 | Ecosystem | Dependency fields read |
 |-----------|------------------------|
 | npm / bun | `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
-| cargo | `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, following `package = "…"` renames |
+| cargo | `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, the same three under any `[target.<cfg>]`, following `package = "…"` renames |
 | go | `require` and `replace`, single-line and block form |
 | python | PEP 621 `[project]` + optional groups, PEP 735 `[dependency-groups]`, Poetry's tables |
 
@@ -404,6 +437,18 @@ Affected = the packages the changed files live in, **plus every package that tra
 - **A changed file outside every package widens to everything.** A root `tasks.toml`, lockfile, CI workflow or shared config could affect any package, so the selection is not narrowed at all. Running too much costs time; skipping work that should have run is a correctness failure.
 - **Only the selection narrows — never the upstream.** `^task` still builds a package's dependencies whether or not they changed, so a filtered run stays correct rather than merely fast.
 - **A pattern that matches packages, none of them affected, is a clean no-op** (exit `0`), not an error. An unmatched *pattern* remains an error (§9.1) because that is a typo.
+
+### 9.4 Resuming (`--resume-from <pkg>`)
+
+`tsr <task> --resume-from <pkg>` treats every package **ordered before `pkg`** in the workspace's topological order as already built, and runs the rest. It is the "the run died two-thirds of the way through; carry on from there" flag.
+
+- `pkg` is matched the way `packages` entries are (§9.1): relative path **or** manifest name.
+- The skipped prefix stays skipped even when a later package reaches it as an `^task` **upstream** dependency — otherwise the resume would rebuild the very prefix it was told to skip.
+- The resume point itself runs; everything that depends on it runs.
+- A `pkg` that matches no package is a runner error (exit `64`) — a typo would otherwise silently skip everything or nothing.
+- A cyclic package graph is a runner error: resuming is only meaningful along a real build order.
+
+`--since` and `--resume-from` compose; a package must survive **both** filters to be selected.
 ---
 
 ## 10. Exit codes

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--no-bail` — run everything, report every failure (SPEC §5.2).**
+  `tsr` still fails fast by default; `--no-bail` runs each batch to completion,
+  neither skipping nor killing siblings, so one run tells you everything that is
+  broken. The propagated exit code is still the **first** failure's, so CI sees
+  the same signal either way. It covers *task* failures only — a runner-level
+  error still stops the run, since a missing `delegate` binary will be missing
+  for every package too.
+
+- **`--reporter ndjson` — machine-readable output (SPEC §6.2).**
+  One JSON object per line on **stderr**: a `task` event as each unit of work
+  finishes, then a `summary`. Events go to stderr because children inherit stdio
+  and own stdout — that separation is what makes the stream parseable.
+
+  ```json
+  {"durationMs":12.4,"exitCode":null,"label":"build (packages/ui)","status":"ok","type":"task"}
+  {"durationMs":48.9,"exitCode":1,"failed":1,"ok":3,"runnerError":null,"skipped":2,"status":"failed","task":"build","type":"summary"}
+  ```
+
+- **`--resume-from <pkg>` — carry on from a package (SPEC §9.4).**
+  Treats every package ordered before `<pkg>` as already built. The skipped
+  prefix stays skipped even when a later package reaches it as an `^task`
+  upstream dependency, which is what makes a resume actually skip work. Matched
+  by relative path or manifest name; no match is a runner error (exit `64`), and
+  `--since` and `--resume-from` compose.
+
+### Fixed
+
+- **Cargo target-specific dependencies were invisible to the package graph.**
+  `[target.'cfg(windows)'.dependencies]` and its `dev-`/`build-` siblings were
+  never read, so a crate depending on a workspace sibling only on some platforms
+  got no edge — producing a silently wrong build order rather than an error.
+
+- **The `--config` TUI reported a valid `^task` config as broken.** The graph
+  preview looked `^build` up as a task key, and since task names can never
+  contain `^` the lookup always missed, rendering `● ^build (undefined task)` in
+  red. Upstream markers now render as their own node kind.
+
+### Changed
+
+- The "nothing to do" message for a filtered fan-out is now `no packages
+  selected` (was `no affected packages`), since `--resume-from` can produce it too.
+
 ## [0.5.0] - 2026-07-27
 
 ### Added

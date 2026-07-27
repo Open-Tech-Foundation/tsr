@@ -84,6 +84,29 @@ pub fn affected(graph: &PackageGraph, files: &[String]) -> Option<HashSet<String
     Some(out)
 }
 
+/// The packages ordered **before** `pkg` in the workspace's topological order —
+/// the set `--resume-from` treats as already built (SPEC §9.4).
+///
+/// Resuming is only meaningful along a real build order, so a cyclic package
+/// graph is a runner error here, as is a `pkg` that names nothing (a typo would
+/// otherwise silently skip everything or nothing).
+pub fn before_in_order(graph: &PackageGraph, pkg: &str) -> Result<HashSet<String>> {
+    let target = graph.index_of(pkg).ok_or_else(|| {
+        TsrError::runtime(format!(
+            "'--resume-from': '{pkg}' matched no workspace package"
+        ))
+    })?;
+    let order = graph.topo_order()?;
+    let at = order
+        .iter()
+        .position(|&i| i == target)
+        .expect("topo_order covers every package");
+    Ok(order[..at]
+        .iter()
+        .map(|&i| graph.get(i).rel.clone())
+        .collect())
+}
+
 /// The package a workspace-relative path lives in, most specific first so a
 /// nested package wins over the one containing it.
 fn owning_package(graph: &PackageGraph, file: &str) -> Option<usize> {
@@ -195,5 +218,52 @@ mod tests {
         // `apps/website` is not inside `apps/web`, so this is outside every
         // package and must widen rather than select `apps/web`.
         assert!(affected(&g, &["apps/website/x.ts".into()]).is_none());
+    }
+
+    #[test]
+    fn resume_from_skips_everything_ordered_before_it() {
+        let g = graph();
+        // tokens → ui → web; docs is independent.
+        let skip = before_in_order(&g, "packages/ui").unwrap();
+        let mut v: Vec<String> = skip.into_iter().collect();
+        v.sort();
+        // Only the packages that topologically precede ui are treated as done.
+        assert!(v.contains(&"packages/tokens".to_string()), "{v:?}");
+        assert!(
+            !v.contains(&"packages/ui".to_string()),
+            "the resume point itself must run: {v:?}"
+        );
+        assert!(
+            !v.contains(&"apps/web".to_string()),
+            "a dependent must still run: {v:?}"
+        );
+    }
+
+    #[test]
+    fn resume_from_the_first_package_skips_nothing() {
+        let g = graph();
+        let order = g.topo_order().unwrap();
+        let first = g.get(order[0]).rel.clone();
+        assert!(before_in_order(&g, &first).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resume_from_accepts_a_manifest_name_too() {
+        let g = graph();
+        assert_eq!(
+            before_in_order(&g, "ui").unwrap(),
+            before_in_order(&g, "packages/ui").unwrap()
+        );
+    }
+
+    #[test]
+    fn resume_from_an_unknown_package_is_an_error() {
+        let g = graph();
+        let err = before_in_order(&g, "packages/nope").unwrap_err();
+        assert!(
+            err.to_string().contains("matched no workspace package"),
+            "{err}"
+        );
+        assert_eq!(err.exit_code(), 64);
     }
 }

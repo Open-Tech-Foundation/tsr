@@ -632,6 +632,24 @@ fn node_lines(
         Style::default().fg(Color::DarkGray),
     )];
 
+    // `^name` is not a task key at all: it names a task to run in *other*
+    // packages, resolved against the package graph at run time (SPEC §5.0). It
+    // must not be looked up here, or a perfectly valid config renders as an
+    // error. Show it as its own kind of node and stop — the packages it expands
+    // to are only known once the workspace is scanned.
+    if let Some(name) = config::upstream_dep(key) {
+        spans.push(Span::styled(
+            format!("▲ {key}"),
+            Style::default().fg(Color::Cyan).bold(),
+        ));
+        spans.push(Span::styled(
+            format!("  (upstream: '{name}' in each package's dependencies)"),
+            Style::default().fg(Color::DarkGray),
+        ));
+        out.push(Line::from(spans));
+        return;
+    }
+
     let Some(task) = cfg.task(key) else {
         // A dep that names no defined task.
         spans.push(Span::styled(
@@ -1855,5 +1873,25 @@ mod tests {
         assert_eq!(form.text(F_DARGS), "b");
         assert_eq!(form.text(F_DEPS), "ui#build");
         assert!(form.toggle(F_PARALLEL));
+    }
+
+    /// `^build` is not a task key — it names a task to run in *other* packages,
+    /// resolved at run time. The preview must not look it up and report the
+    /// config broken (regression: it rendered "(undefined task)" in red).
+    #[test]
+    fn graph_shows_upstream_marker_not_an_undefined_task() {
+        let c = config::parse_str(
+            "[workspace]\nmembers=[\"packages/*\"]\n\
+             [tasks.build]\npackages=[\"packages/*\"]\ndeps=[\"^build\"]\nrun=\"true\"\n",
+            std::path::PathBuf::from("."),
+        )
+        .unwrap();
+        let text: String = build_graph_lines(&c, None)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(!text.contains("undefined"), "{text}");
+        assert!(text.contains("^build"), "{text}");
+        assert!(text.contains("upstream"), "{text}");
     }
 }

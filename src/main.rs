@@ -67,7 +67,7 @@ fn run() -> error::Result<i32> {
         Cli::Run {
             task,
             passthrough,
-            since,
+            opts,
         } => {
             // A `tasks.toml` is optional: with one, load it; without one, run the
             // task repo-aware via auto-detection (configless mode) so `tsr dev`
@@ -83,18 +83,36 @@ fn run() -> error::Result<i32> {
             // i.e. the invoked task and its dependency closure (SPEC §7.3).
             let reachable = graph::reachable(&cfg, &task);
             env::validate_run_vars(&cfg, &reachable)?;
+            // Both package filters need the graph, so build it once and only
+            // when one of them was actually asked for — an ordinary run must not
+            // pay for scanning the workspace.
+            let graph = (opts.since.is_some() || opts.resume_from.is_some())
+                .then(|| pkggraph::PackageGraph::build(&cfg));
+
             // `--since` narrows every `packages` fan-out to the affected set
-            // (SPEC §9.3). `None` here means "no filtering", which is also what
-            // a change outside every package resolves to.
-            let affected = match &since {
-                Some(git_ref) => {
+            // (SPEC §9.3). `None` means "no filtering", which is also what a
+            // change outside every package resolves to.
+            let affected = match (&opts.since, &graph) {
+                (Some(git_ref), Some(g)) => {
                     let files = changed::changed_files(&cfg.root, git_ref)?;
-                    changed::affected(&pkggraph::PackageGraph::build(&cfg), &files)
+                    changed::affected(g, &files)
                 }
-                None => None,
+                _ => None,
             };
+            // `--resume-from` drops every package ordered before the named one
+            // (SPEC §9.4).
+            let skip = match (&opts.resume_from, &graph) {
+                (Some(pkg), Some(g)) => Some(changed::before_in_order(g, pkg)?),
+                _ => None,
+            };
+
             // exec::run owns its own failure reporting and returns the exit code.
-            Ok(exec::run(&cfg, &task, &passthrough, affected.as_ref()))
+            let selection = exec::Selection {
+                affected: affected.as_ref(),
+                skip: skip.as_ref(),
+                opts: &opts,
+            };
+            Ok(exec::run(&cfg, &task, &passthrough, selection))
         }
     }
 }

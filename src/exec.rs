@@ -18,6 +18,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::builtins;
+use crate::cli::{Reporter, RunOptions};
 use crate::config::{Config, Task, upstream_dep};
 use crate::env;
 use crate::error::TsrError;
@@ -38,13 +39,9 @@ const POLL_MAX: Duration = Duration::from_millis(20);
 /// child's exact code, or `64` when the runner itself could not proceed (bad
 /// spawn, missing delegate, unmatched `packages`, …). `passthrough` is forwarded
 /// to the root task's own command (SPEC §6).
-pub fn run(
-    cfg: &Config,
-    root: &str,
-    passthrough: &[String],
-    affected: Option<&HashSet<String>>,
-) -> i32 {
-    let ctx = Ctx::new(cfg, affected);
+pub fn run(cfg: &Config, root: &str, passthrough: &[String], sel: Selection<'_>) -> i32 {
+    let ctx = Ctx::new(cfg, sel);
+    let started = Instant::now();
     let _ = ctx.run_task(root, passthrough, true);
 
     let runner_error = ctx.runner_error.lock().unwrap().clone();
@@ -58,10 +55,41 @@ pub fn run(
         (None, None) => 0,
     };
 
-    if code != 0 {
-        ctx.print_summary(root, code, runner_error.as_deref());
+    match ctx.sel.opts.reporter {
+        Reporter::Ndjson => ctx.emit_summary(root, code, runner_error.as_deref(), started),
+        Reporter::Human => {
+            if code != 0 {
+                ctx.print_summary(root, code, runner_error.as_deref());
+            }
+        }
     }
     code
+}
+
+/// Which packages a run is restricted to, plus the run's options. Both filters
+/// are `None` when the corresponding flag was not given; an empty set would mean
+/// "nothing selected", which is a different thing entirely.
+#[derive(Debug, Clone, Copy)]
+pub struct Selection<'a> {
+    /// `--since`: the only packages a fan-out may run in (SPEC §9.3).
+    pub affected: Option<&'a HashSet<String>>,
+    /// `--resume-from`: packages to treat as already done (SPEC §9.4).
+    pub skip: Option<&'a HashSet<String>>,
+    pub opts: &'a RunOptions,
+}
+
+impl<'a> Selection<'a> {
+    /// No package filtering — an ordinary `tsr <task>`. `main` builds its
+    /// `Selection` directly because it has the filters to hand; this is the
+    /// convenience form the tests use.
+    #[cfg(test)]
+    pub fn plain(opts: &'a RunOptions) -> Self {
+        Selection {
+            affected: None,
+            skip: None,
+            opts,
+        }
+    }
 }
 
 /// Control-flow status of a task or job. `Copy` so it can be memoised cheaply;
@@ -93,6 +121,17 @@ enum ResultKind {
     Ok,
     Failed(i32),
     Skipped,
+}
+
+impl ResultKind {
+    /// Stable machine-readable name, used by the NDJSON reporter (SPEC §6.2).
+    fn as_str(self) -> &'static str {
+        match self {
+            ResultKind::Ok => "ok",
+            ResultKind::Failed(_) => "failed",
+            ResultKind::Skipped => "skipped",
+        }
+    }
 }
 
 /// What a leaf job actually executes.
@@ -128,10 +167,10 @@ enum SlotState {
 /// Shared execution state.
 struct Ctx<'a> {
     cfg: &'a Config,
-    /// `--since` selection: when set, a `packages` fan-out runs only in these
-    /// packages (SPEC §9.3). Upstream `^task` work is never filtered — it is
-    /// needed whether or not it changed.
-    affected: Option<&'a HashSet<String>>,
+    /// Package filters and run options. `--since` narrows which packages a
+    /// fan-out runs in (SPEC §9.3); upstream `^task` work is never filtered, as
+    /// it is needed whether or not it changed.
+    sel: Selection<'a>,
     aborted: AtomicBool,
     /// First failing child's exact exit code (set once; wall-clock-first wins).
     first_failure: Mutex<Option<i32>>,
@@ -142,10 +181,10 @@ struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    fn new(cfg: &'a Config, affected: Option<&'a HashSet<String>>) -> Ctx<'a> {
+    fn new(cfg: &'a Config, sel: Selection<'a>) -> Ctx<'a> {
         Ctx {
             cfg,
-            affected,
+            sel,
             aborted: AtomicBool::new(false),
             first_failure: Mutex::new(None),
             runner_error: Mutex::new(None),
@@ -162,12 +201,18 @@ impl<'a> Ctx<'a> {
         self.aborted.store(true, Ordering::SeqCst);
     }
 
+    /// Record a task failure. Under the default fail-fast policy this also sets
+    /// the abort flag; with `--no-bail` the code is remembered but siblings keep
+    /// running (SPEC §5.2). Runner-level errors abort either way — they mean
+    /// `tsr` itself could not proceed, not that a task failed.
     fn note_failure(&self, code: i32) {
         let mut f = self.first_failure.lock().unwrap();
         if f.is_none() {
             *f = Some(code);
         }
-        self.abort();
+        if !self.sel.opts.no_bail {
+            self.abort();
+        }
     }
 
     fn note_runner(&self, msg: String) {
@@ -179,11 +224,44 @@ impl<'a> Ctx<'a> {
     }
 
     fn record(&self, label: &str, kind: ResultKind, dur: Option<Duration>) {
+        if self.sel.opts.reporter == Reporter::Ndjson {
+            self.emit(serde_json::json!({
+                "type": "task",
+                "label": label,
+                "status": kind.as_str(),
+                "exitCode": match kind { ResultKind::Failed(c) => Some(c), _ => None },
+                "durationMs": dur.map(|d| d.as_secs_f64() * 1000.0),
+            }));
+        }
         self.results.lock().unwrap().push(JobResult {
             label: label.to_string(),
             kind,
             dur,
         });
+    }
+
+    /// Write one NDJSON event to **stderr**. Children inherit stdio, so stdout
+    /// belongs to them; keeping events on stderr is what makes the stream
+    /// parseable at all (SPEC §6.2).
+    fn emit(&self, value: serde_json::Value) {
+        eprintln!("{value}");
+    }
+
+    /// Final NDJSON event: the run's verdict and result tallies.
+    fn emit_summary(&self, root: &str, code: i32, runner_error: Option<&str>, started: Instant) {
+        let results = self.results.lock().unwrap();
+        let count = |f: fn(&ResultKind) -> bool| results.iter().filter(|r| f(&r.kind)).count();
+        self.emit(serde_json::json!({
+            "type": "summary",
+            "task": root,
+            "status": if code == 0 { "ok" } else { "failed" },
+            "exitCode": code,
+            "ok": count(|k| matches!(k, ResultKind::Ok)),
+            "failed": count(|k| matches!(k, ResultKind::Failed(_))),
+            "skipped": count(|k| matches!(k, ResultKind::Skipped)),
+            "runnerError": runner_error,
+            "durationMs": started.elapsed().as_secs_f64() * 1000.0,
+        }));
     }
 
     // --- task execution ---
@@ -305,19 +383,19 @@ impl<'a> Ctx<'a> {
             }
         };
 
-        // `--since` narrows the selection (SPEC §9.3). An unmatched *pattern* is
-        // still an error above — a typo — but a pattern that matched packages
-        // none of which are affected is the whole point of the flag, so it is a
-        // clean no-op rather than a failure.
-        let pkgs: Vec<workspace::Package> = match self.affected {
-            Some(set) => matched
-                .into_iter()
-                .filter(|p| set.contains(&p.rel))
-                .collect(),
-            None => matched,
-        };
+        // `--since` narrows the selection (SPEC §9.3) and `--resume-from` drops
+        // everything ordered before the resume point (SPEC §9.4). An unmatched
+        // *pattern* is still an error above — a typo — but a pattern whose
+        // packages are all filtered out is the whole point of these flags, so it
+        // is a clean no-op rather than a failure.
+        let pkgs: Vec<workspace::Package> = matched
+            .into_iter()
+            .filter(|p| self.selected(&p.rel))
+            .collect();
         if pkgs.is_empty() {
-            println!("· {} — no affected packages", task.key);
+            if self.sel.opts.reporter == Reporter::Human {
+                println!("· {} — no packages selected", task.key);
+            }
             return Status::Ok;
         }
 
@@ -392,6 +470,16 @@ impl<'a> Ctx<'a> {
         self.memoized(label.clone(), || {
             if self.aborted() {
                 return Status::Skipped;
+            }
+            // `--resume-from` means "these were built by the previous run", so a
+            // skipped package is treated as already satisfied — including when
+            // it is reached as another package's upstream dependency. Without
+            // this the resume would rebuild the very prefix it is skipping.
+            if let Some(skip) = self.sel.skip
+                && skip.contains(&pkg.rel)
+            {
+                self.record(&label, ResultKind::Skipped, None);
+                return Status::Ok;
             }
 
             // 1. This task's ordinary deps. Memoised by task key, so a fan-out
@@ -468,6 +556,24 @@ impl<'a> Ctx<'a> {
                 self.run_pkg_node(task, graph, nodes[k], passthrough)
             })
         }
+    }
+
+    /// Whether a package survives the `--since` / `--resume-from` filters.
+    /// Applies only to the packages a fan-out *selects*; upstream `^task` work
+    /// is reached through [`Self::run_pkg_node`] and is deliberately not
+    /// filtered here, since it is needed regardless.
+    fn selected(&self, rel: &str) -> bool {
+        if let Some(affected) = self.sel.affected
+            && !affected.contains(rel)
+        {
+            return false;
+        }
+        if let Some(skip) = self.sel.skip
+            && skip.contains(rel)
+        {
+            return false;
+        }
+        true
     }
 
     fn task_dir(&self, task: &Task) -> PathBuf {
@@ -573,8 +679,10 @@ impl<'a> Ctx<'a> {
     fn run_sequential(&self, n: usize, mut run: impl FnMut(usize) -> Status) -> Status {
         let mut result = Status::Ok;
         for i in 0..n {
-            if !result.is_ok() {
+            if !result.is_ok() && !self.sel.opts.no_bail {
                 // A prior item failed: don't launch the rest (SPEC §5.2).
+                // `--no-bail` opts out — the batch runs to completion and the
+                // first failing code is still what propagates.
                 continue;
             }
             let s = run(i);
@@ -819,6 +927,14 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// Default run options, borrowed by every `Selection` the tests build.
+    const OPTS: RunOptions = RunOptions {
+        since: None,
+        resume_from: None,
+        no_bail: false,
+        reporter: Reporter::Human,
+    };
+
     fn scratch_root() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let id = N.fetch_add(1, Ordering::Relaxed);
@@ -839,7 +955,7 @@ mod tests {
     fn run_task(toml: &str, task: &str) -> i32 {
         let (cfg, _root) = setup(toml);
         graph::validate(&cfg, task).unwrap();
-        run(&cfg, task, &[], None)
+        run(&cfg, task, &[], Selection::plain(&OPTS))
     }
 
     use crate::graph;
@@ -880,7 +996,7 @@ mod tests {
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "ci").unwrap();
         // a fails → b must be skipped (never launched).
-        assert_eq!(run(&cfg, "ci", &[], None), 1);
+        assert_eq!(run(&cfg, "ci", &[], Selection::plain(&OPTS)), 1);
         assert!(!marker.exists(), "sibling 'b' should not have run");
     }
 
@@ -895,7 +1011,7 @@ mod tests {
         std::fs::write(root.join("tasks.toml"), &toml).unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "top").unwrap();
-        assert_eq!(run(&cfg, "top", &[], None), 0);
+        assert_eq!(run(&cfg, "top", &[], Selection::plain(&OPTS)), 0);
         assert!(marker.exists());
     }
 
@@ -913,7 +1029,7 @@ mod tests {
         std::fs::write(root.join("tasks.toml"), &toml).unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
         graph::validate(&cfg, "top").unwrap();
-        assert_eq!(run(&cfg, "top", &[], None), 0);
+        assert_eq!(run(&cfg, "top", &[], Selection::plain(&OPTS)), 0);
         let contents = std::fs::read_to_string(&log).unwrap();
         assert_eq!(contents.lines().count(), 1, "base must run exactly once");
     }
@@ -935,7 +1051,7 @@ mod tests {
         let (cfg, _r) = setup(toml);
         graph::validate(&cfg, "top").unwrap();
         let start = Instant::now();
-        let code = run(&cfg, "top", &[], None);
+        let code = run(&cfg, "top", &[], Selection::plain(&OPTS));
         assert_eq!(code, 1);
         assert!(
             start.elapsed() < Duration::from_secs(4),
@@ -947,7 +1063,7 @@ mod tests {
     fn passthrough_and_args_ordering() {
         // args prepended before CLI passthrough, appended to the resolved command.
         let (cfg, _r) = setup("[tasks.t]\nrun = \"vitest\"\nargs = [\"--color\"]\n");
-        let ctx = Ctx::new(&cfg, None);
+        let ctx = Ctx::new(&cfg, Selection::plain(&OPTS));
         let task = cfg.task("t").unwrap();
         let job = ctx
             .build_job(task, &cfg.root, "t".into(), &["--watch".to_string()])
@@ -967,7 +1083,7 @@ mod tests {
     #[test]
     fn passthrough_appends_to_the_last_command_of_a_sequence() {
         let (cfg, _r) = setup("[tasks.t]\nrun = \"build && vitest\"\nargs = [\"--color\"]\n");
-        let ctx = Ctx::new(&cfg, None);
+        let ctx = Ctx::new(&cfg, Selection::plain(&OPTS));
         let job = ctx
             .build_job(
                 cfg.task("t").unwrap(),
@@ -991,7 +1107,7 @@ mod tests {
     #[test]
     fn builtins_run_in_process_for_run_strings() {
         let (cfg, root) = setup("[tasks.t]\nrun = \"mkdir -p out/nested && touch out/nested/x\"\n");
-        assert_eq!(run(&cfg, "t", &[], None), 0);
+        assert_eq!(run(&cfg, "t", &[], Selection::plain(&OPTS)), 0);
         assert!(root.join("out/nested/x").is_file());
     }
 
@@ -1001,13 +1117,13 @@ mod tests {
         std::fs::create_dir_all(root.join("dist/keep")).unwrap();
         std::fs::write(root.join("dist/a.js"), "").unwrap();
         std::fs::write(root.join("dist/b.js"), "").unwrap();
-        assert_eq!(run(&cfg, "clean", &[], None), 0);
+        assert_eq!(run(&cfg, "clean", &[], Selection::plain(&OPTS)), 0);
         // The glob expanded to the entries, so `dist` itself survives.
         assert!(root.join("dist").is_dir());
         assert!(!root.join("dist/a.js").exists());
         assert!(!root.join("dist/keep").exists());
         // And it stays a success once there is nothing left to match.
-        assert_eq!(run(&cfg, "clean", &[], None), 0);
+        assert_eq!(run(&cfg, "clean", &[], Selection::plain(&OPTS)), 0);
     }
 
     #[test]
@@ -1016,7 +1132,7 @@ mod tests {
         std::fs::create_dir_all(root.join("pkg")).unwrap();
         std::fs::write(root.join("pkg/a.log"), "").unwrap();
         std::fs::write(root.join("outside.log"), "").unwrap();
-        assert_eq!(run(&cfg, "clean", &[], None), 0);
+        assert_eq!(run(&cfg, "clean", &[], Selection::plain(&OPTS)), 0);
         assert!(!root.join("pkg/a.log").exists());
         assert!(root.join("outside.log").exists(), "must not escape 'dir'");
     }
@@ -1024,7 +1140,7 @@ mod tests {
     #[test]
     fn builtin_failure_propagates_its_exit_code() {
         let (cfg, _r) = setup("[tasks.t]\nrun = \"rm ghost.txt\"\n");
-        assert_eq!(run(&cfg, "t", &[], None), 1);
+        assert_eq!(run(&cfg, "t", &[], Selection::plain(&OPTS)), 1);
     }
 
     #[test]
@@ -1033,7 +1149,7 @@ mod tests {
         std::fs::write(root.join("package.json"), "{}").unwrap();
         std::fs::write(root.join("tasks.toml"), "[tasks.test]\nargs = [\"--ci\"]\n").unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
-        let ctx = Ctx::new(&cfg, None);
+        let ctx = Ctx::new(&cfg, Selection::plain(&OPTS));
         let task = cfg.task("test").unwrap();
         let job = ctx
             .build_job(task, &cfg.root, "test".into(), &["--watch".to_string()])
