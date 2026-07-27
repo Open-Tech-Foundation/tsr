@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- CI (Windows): a `--no-bail` e2e test named `sh` outright without a
+  `#[cfg(unix)]` guard, so it would have failed the Windows matrix job.
+
 ### Changed
 
 - Website: docs version badge set to `v0.6.0`, the release these docs describe.

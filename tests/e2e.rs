@@ -1352,6 +1352,9 @@ fn no_bail_keeps_running_siblings_after_a_failure() {
     assert!(stdout(&out).contains("AFTER-RAN"), "{}", stdout(&out));
 }
 
+// Names `sh` outright to produce an exact non-zero code, so it is Unix-only —
+// the cross-platform half of --no-bail is covered by the test above.
+#[cfg(unix)]
 #[test]
 fn no_bail_still_reports_the_failing_exit_code() {
     let ws = workspace();
