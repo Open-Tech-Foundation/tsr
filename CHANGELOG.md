@@ -44,9 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejections they produce, a guard reference table, what deliberately is *not*
   guarded, and how to report a vulnerability privately.
 
-- Website: the landing page now leads with the guarantees — a "Guarded by
-  default" section next to the feature grid, showing a confinement refusal, an
-  env-guard rejection and a `--dry-run` plan.
+- Website: the landing page gains a "Guarded by default" section showing a
+  confinement refusal, an env-guard rejection and a `--dry-run` plan, plus two
+  guard rows in the comparison table — with a footnote for the caveats a tick
+  cannot carry.
 
 - CI: `cargo audit` runs against the locked dependency set.
 

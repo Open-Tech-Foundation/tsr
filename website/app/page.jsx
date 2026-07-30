@@ -55,9 +55,19 @@ const COMPARE_ROWS = [
     cells: ["y", "n", "p", "p", "n", "p", "n", "n"],
   },
   {
+    label: "Built-in commands confined to the workspace",
+    hint: "the runner's own rm/cp can't reach outside it",
+    cells: ["y", "n", "n", "n", "n", "n", "n", "n"],
+  },
+  {
     label: "Declarative env vars & .env",
     hint: "[env] blocks + auto-loaded .env",
     cells: ["y", "p", "p", "p", "y", "y", "y", "y"],
+  },
+  {
+    label: "Config can't inject into other programs",
+    hint: "no LD_PRELOAD / NODE_OPTIONS from [env] or .env",
+    cells: ["y", "n", "n", "n", "n", "n", "p", "n"],
   },
   {
     label: "Native speed, no runtime boot",
@@ -105,16 +115,9 @@ export default function Home() {
               graph and opt-in parallelism, and delegates caching to Turbo/Nx instead of
               reinventing it.
             </p>
-            <p class="lede">
-              And it is <strong>guarded by default</strong>: no config can delete outside
-              your workspace or inject <code>LD_PRELOAD</code> into your build.
-            </p>
             <div class="cta-row">
               <Link class="btn btn-primary" href="/docs">
                 Get started <ArrowRightIcon stroke="#ffffff" />
-              </Link>
-              <Link class="btn btn-ghost" href="/docs/security">
-                Security model <ArrowRightIcon />
               </Link>
             </div>
           </div>
@@ -382,6 +385,13 @@ export default function Home() {
               See the speed numbers <ArrowRightIcon />
             </Link>
           </div>
+          <p class="cmp-note">
+            On the two guard rows: runners without built-in commands shell out instead, so
+            an <code>rm -rf ..</code> in a script is unconfined either way; mise gates its
+            config behind a trust prompt rather than a rule about which variables it may
+            set. None of these sandbox what a task <em>spawns</em> — neither does tsr.{" "}
+            <Link href="/docs/security">What tsr does and doesn't guard →</Link>
+          </p>
         </div>
       </section>
 

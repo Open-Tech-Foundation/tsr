@@ -545,6 +545,15 @@ h1.title .grad {
   color: var(--text-dim);
   flex-wrap: wrap;
 }
+/* Footnote under the comparison table: the caveats the ticks can't carry. */
+.cmp-note {
+  margin: 14px 0 0;
+  max-width: 90ch;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
 .cmp-bench-link {
   display: inline-flex;
   align-items: center;
