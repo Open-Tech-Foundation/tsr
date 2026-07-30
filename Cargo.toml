@@ -8,3 +8,18 @@ glob = "0.3.4"
 ratatui = "0.30.2"
 serde_json = "1.0.145"
 toml_edit = "0.25.13"
+
+# Tearing down a whole process tree, and catching Ctrl-C to do it, are the two
+# things `std::process` cannot express (SPEC §12). Both crates are already in the
+# tree via ratatui, so this costs no extra build.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",          # SECURITY_ATTRIBUTES, for CreateJobObjectW
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+] }

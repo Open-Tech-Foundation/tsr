@@ -22,6 +22,7 @@ OPTIONS (after a task name):
     --since <ref>          run only in packages affected since a git ref
     --resume-from <pkg>    skip packages ordered before <pkg>
     --no-bail              keep going after a failure instead of stopping
+    --dry-run              print what would run, and run nothing
     --reporter <fmt>       'human' (default) or 'ndjson' (JSON lines on stderr)
     --reporter-file <path> also write JSON lines to <path> (safe to parse)
 
@@ -37,7 +38,8 @@ EXAMPLES:
     tsr test -- --watch
     tsr ci
     tsr build --since main
-    tsr test --no-bail --reporter-file results.ndjson";
+    tsr test --no-bail --reporter-file results.ndjson
+    tsr build --dry-run";
 
 /// The starter config written by `tsr --init`: reference comments only, no live
 /// tasks. Defining nothing keeps the scaffold from shadowing what the repo
@@ -87,6 +89,11 @@ pub struct RunOptions {
     pub resume_from: Option<String>,
     /// `--no-bail`: keep running siblings after a task fails (SPEC §5.2).
     pub no_bail: bool,
+    /// `--dry-run`: walk the graph and print each command instead of running it
+    /// (SPEC §12) — the way to read what an unfamiliar `tasks.toml` would do
+    /// before handing it your shell. Commands print **as written**, before
+    /// `$VAR` expansion, so nothing a `.env` holds can reach the output.
+    pub dry_run: bool,
     /// `--reporter <fmt>`.
     pub reporter: Reporter,
     /// `--reporter-file <path>`: an independent NDJSON sink (SPEC §6.2).
@@ -214,6 +221,10 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
             }
             "--no-bail" => {
                 opts.no_bail = true;
+                i += 1;
+            }
+            "--dry-run" => {
+                opts.dry_run = true;
                 i += 1;
             }
             "--reporter-file" => {
@@ -636,6 +647,7 @@ mod tests {
                     since: Some("main".into()),
                     resume_from: Some("packages/ui".into()),
                     no_bail: true,
+                    dry_run: false,
                     reporter: Reporter::Ndjson,
                     reporter_file: None,
                 },
@@ -669,6 +681,24 @@ mod tests {
         let err = parse_err(&["build", "--reporter", "junit"]).to_string();
         assert!(err.contains("unknown reporter"), "{err}");
         assert!(err.contains("ndjson"), "{err}");
+    }
+
+    #[test]
+    fn parses_dry_run_alongside_passthrough() {
+        // `--dry-run` is a run option, so it stays on the tsr side of `--` while
+        // everything after it is still the task's own argument.
+        let Cli::Run {
+            opts, passthrough, ..
+        } = parse_ok(&["build", "--dry-run", "--", "--watch"])
+        else {
+            panic!("expected a run");
+        };
+        assert!(opts.dry_run);
+        assert_eq!(passthrough, vec!["--watch".to_string()]);
+        let Cli::Run { opts, .. } = parse_ok(&["build"]) else {
+            panic!("expected a run");
+        };
+        assert!(!opts.dry_run, "a plain run must not be a dry one");
     }
 
     #[test]

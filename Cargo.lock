@@ -1482,9 +1482,11 @@ name = "tsr"
 version = "0.6.0"
 dependencies = [
  "glob",
+ "libc",
  "ratatui",
  "serde_json",
  "toml_edit",
+ "windows-sys",
 ]
 
 [[package]]

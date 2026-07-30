@@ -1637,3 +1637,78 @@ fn an_uncreatable_reporter_file_fails_before_running_anything() {
     assert!(stderr(&out).contains("reporter file"), "{}", stderr(&out));
     assert!(!ws.join("ran.txt").exists(), "the task must not have run");
 }
+
+// --- --dry-run (SPEC §12) ---
+
+#[test]
+fn dry_run_prints_the_plan_and_runs_nothing() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.build]\nrun = \"touch built.txt\"\n\
+         [tasks.ci]\ndeps = [\"build\"]\nrun = \"touch ran.txt\"\n",
+    );
+    let out = tsr(&ws, &["ci", "--dry-run"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+
+    let text = stdout(&out);
+    // Both the dependency and the task itself are shown, in execution order.
+    let build = text.find("touch built.txt").expect("dep missing from plan");
+    let ci = text.find("touch ran.txt").expect("task missing from plan");
+    assert!(
+        build < ci,
+        "deps must print before their dependent:\n{text}"
+    );
+    // And nothing actually ran.
+    assert!(!ws.join("built.txt").exists());
+    assert!(!ws.join("ran.txt").exists());
+}
+
+#[test]
+fn dry_run_does_not_expand_env_into_the_plan() {
+    // The plan is meant to be safe to paste into an issue or a CI log, so it
+    // prints the command as written — never the value a `.env` supplied.
+    let ws = workspace();
+    write(&ws, ".env", "TOKEN=hunter2-should-not-leak\n");
+    write(&ws, "tasks.toml", "[tasks.deploy]\nrun = \"echo $TOKEN\"\n");
+    let out = tsr(&ws, &["deploy", "--dry-run"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        !text.contains("hunter2-should-not-leak"),
+        "an env value reached the plan:\n{text}"
+    );
+    assert!(
+        text.contains("$TOKEN"),
+        "the plan should show the variable as written:\n{text}"
+    );
+}
+
+#[test]
+fn dry_run_forwards_args_and_passthrough_into_the_plan() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.test]\nrun = \"vitest\"\nargs = [\"--color\"]\n",
+    );
+    let out = tsr(&ws, &["test", "--dry-run", "--", "--watch"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("vitest --color --watch"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn dry_run_still_reports_a_broken_config() {
+    // A dry run is for *inspecting* an unfamiliar config, so a config that
+    // cannot be resolved must still fail rather than print a bogus plan.
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.a]\ndeps = [\"nope\"]\n");
+    let out = tsr(&ws, &["a", "--dry-run"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+}

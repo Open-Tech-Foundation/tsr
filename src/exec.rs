@@ -23,6 +23,7 @@ use crate::config::{Config, Task, upstream_dep};
 use crate::env;
 use crate::error::TsrError;
 use crate::pkggraph::PackageGraph;
+use crate::proc;
 use crate::resolve::{self, Invocation};
 use crate::shell::{self, Arg, ExecPlan, ExpandedCommand, RunPlan};
 use crate::workspace;
@@ -40,27 +41,33 @@ const POLL_MAX: Duration = Duration::from_millis(20);
 /// spawn, missing delegate, unmatched `packages`, …). `passthrough` is forwarded
 /// to the root task's own command (SPEC §6).
 pub fn run(cfg: &Config, root: &str, passthrough: &[String], sel: Selection<'_>) -> i32 {
-    let ctx = Ctx::new(cfg, sel);
+    // From here on children exist, so an interrupt has something to tear down.
+    proc::install_interrupt_handler();
+    let ctx = Ctx::new(cfg, root, sel);
     let started = Instant::now();
     let _ = ctx.run_task(root, passthrough, true);
 
     let runner_error = ctx.runner_error.lock().unwrap().clone();
     let first_failure = *ctx.first_failure.lock().unwrap();
 
-    // A genuine child failure yields its exact code; otherwise a runner-level
-    // failure is 64; otherwise success.
-    let code = match (first_failure, &runner_error) {
-        (Some(c), _) => c,
-        (None, Some(_)) => crate::error::EXIT_RUNNER_ERROR,
-        (None, None) => 0,
+    // An interrupt outranks everything: whatever a killed child happened to
+    // report, the run ended because the user stopped it (SPEC §10).
+    // Otherwise a genuine child failure yields its exact code, a runner-level
+    // failure is 64, and anything else is success.
+    let code = match (proc::interrupted(), first_failure, &runner_error) {
+        (true, _, _) => proc::EXIT_INTERRUPTED,
+        (false, Some(c), _) => c,
+        (false, None, Some(_)) => crate::error::EXIT_RUNNER_ERROR,
+        (false, None, None) => 0,
     };
 
     if ctx.events_enabled() {
         ctx.emit_summary(root, code, runner_error.as_deref(), started);
     }
     // The human summary is still printed on failure unless the terminal itself
-    // is carrying the NDJSON stream.
-    if ctx.sel.opts.reporter == Reporter::Human && code != 0 {
+    // is carrying the NDJSON stream. An interrupt is not a failure to report:
+    // the user knows why the run stopped, and "✗ dev failed" would misdescribe it.
+    if ctx.sel.opts.reporter == Reporter::Human && code != 0 && !proc::interrupted() {
         ctx.print_summary(root, code, runner_error.as_deref());
     }
     code
@@ -156,6 +163,11 @@ struct Job {
     dir: PathBuf,
     env: HashMap<String, String>,
     action: Action,
+    /// The command as the config writes it, before `$VAR` expansion — what
+    /// `--dry-run` prints. Deliberately not the expanded form: expansion pulls
+    /// in `.env`, and a plan printed into a CI log must not carry secrets
+    /// (SPEC §12).
+    preview: String,
 }
 
 /// Memoisation slot so each task runs at most once (diamond-safe).
@@ -183,10 +195,12 @@ struct Ctx<'a> {
     runner_error: Mutex<Option<String>>,
     results: Mutex<Vec<JobResult>>,
     memo: Mutex<HashMap<String, std::sync::Arc<TaskSlot>>>,
+    /// Whether children are spawned into their own process group (SPEC §12).
+    isolation: proc::Isolation,
 }
 
 impl<'a> Ctx<'a> {
-    fn new(cfg: &'a Config, sel: Selection<'a>) -> Ctx<'a> {
+    fn new(cfg: &'a Config, root: &str, sel: Selection<'a>) -> Ctx<'a> {
         Ctx {
             cfg,
             sel,
@@ -195,11 +209,16 @@ impl<'a> Ctx<'a> {
             runner_error: Mutex::new(None),
             results: Mutex::new(Vec::new()),
             memo: Mutex::new(HashMap::new()),
+            isolation: isolation_for(cfg, root),
         }
     }
 
+    /// Whether the run should stop. Ctrl-C is folded in here rather than handled
+    /// separately: an interrupt wants exactly what a fail-fast wants — stop
+    /// launching, tear down what is running — so it reuses the same path
+    /// (SPEC §12). `--no-bail` does not override it; the user asked to stop.
     fn aborted(&self) -> bool {
-        self.aborted.load(Ordering::SeqCst)
+        self.aborted.load(Ordering::SeqCst) || proc::interrupted()
     }
 
     fn abort(&self) {
@@ -573,7 +592,7 @@ impl<'a> Ctx<'a> {
         parallel: bool,
         passthrough: &[String],
     ) -> Status {
-        if parallel {
+        if self.concurrent(parallel) {
             let statuses: Vec<Status> = std::thread::scope(|scope| {
                 let handles: Vec<_> = nodes
                     .iter()
@@ -635,6 +654,18 @@ impl<'a> Ctx<'a> {
         };
 
         let invocation = resolve::resolve(task, dir).map_err(|e| strip_error(&e))?;
+        // Built before expansion, from the same values the action is built from,
+        // so the preview can never drift from what will actually run.
+        let preview = match &invocation {
+            Invocation::Direct { program, args } => std::iter::once(program.clone())
+                .chain(extra(args.clone()))
+                .collect::<Vec<_>>()
+                .join(" "),
+            Invocation::Run(s) => std::iter::once(s.clone())
+                .chain(extra(Vec::new()))
+                .collect::<Vec<_>>()
+                .join(" "),
+        };
         let action = match invocation {
             Invocation::Direct { program, args } => Action::Spawn {
                 program,
@@ -665,14 +696,22 @@ impl<'a> Ctx<'a> {
             dir: dir.to_path_buf(),
             env,
             action,
+            preview,
         })
     }
 
     // --- batching ---
 
+    /// Whether a batch really runs in parallel. `--dry-run` prints a plan, and a
+    /// plan whose lines interleave by thread scheduling is not one you can read,
+    /// so it always walks the graph sequentially.
+    fn concurrent(&self, parallel: bool) -> bool {
+        parallel && !self.sel.opts.dry_run
+    }
+
     /// Run a batch of dependency tasks, fail-fast (SPEC §5.1, §5.2).
     fn run_task_batch(&self, keys: &[String], parallel: bool) -> Status {
-        if parallel {
+        if self.concurrent(parallel) {
             let statuses: Vec<Status> = std::thread::scope(|scope| {
                 let handles: Vec<_> = keys
                     .iter()
@@ -688,7 +727,7 @@ impl<'a> Ctx<'a> {
 
     /// Run a batch of leaf jobs, fail-fast.
     fn run_job_batch(&self, jobs: Vec<Job>, parallel: bool) -> Status {
-        if parallel {
+        if self.concurrent(parallel) {
             let statuses: Vec<Status> = std::thread::scope(|scope| {
                 let handles: Vec<_> = jobs
                     .into_iter()
@@ -746,6 +785,11 @@ impl<'a> Ctx<'a> {
         if self.aborted() {
             self.record(&job.label, ResultKind::Skipped, None);
             return Status::Skipped;
+        }
+        if self.sel.opts.dry_run {
+            self.print_plan(&job);
+            self.record(&job.label, ResultKind::Skipped, None);
+            return Status::Ok;
         }
         let start = Instant::now();
         let wait = self.execute_action(&job);
@@ -834,6 +878,9 @@ impl<'a> Ctx<'a> {
             .current_dir(&job.dir)
             .env_clear()
             .envs(&job.env);
+        // Contain the child's whole process tree when this run can abort one
+        // (SPEC §12) — killing `npm run dev` must not leave `vite` holding a port.
+        let mut contained = proc::contain(&mut cmd, self.isolation);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -841,12 +888,12 @@ impl<'a> Ctx<'a> {
                 return LeafWait::SpawnFailed(format!("cannot run '{program}': {e}"));
             }
         };
+        contained.attach(&child);
 
         let mut backoff = POLL_MIN;
         loop {
             if self.aborted() {
-                let _ = child.kill();
-                let _ = child.wait();
+                contained.terminate(&mut child);
                 return LeafWait::Killed;
             }
             match child.try_wait() {
@@ -858,6 +905,20 @@ impl<'a> Ctx<'a> {
                 Err(e) => return LeafWait::SpawnFailed(e.to_string()),
             }
         }
+    }
+
+    /// One leaf of a `--dry-run` plan: where it would run and what it would run.
+    ///
+    /// Prints the command *as configured*, so a `run` string still shows its
+    /// `$VAR`s and its globs unexpanded. That is the point — the plan is meant to
+    /// be safe to paste into an issue or a CI log, and an expanded one would
+    /// carry whatever `.env` supplied (SPEC §12).
+    fn print_plan(&self, job: &Job) {
+        let dir = crate::path::rel_to_slash(&self.cfg.root, &job.dir);
+        let dir = if dir.is_empty() { ".".to_string() } else { dir };
+        println!("· {}", job.label);
+        println!("    dir: {dir}");
+        println!("    cmd: {}", job.preview);
     }
 
     // --- reporting ---
@@ -903,6 +964,27 @@ enum LeafWait {
 /// mini-shell sequence — the "resolved command" that passthrough targets.
 /// A task's ordinary `deps` — everything that is not an `^upstream` marker.
 /// Those are resolved per package during the fan-out, not as task-key edges.
+/// Whether this run's children need process groups of their own (SPEC §12).
+///
+/// Isolation is what lets a kill reach a whole process tree, but on unix it also
+/// moves the child out of the terminal's foreground group, so reading stdin
+/// stops it with `SIGTTIN`. The trade is decided by the one thing that makes a
+/// kill possible at all: parallelism. Nothing in a sequential run can abort a
+/// child that is already running — there is no sibling to fail — so those keep
+/// the inherited group and stay interactive, while any run whose reachable tasks
+/// include a `parallel = true` batch isolates every child it spawns.
+fn isolation_for(cfg: &Config, root: &str) -> proc::Isolation {
+    let parallel = crate::graph::reachable(cfg, root)
+        .iter()
+        .filter_map(|key| cfg.task(key))
+        .any(|task| task.parallel);
+    if parallel {
+        proc::Isolation::Isolated
+    } else {
+        proc::Isolation::Inherited
+    }
+}
+
 fn plain_deps(task: &Task) -> Vec<String> {
     task.deps
         .iter()
@@ -963,6 +1045,7 @@ mod tests {
         since: None,
         resume_from: None,
         no_bail: false,
+        dry_run: false,
         reporter: Reporter::Human,
         reporter_file: None,
     };
@@ -1073,6 +1156,29 @@ mod tests {
         assert_eq!(run_task(toml, "top"), 0);
     }
 
+    /// Isolation is bought at the cost of interactivity (SPEC §12), so it is
+    /// spent only on runs that can actually kill a child — the parallel ones.
+    #[test]
+    fn only_a_parallel_run_isolates_its_children() {
+        let (cfg, _r) = setup(
+            "[tasks.lint]\nrun = \"true\"\n\
+             [tasks.dev]\nrun = \"vite\"\n\
+             [tasks.ci]\ndeps = [\"lint\"]\nparallel = true\n",
+        );
+        assert_eq!(
+            isolation_for(&cfg, "dev"),
+            proc::Isolation::Inherited,
+            "a lone interactive task must keep the terminal's process group"
+        );
+        assert_eq!(isolation_for(&cfg, "ci"), proc::Isolation::Isolated);
+        // Reached *through* a parallel batch, so it can be killed by a sibling.
+        assert_eq!(
+            isolation_for(&cfg, "lint"),
+            proc::Isolation::Inherited,
+            "run on its own, `lint` has no sibling that could abort it"
+        );
+    }
+
     #[test]
     fn parallel_fail_fast_kills_slow_sibling() {
         // One dep fails immediately; a slow sibling must be killed, so the whole
@@ -1139,7 +1245,7 @@ mod tests {
             no_bail: true,
             ..RunOptions::default()
         };
-        let ctx = Ctx::new(&cfg, Selection::plain(&opts));
+        let ctx = Ctx::new(&cfg, "build", Selection::plain(&opts));
         assert_eq!(ctx.run_task("build", &[], true), Status::Failed(1));
         // Both packages were attempted, not just the first.
         assert_eq!(ctx.results.lock().unwrap().len(), 2);
@@ -1149,7 +1255,7 @@ mod tests {
     fn passthrough_and_args_ordering() {
         // args prepended before CLI passthrough, appended to the resolved command.
         let (cfg, _r) = setup("[tasks.t]\nrun = \"vitest\"\nargs = [\"--color\"]\n");
-        let ctx = Ctx::new(&cfg, Selection::plain(&OPTS));
+        let ctx = Ctx::new(&cfg, "t", Selection::plain(&OPTS));
         let task = cfg.task("t").unwrap();
         let job = ctx
             .build_job(task, &cfg.root, "t".into(), &["--watch".to_string()])
@@ -1169,7 +1275,7 @@ mod tests {
     #[test]
     fn passthrough_appends_to_the_last_command_of_a_sequence() {
         let (cfg, _r) = setup("[tasks.t]\nrun = \"build && vitest\"\nargs = [\"--color\"]\n");
-        let ctx = Ctx::new(&cfg, Selection::plain(&OPTS));
+        let ctx = Ctx::new(&cfg, "t", Selection::plain(&OPTS));
         let job = ctx
             .build_job(
                 cfg.task("t").unwrap(),
@@ -1235,7 +1341,7 @@ mod tests {
         std::fs::write(root.join("package.json"), "{}").unwrap();
         std::fs::write(root.join("tasks.toml"), "[tasks.test]\nargs = [\"--ci\"]\n").unwrap();
         let cfg = Config::load(&root.join("tasks.toml")).unwrap();
-        let ctx = Ctx::new(&cfg, Selection::plain(&OPTS));
+        let ctx = Ctx::new(&cfg, "test", Selection::plain(&OPTS));
         let task = cfg.task("test").unwrap();
         let job = ctx
             .build_job(task, &cfg.root, "test".into(), &["--watch".to_string()])

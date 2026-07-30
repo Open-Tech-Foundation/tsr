@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Process-tree containment (SPEC §12).** A fail-fast abort used to kill only
+  the process `tsr` spawned, so `npm run dev` died while the `vite` it had
+  started kept the port. Children that a run may have to kill are now spawned
+  into their own process group (unix) or job object (windows), and the whole
+  group is torn down — `SIGTERM`, then `SIGKILL` after a 2s grace.
+
+  Isolation costs interactivity on unix: a process group outside the terminal's
+  foreground one is stopped by `SIGTTIN` as soon as it reads stdin. So it is
+  applied only to runs whose reachable tasks include a `parallel = true` batch —
+  exactly the runs where `tsr` can be the one doing the killing. A lone
+  `tsr dev` keeps the inherited group and stays interactive.
+
+- **Ctrl-C is handled rather than fatal (SPEC §12).** `SIGINT`/`SIGTERM` (and
+  `CTRL_C_EVENT` on Windows) now abort the run through the same path a failure
+  uses: stop launching, tear down what is running, exit `130`. Previously `tsr`
+  died mid-`wait()` and left its children to init. A second interrupt exits
+  immediately, so a wedged child can never trap the terminal.
+
+- **`--dry-run` — print the plan, run nothing (SPEC §12).** Walks the dependency
+  graph and prints each leaf's label, directory and command, so an unfamiliar
+  `tasks.toml` can be read before it is handed a shell. Commands print **as
+  written**, before `$VAR` expansion, so a plan pasted into an issue or a CI log
+  cannot carry what `.env` supplied. The walk is always sequential, even for
+  `parallel = true` batches, so the plan is readable.
+
 ### Fixed
 
 - CI (Windows): a `--no-bail` e2e test named `sh` outright without a

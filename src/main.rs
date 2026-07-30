@@ -11,6 +11,7 @@ mod exec;
 mod graph;
 mod path;
 mod pkggraph;
+mod proc;
 mod resolve;
 mod shell;
 mod tui;
