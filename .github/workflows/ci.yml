@@ -81,3 +81,15 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  # Advisories against the locked dependency set. Separate from lint so a new
+  # advisory published against an unchanged tree reports as its own failure
+  # rather than looking like a code regression.
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

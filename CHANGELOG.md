@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   died mid-`wait()` and left its children to init. A second interrupt exits
   immediately, so a wedged child can never trap the terminal.
 
+- **Bounded config discovery (SPEC §12.3).** The upward walk for `tasks.toml`
+  now stops at the repository root (a directory holding `.git`), the user's home
+  directory, or a filesystem boundary — the same rule `git` applies to its own
+  discovery. A `tasks.toml` left in `/tmp` or in a home directory used to govern
+  every project beneath it silently. Configless mode's search for an ecosystem
+  marker is bounded the same way.
+
+  A **world-writable** config, or one in a world-writable non-sticky directory,
+  is refused on unix — anyone on the machine could otherwise choose what runs.
+  Group-writable is accepted (`umask 002` is a common default) and ownership is
+  not checked, so CI checkouts running as a different uid are unaffected.
+
+- **`SECURITY.md`, SPEC §12 and a Security page in the docs.** The whole model in
+  one place: what is guarded, what deliberately is not, and how to report a
+  vulnerability privately.
+
+- CI: `cargo audit` runs against the locked dependency set.
+
 - **Guarded environment variables (SPEC §12.2).** A config may no longer set the
   variables that decide what code some *other* program loads — `LD_PRELOAD`,
   `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS`, `BASH_ENV`,

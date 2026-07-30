@@ -229,15 +229,17 @@ so a task named `list` or `init` is never shadowed — `tsr list` runs the user'
 `list` task. This keeps the entire bare-word namespace available for
 tasks/scripts, which is the point of the tool.
 
-Four options may follow a task name. Every one is a flag, never a bare word, so
-none shadows anything; anything else after a task name is still the "forward args
-after `--`" error.
+The options below may follow a task name. Every one is a flag, never a bare word,
+so none shadows anything; anything else after a task name is still the "forward
+args after `--`" error.
 
 | Option | Meaning |
 |--------|---------|
 | `--since <ref>` | Run only in packages affected by changes since a git ref (§9.3). |
 | `--resume-from <pkg>` | Skip every package ordered before `pkg` (§9.4). |
 | `--no-bail` | Run every batch to completion instead of stopping at the first failure (§5.2). |
+| `--dry-run` | Print the plan and run nothing (§12.5). |
+| `--allow-unsafe-env` | Let the config set the guarded environment variables (§12.2). |
 | `--reporter <fmt>` | Terminal format: `human` (default) or `ndjson` (§6.2). |
 | `--reporter-file <path>` | Also write the NDJSON stream to `path` (§6.2). |
 
@@ -472,7 +474,8 @@ Affected = the packages the changed files live in, **plus every package that tra
 |------|---------|
 | `0` | Success. |
 | *child's code* | On task failure, the first failed child's **exact** exit code is propagated verbatim (`1`, `2`, `130`, …), so CI sees the real signal. |
-| `64` | **Runner-level** error: config parse failure, `dir`+`packages` both set, unknown task name, `delegate` binary not found, undefined `$VAR`, rejected mini-shell metacharacter. A failing **builtin** (§8.5) is a task failure, not a runner error, so it propagates its own `1`/`2`. |
+| `64` | **Runner-level** error: config parse failure, `dir`+`packages` both set, unknown task name, `delegate` binary not found, undefined `$VAR`, rejected mini-shell metacharacter, or a rejected security guard (§12). A failing **builtin** (§8.5) is a task failure, not a runner error, so it propagates its own `1`/`2`. |
+| `130` | The run was **interrupted** (Ctrl-C / `SIGTERM`, §12.4). Outranks whatever a killed child reported: the run ended because the user stopped it. |
 
 The distinction lets pipelines tell "my task failed" (child code) apart from "the runner itself broke" (`64`).
 
@@ -501,6 +504,102 @@ The arrival of the dependency graph *is* what defines v1.1 as "the monorepo rele
 ### Explicitly out of scope (delegated, not built)
 
 Content-hash caching, remote caching, and inputs/outputs tracking are **never** implemented in `tsr` — they are ceded to delegated backends (Turbo, Nx). Adding them would contradict the "lightweight, delegate" principle.
+
+---
+
+## 12. Security model
+
+### 12.0 The trust boundary
+
+Running `tsr build` in a repository is **running that repository's code**, exactly as `npm run build` or `make` is. `tsr` does not sandbox the programs it spawns, and it never will: a task runner that stopped `cargo` from writing outside the repo would have stopped being a task runner.
+
+What `tsr` *does* guard is the part with no process boundary around it — **the things `tsr` performs itself**:
+
+| `tsr` does this itself | So it is guarded |
+|---|---|
+| In-process builtins (§8.5) — there is no `/bin/rm` to audit or deny | §12.1 workspace confinement |
+| Builds the environment every child inherits | §12.2 guarded variables |
+| Chooses which `tasks.toml` gets to run commands | §12.3 discovery boundary |
+| Owns the lifetime of every process it spawns | §12.4 process-tree containment |
+
+Two tiers, because they defend against different things:
+
+- **Config-relaxable guards** (§12.1) defend against *accidents* — a stale `dir`, a glob that reaches further than intended. A `tasks.toml` may widen them, so they are no defence against a config you do not trust.
+- **CLI-only guards** (§12.2) exist precisely for the case where the config *is* what you are wary of. Nothing in `tasks.toml` can lift them.
+
+Anything a guard rejects is a runner-level error: exit `64`, before the first child is spawned.
+
+### 12.1 Workspace confinement
+
+Every path `tsr` resolves itself must stay inside the workspace — the directory holding `tasks.toml`.
+
+- **Builtin operands** (`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`) are refused when they resolve outside it. This is the guard that matters most: a builtin is `tsr` itself, always preferred over a binary of the same name (§8.5), so there is no `PATH`, sandbox or audit log to fall back on.
+- **`dir`, `env_file`, `packages` and `workspace.members`** are rejected at load time. A glob is judged by its literal prefix — `apps/*` cannot escape `apps/`, `../*` has already left.
+
+Resolution is **physical**: the longest existing prefix of a path is canonicalized, so a symlink inside the workspace pointing out of it is out of it. Only a not-yet-created tail is joined lexically, where no symlink can remain.
+
+The escape hatch is a config key, for builds that genuinely write outside their tree:
+
+```toml
+[security]
+allow_paths = ["../shared-cache", "/tmp/build"]
+```
+
+### 12.2 Guarded environment variables
+
+A **config** may not set a variable whose only purpose is to decide what code some *other* program loads:
+
+`LD_PRELOAD` · `LD_AUDIT` · `DYLD_INSERT_LIBRARIES` · `DYLD_LIBRARY_PATH` · `NODE_OPTIONS` · `BASH_ENV` · `PYTHONSTARTUP` · `PERL5OPT` · `RUBYOPT` · `GIT_SSH` · `GIT_SSH_COMMAND` · `GIT_EXTERNAL_DIFF` · `GIT_PROXY_COMMAND` · `SSH_ASKPASS` · `SUDO_ASKPASS` · anything prefixed `TSR_`
+
+Without this, a `tasks.toml` — or a committed `.env` — that appears to run `cargo test` can execute arbitrary code inside an unrelated process. Names are compared the way the platform compares them: exactly on unix, case-insensitively on Windows.
+
+`PATH` is not banned, since extending it is ordinary. It may be set only to a value that still references `$PATH`, so it augments rather than replaces — the same "merged, never wiped" rule the env model already follows (§7.1):
+
+```toml
+[env]
+PATH = "./bin:$PATH"   # fine
+PATH = "/only/mine"    # rejected
+```
+
+**Scope.** Only config-supplied sources are checked — `[env]`, task `env`, `env_file`, and the root `.env` — over the tasks that will actually run. The **process** environment is passed through untouched: it belongs to whoever invoked `tsr`, and a runner that refused the environment it was given would be broken rather than safe.
+
+**Opt-in:** `--allow-unsafe-env`, a CLI flag and deliberately not a `[security]` key.
+
+### 12.3 Discovery boundary
+
+Which `tasks.toml` is found decides what gets to run commands, so the upward walk (§2) is bounded. It stops at the first of:
+
+- the **repository root** — a directory holding `.git`, checked after that directory itself, since a workspace anchored at the repo root is the norm;
+- the user's **home directory**;
+- a **filesystem boundary**, the rule `git` applies to its own discovery.
+
+Without this, a `tasks.toml` left in `/tmp` or in a home directory silently governs every project beneath it.
+
+A config that is **world-writable**, or that sits in a world-writable non-sticky directory, is refused (unix): anyone on the machine could otherwise choose what `tsr` runs. Group-writable is accepted — a `umask` of `002` is a common default and rejecting it would fire on ordinary checkouts. Ownership is not checked, for the same reason git's "dubious ownership" is a recurring nuisance; a file another user owns is only reachable through a directory they can write to, which the above already catches.
+
+### 12.4 Process-tree containment
+
+Killing the process `tsr` spawned is not the same as stopping the work: `npm run dev` is a launcher whose `vite` keeps the port. A child that a run may have to kill is therefore spawned into its own **process group** (unix) or **job object** (windows), and the group is what is torn down — `SIGTERM`, then `SIGKILL` after a 2s grace.
+
+Isolation is not applied unconditionally, because on unix it costs interactivity: a process group outside the terminal's foreground one is stopped by `SIGTTIN` the moment it reads stdin. It is applied exactly when a kill is possible — when the run's reachable tasks include a `parallel = true` batch (§5.1). A lone `tsr dev` keeps the inherited group and stays interactive.
+
+**Interrupts.** `SIGINT`/`SIGTERM` (and `CTRL_C_EVENT` on Windows) abort the run through the same path a failure uses: stop launching, tear down what is running, exit `130` (§10). `--no-bail` does not override it — the user asked to stop. A second interrupt exits immediately, so a wedged child cannot trap the terminal.
+
+### 12.5 `--dry-run`
+
+`tsr <task> --dry-run` walks the dependency graph and prints each leaf's label, directory and command without running anything — the way to read an unfamiliar `tasks.toml` before handing it a shell.
+
+Commands print **as written**, before `$VAR` expansion, so a plan pasted into an issue or a CI log cannot carry what `.env` supplied. The walk is always sequential, even for `parallel = true` batches, so the output is readable. A config that cannot be resolved still fails: a dry run reports the same errors a real one would.
+
+### 12.6 Not guarded
+
+Stated plainly, so the boundary is not mistaken for more than it is:
+
+- **Spawned programs.** Once a child starts it has the user's full privileges. Use a container or a sandbox if that is not acceptable.
+- **`delegate` and `run` targets.** Naming a binary is the feature; `tsr` does not decide which binaries are allowed.
+- **`node_modules/.bin` on `PATH`** (§9.2). A repo-local binary shadowing a global one is what npm does and what makes `run = "vite"` work.
+- **Secrets in a child's output.** Children inherit stdio; what they print is theirs.
+- **`[security] allow_paths` against a hostile config.** It is a config key, so a config can widen it; §12.1 is an accident guard, by design.
 
 ---
 

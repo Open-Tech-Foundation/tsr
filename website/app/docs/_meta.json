@@ -9,5 +9,6 @@
   "monorepo": "Monorepo & packages",
   "cli": "CLI reference",
   "exit-codes": "Exit codes",
+  "security": "Security",
   "benchmarks": "Benchmarks"
 }

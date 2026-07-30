@@ -1912,3 +1912,49 @@ fn path_may_be_extended_but_not_replaced() {
     assert!(stderr(&out).contains("PATH"), "{}", stderr(&out));
     assert!(!ws2.join("ran.txt").exists());
 }
+
+// --- discovery boundary (SPEC §12.3) ---
+
+#[test]
+fn discovery_does_not_climb_past_the_repository() {
+    // A tasks.toml above a repository must not govern it — otherwise one left
+    // in /tmp or a home directory silently owns every project beneath it.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.pwn]\nrun = \"touch pwned.txt\"\n",
+    );
+    let repo = ws.join("repo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::create_dir_all(repo.join("src")).unwrap();
+
+    let out = tsr(&repo.join("src"), &["pwn"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(!ws.join("pwned.txt").exists());
+
+    // The repository's own config is still found from a nested directory.
+    write(
+        &repo,
+        "tasks.toml",
+        "[tasks.own]\nrun = \"touch ran.txt\"\n",
+    );
+    let out = tsr(&repo.join("src"), &["own"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(repo.join("ran.txt").is_file());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_world_writable_config_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.t]\nrun = \"touch ran.txt\"\n");
+    let cfg = ws.join("tasks.toml");
+    fs::set_permissions(&cfg, fs::Permissions::from_mode(0o666)).unwrap();
+
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("world-writable"), "{}", stderr(&out));
+    assert!(!ws.join("ran.txt").exists());
+}

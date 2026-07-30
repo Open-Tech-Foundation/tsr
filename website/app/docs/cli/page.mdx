@@ -20,14 +20,16 @@ named `list` or `init` is never shadowed — `tsr list` runs your `list` task.
 
 ## Options at a glance
 
-Four options may follow a task name. Each accepts `--flag value` or
-`--flag=value`. Everything else still belongs after `--`.
+These options may follow a task name. Each value-taking one accepts
+`--flag value` or `--flag=value`. Everything else still belongs after `--`.
 
 | Option | Default | Summary |
 |--------|---------|---------|
 | [`--since <ref>`](#tsr-task-since-ref) | — | Run only in packages affected since a git ref. |
 | [`--resume-from <pkg>`](#tsr-task-resume-from-pkg) | — | Skip packages ordered before `<pkg>`. |
 | [`--no-bail`](#tsr-task-no-bail) | off | Run everything; don't stop at the first failure. |
+| [`--dry-run`](#tsr-task-dry-run) | off | Print what would run, and run nothing. |
+| [`--allow-unsafe-env`](#tsr-task-allow-unsafe-env) | off | Let the config set guarded env variables. |
 | [`--reporter <fmt>`](#tsr-task-reporter-fmt) | `human` | Terminal format: `human` or `ndjson`. |
 | [`--reporter-file <path>`](#tsr-task-reporter-file-path) | — | Also write the NDJSON stream to a file. |
 
@@ -134,6 +136,46 @@ The propagated exit code is still the **first** failure's, so CI sees the same
 signal either way. This covers *task* failures only — a runner-level error still
 stops the run, because a missing `delegate` binary will be missing for every
 package too.
+
+## `tsr <task> --dry-run`
+
+Walks the dependency graph and prints each unit of work — its label, directory
+and command — without running any of it. The way to read an unfamiliar
+`tasks.toml` before handing it a shell.
+
+```sh
+tsr ci --dry-run
+```
+
+```text
+· lint
+    dir: .
+    cmd: eslint .
+· build (packages/ui)
+    dir: packages/ui
+    cmd: vite build
+```
+
+Commands print **as written**, before `$VAR` expansion, so a plan pasted into an
+issue or a CI log cannot carry what your `.env` holds. The walk is always
+sequential — even for `parallel = true` batches — so the output stays readable,
+and a config that can't be resolved still fails with the same error a real run
+would give.
+
+## `tsr <task> --allow-unsafe-env`
+
+Lets the config set the [guarded environment variables](/docs/security) —
+`LD_PRELOAD`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`, … — and replace `PATH` outright.
+
+```sh
+tsr build --allow-unsafe-env
+```
+
+<Callout type="warning" title="A flag, never a config key">
+  There is deliberately no <code>[security]</code> equivalent. These guards exist
+  for the case where the <code>tasks.toml</code> is what you are wary of, and a
+  guard the config could switch off would not survive that case.
+</Callout>
 
 ## `tsr <task> --reporter <fmt>`
 

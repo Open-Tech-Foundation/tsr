@@ -37,6 +37,7 @@ cargo build --release   # binary at target/release/tsr
 ```sh
 tsr <task>              # run a task
 tsr test -- --watch     # forward args after -- to the resolved command
+tsr build --dry-run     # print what would run, and run nothing
 tsr --list              # list the tasks defined in tasks.toml
 tsr --config            # edit tasks.toml in an interactive TUI
 tsr --init              # scaffold a starter tasks.toml
@@ -143,7 +144,35 @@ A `$VAR` referenced in a `run` string but defined nowhere is a hard error.
 |------|---------|
 | `0` | Success. |
 | *child's code* | A task's child failed; its exact code is propagated. |
-| `64` | Runner-level error (bad config, undefined `$VAR`, rejected metacharacter, unknown task, dependency cycle, missing delegate binary, …). |
+| `64` | Runner-level error (bad config, undefined `$VAR`, rejected metacharacter, unknown task, dependency cycle, missing delegate binary, a rejected security guard, …). |
+| `130` | The run was interrupted (Ctrl-C). |
+
+## Security
+
+Running `tsr build` in a repo is running that repo's code, the same as
+`npm run build`. `tsr` does not sandbox what it spawns. It *does* guard the parts
+it performs itself:
+
+- **Workspace confinement** — the in-process builtins (`rm`, `cp`, `mv`, …)
+  refuse operands outside the workspace, and `dir` / `env_file` / `packages` /
+  `members` are rejected at load time if they point outside it. `rm` here is
+  `tsr`, always preferred over `/bin/rm`, so nothing else can stop it. Widen it
+  with `[security] allow_paths = ["../shared-cache"]`.
+- **Guarded environment variables** — a config or a `.env` may not set
+  `LD_PRELOAD`, `NODE_OPTIONS`, `GIT_SSH_COMMAND` and friends, which decide what
+  code an unrelated program loads. `PATH` may be extended (`"./bin:$PATH"`) but
+  not replaced. Lift with `--allow-unsafe-env` — a CLI flag, never a config key.
+- **Bounded discovery** — the walk up to `tasks.toml` stops at the repository
+  root, `$HOME`, or a filesystem boundary, and a world-writable config is
+  refused.
+- **Process-tree containment** — a fail-fast or a Ctrl-C tears down the whole
+  process group, not just the child `tsr` spawned.
+
+`tsr <task> --dry-run` prints every command a run would execute, before `$VAR`
+expansion, so you can read an unfamiliar config first.
+
+Full model: [SPEC §12](./SPEC.md#12-security-model). Reporting:
+[SECURITY.md](./SECURITY.md).
 
 ## Development
 

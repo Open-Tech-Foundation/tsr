@@ -92,6 +92,7 @@ impl Task {
 impl Config {
     /// Load and validate a specific `tasks.toml` file.
     pub fn load(path: &Path) -> Result<Config> {
+        check_writability(path)?;
         let text = fs::read_to_string(path)
             .map_err(|e| TsrError::config(format!("cannot read '{}': {e}", path.display())))?;
         let root = path
@@ -135,6 +136,58 @@ fn glob_prefix(pattern: &str) -> &str {
     }
 }
 
+/// Refuse a `tasks.toml` that anyone on the machine can rewrite (SPEC §12.3).
+///
+/// The file decides what commands run, so a world-writable one — or one in a
+/// world-writable directory, where it can simply be replaced — hands that
+/// decision to any local user. Unix only; there is no cheap equivalent of the
+/// mode bits on Windows.
+///
+/// Two deliberate narrowings, because a guard that fires on ordinary setups gets
+/// worked around rather than heeded:
+///
+/// - **Group-writable is fine.** A `umask` of `002` and a per-user group are a
+///   common default, which would make almost every checkout fail this.
+/// - **A sticky directory is fine.** That is what the bit means: `/tmp` is
+///   world-writable, but only the owner of a file there may replace it.
+///
+/// Ownership is not checked either. A file another user owns is only reachable
+/// through a directory they can write to, which this already catches, and
+/// checking it would reproduce git's "dubious ownership" friction on every CI
+/// checkout that runs as a different uid.
+fn check_writability(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        const WORLD_WRITE: u32 = 0o002;
+        const STICKY: u32 = 0o1000;
+
+        let mode = |p: &Path| fs::metadata(p).map(|m| m.permissions().mode()).ok();
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let exposed = [
+            (path, mode(path).is_some_and(|m| m & WORLD_WRITE != 0)),
+            (
+                dir,
+                mode(dir).is_some_and(|m| m & WORLD_WRITE != 0 && m & STICKY == 0),
+            ),
+        ];
+        for (target, is_exposed) in exposed {
+            if is_exposed {
+                return Err(TsrError::config(format!(
+                    "'{}' is world-writable, and '{}' decides what commands run — \
+                     `chmod o-w '{}'` before using it",
+                    target.display(),
+                    path.display(),
+                    target.display()
+                )));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Locate the nearest existing `tasks.toml` at/above `start`, if any. Used by the
 /// `--config` TUI to decide whether to open an existing workspace or start a new
 /// file in the current directory.
@@ -147,17 +200,59 @@ pub fn locate(start: &Path) -> Option<PathBuf> {
 /// **configless** mode: when there is no `tasks.toml`, this is where `tsr <task>`
 /// auto-detects the native runner from.
 pub fn nearest_package_root(start: &Path) -> Option<PathBuf> {
+    walk_up(start, |dir| crate::detect::detect(dir).is_some())
+}
+
+/// Walk from `start` upward, returning the first directory `found` accepts.
+///
+/// The walk is **bounded** (SPEC §12.3). Discovery decides which file gets to
+/// run commands on this machine, and an unbounded climb hands that decision to
+/// whatever sits above the working directory — a `tasks.toml` left in `/tmp` or
+/// in a home directory would silently govern every project beneath it. So the
+/// walk stops at the first of:
+///
+/// - the repository root (a directory holding `.git`) — checked *after* that
+///   directory itself, since a workspace anchored at the repo root is the norm;
+/// - the user's home directory, which nothing above is part of their project;
+/// - a filesystem boundary, the same rule `git` applies to its own discovery.
+fn walk_up(start: &Path, mut found: impl FnMut(&Path) -> bool) -> Option<PathBuf> {
     let mut dir = if start.is_dir() {
         Some(start.to_path_buf())
     } else {
         start.parent().map(Path::to_path_buf)
     };
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let origin = device_of(start);
+
     while let Some(d) = dir {
-        if crate::detect::detect(&d).is_some() {
+        if found(&d) {
             return Some(d);
         }
-        dir = d.parent().map(Path::to_path_buf);
+        if d.join(".git").exists() || home.as_deref() == Some(d.as_path()) {
+            return None;
+        }
+        let parent = d.parent()?;
+        if device_of(parent) != origin {
+            return None;
+        }
+        dir = Some(parent.to_path_buf());
     }
+    None
+}
+
+/// The filesystem a path lives on, where the platform can say. `None` on
+/// Windows, which has no cheap equivalent — the repository and home boundaries
+/// still apply there.
+#[cfg(unix)]
+fn device_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    path.metadata().ok().map(|m| m.dev())
+}
+
+#[cfg(not(unix))]
+fn device_of(_path: &Path) -> Option<u64> {
     None
 }
 
@@ -208,19 +303,7 @@ pub(crate) fn validate_task_name(key: &str) -> Result<()> {
 
 /// Walk up from `start` looking for the nearest `tasks.toml`.
 fn find_config(start: &Path) -> Option<PathBuf> {
-    let mut dir = if start.is_dir() {
-        Some(start.to_path_buf())
-    } else {
-        start.parent().map(Path::to_path_buf)
-    };
-    while let Some(d) = dir {
-        let candidate = d.join(CONFIG_FILE);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        dir = d.parent().map(Path::to_path_buf);
-    }
-    None
+    walk_up(start, |dir| dir.join(CONFIG_FILE).is_file()).map(|dir| dir.join(CONFIG_FILE))
 }
 
 /// Parse TOML text into the typed [`Config`] model (no cross-field validation).
@@ -766,6 +849,44 @@ mod tests {
         let cfg = Config::load(&found).unwrap();
         assert_eq!(cfg.root, root);
         assert!(cfg.task("dev").is_some());
+    }
+
+    /// Discovery decides which file gets to run commands, so the climb stops at
+    /// the repository rather than picking up whatever sits above it (SPEC §12.3).
+    #[test]
+    fn discovery_stops_at_the_repository_root() {
+        let path = write_config("[tasks.dev]\nrun = \"vite\"\n");
+        let outer = path.parent().unwrap();
+        // A repo below the config, with nothing of its own to find.
+        let repo = outer.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let nested = repo.join("src");
+        fs::create_dir_all(&nested).unwrap();
+
+        assert!(
+            locate(&nested).is_none(),
+            "a tasks.toml above the repository must not govern it"
+        );
+        // The repo's own config is still found, `.git` and all.
+        fs::write(repo.join(CONFIG_FILE), "[tasks.dev]\nrun = \"own\"\n").unwrap();
+        assert_eq!(locate(&nested).unwrap(), repo.join(CONFIG_FILE));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_world_writable_config_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = write_config("[tasks.dev]\nrun = \"vite\"\n");
+        assert!(Config::load(&path).is_ok(), "the baseline must load");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(err.contains("world-writable"), "{err}");
+        assert!(err.contains("chmod o-w"), "should say how to fix it: {err}");
+
+        // Group-writable is ordinary (umask 002) and must still load.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(Config::load(&path).is_ok());
     }
 
     #[test]

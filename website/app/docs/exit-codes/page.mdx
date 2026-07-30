@@ -15,6 +15,7 @@ pipelines see the real signal.
 | `0` | Success. |
 | *child's code* | On task failure, the first failed child's **exact** exit code is propagated verbatim (`1`, `2`, `130`, …). |
 | `64` | **Runner-level** error. |
+| `130` | The run was **interrupted** (Ctrl-C / `SIGTERM`). |
 
 ## What counts as a runner-level error (`64`)
 
@@ -24,7 +25,9 @@ pipelines see the real signal.
 - a `delegate` binary (or any command) that can't be launched;
 - an undefined `$VAR` referenced in a `run` string;
 - a rejected mini-shell metacharacter (`|`, `>`, `*`, `$(…)`, …);
-- a `packages` pattern that matches no package.
+- a `packages` pattern that matches no package;
+- a rejected [security guard](/docs/security) — a path outside the workspace, a
+  guarded environment variable, a world-writable config.
 
 <Callout type="info" title="Why the distinction matters">
   A child code (like <code>1</code> or <code>130</code>) means <em>your task</em>
