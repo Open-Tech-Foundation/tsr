@@ -21,10 +21,22 @@ function ArrowRightIcon({ stroke = "currentColor", style, className }) {
   );
 }
 
-// Capability comparison against the other runners people reach for. Each cell is
-// "y" (has it), "p" (partial / needs a plugin or extra tool), or "n" (no). Kept
-// deliberately factual — the benchmark page has the speed numbers.
-const COMPARE_TOOLS = ["tsr", "npm", "bun", "deno", "just", "go-task", "mise", "Turbo/Nx"];
+// Capability comparison against the other runners people reach for.
+//
+// Grouped by what each tool is *for*: comparing a package runner with a build
+// system on a single axis is how a table like this misleads. Columns are ordered
+// so a group is contiguous, with tsr first inside its own group.
+//
+// Each cell is "y" (has it), "p" (partial — see the row hint for what partial
+// means there), "n" (no), or "d" (delegated by design). Kept deliberately
+// factual; the benchmark page has the speed numbers.
+const COMPARE_GROUPS = [
+  { label: "Task runners", tools: ["tsr", "just", "go-task", "mise"] },
+  { label: "Package runners", tools: ["npm", "bun", "deno"] },
+  { label: "Build systems", tools: ["Turbo/Nx"] },
+];
+const COMPARE_TOOLS = COMPARE_GROUPS.flatMap((g) => g.tools);
+
 const COMPARE_ROWS = [
   {
     label: "Auto-detects each package's runner",
@@ -33,26 +45,28 @@ const COMPARE_ROWS = [
   },
   {
     label: "Dependency graph (DAG)",
-    cells: ["y", "n", "n", "n", "y", "y", "y", "y"],
+    hint: "declared task-to-task edges, resolved before running",
+    cells: ["y", "y", "y", "y", "n", "n", "n", "y"],
   },
   {
     label: "Opt-in parallelism",
-    cells: ["y", "p", "p", "p", "n", "y", "y", "y"],
+    hint: "🟡 = concurrency via a helper (npm-run-all, concurrently), not the runner",
+    cells: ["y", "n", "y", "y", "p", "p", "p", "y"],
   },
   {
     label: "Monorepo workspace fan-out",
-    hint: "run one task across every package",
-    cells: ["y", "p", "p", "p", "n", "n", "n", "y"],
+    hint: "🟡 = runs across workspaces, but without dependency-aware order",
+    cells: ["y", "n", "n", "n", "p", "p", "p", "y"],
   },
   {
     label: "Resolves node_modules/.bin",
     hint: "call vite / eslint like npm run",
-    cells: ["y", "y", "y", "y", "n", "n", "n", "y"],
+    cells: ["y", "n", "n", "n", "y", "y", "y", "y"],
   },
   {
     label: "Built-in shell & coreutils",
-    hint: "cross-platform rm, cp, mkdir, $VAR, globs",
-    cells: ["y", "n", "p", "p", "n", "p", "n", "n"],
+    hint: "cross-platform rm, cp, mkdir, $VAR, globs — no system shell needed",
+    cells: ["y", "n", "p", "n", "n", "p", "p", "n"],
   },
   {
     label: "Built-in commands confined to the workspace",
@@ -61,26 +75,27 @@ const COMPARE_ROWS = [
   },
   {
     label: "Declarative env vars & .env",
-    hint: "[env] blocks + auto-loaded .env",
-    cells: ["y", "p", "p", "p", "y", "y", "y", "y"],
+    hint: "🟡 = one of the two: a .env is read, or vars come from the shell / .npmrc",
+    cells: ["y", "y", "y", "y", "p", "p", "p", "y"],
   },
   {
     label: "Config can't inject into other programs",
     hint: "no LD_PRELOAD / NODE_OPTIONS from [env] or .env",
-    cells: ["y", "n", "n", "n", "n", "n", "p", "n"],
+    cells: ["y", "n", "n", "p", "n", "n", "n", "n"],
   },
   {
-    label: "Native speed, no runtime boot",
-    cells: ["y", "n", "p", "p", "y", "p", "p", "n"],
+    label: "Native binary, no runtime boot",
+    hint: "the runner itself — 🟡 = it is the runtime it boots",
+    cells: ["y", "y", "y", "y", "n", "p", "p", "n"],
   },
   {
     label: "Single static binary",
-    cells: ["y", "n", "y", "y", "y", "y", "y", "n"],
+    cells: ["y", "y", "y", "y", "n", "y", "y", "n"],
   },
   {
     label: "Content-hash / remote caching",
     hint: "tsr delegates this to Turbo/Nx by design",
-    cells: ["d", "n", "n", "n", "n", "p", "n", "y"],
+    cells: ["d", "n", "p", "n", "n", "n", "n", "y"],
   },
 ];
 
@@ -337,12 +352,21 @@ export default function Home() {
           <h2>How it compares</h2>
           <p class="sub">
             tsr is a command runner, not a build system — it unifies the runners you have
-            and cedes caching to the tools built for it. Here's where it lands next to the
-            usual suspects.
+            and cedes caching to the tools built for it. Grouped by what each tool is{" "}
+            <em>for</em>, because a package runner and a build system aren't answering the
+            same question.
           </p>
           <div class="compare-wrap">
             <table class="compare">
               <thead>
+                <tr class="cmp-groups">
+                  <td />
+                  {COMPARE_GROUPS.map((g) => (
+                    <th scope="colgroup" colspan={g.tools.length}>
+                      {g.label}
+                    </th>
+                  ))}
+                </tr>
                 <tr>
                   <th scope="col">Capability</th>
                   {COMPARE_TOOLS.map((t) => (
@@ -377,7 +401,7 @@ export default function Home() {
           <div class="cmp-legend-row">
             <div class="cmp-legend">
               <span>✅ yes</span>
-              <span>🟡 partial / needs a plugin</span>
+              <span>🟡 partial — see the row note</span>
               <span>🔀 delegated by design</span>
               <span>❌ no</span>
             </div>
@@ -386,10 +410,14 @@ export default function Home() {
             </Link>
           </div>
           <p class="cmp-note">
-            On the two guard rows: runners without built-in commands shell out instead, so
-            an <code>rm -rf ..</code> in a script is unconfined either way; mise gates its
-            config behind a trust prompt rather than a rule about which variables it may
-            set. None of these sandbox what a task <em>spawns</em> — neither does tsr.{" "}
+            A ❌ is not a criticism — several of these are capabilities a tool has no reason
+            to have. The package runners resolve <code>node_modules/.bin</code> because
+            that is their job; <code>just</code> has no workspace model because it is not a
+            monorepo tool. On the two guard rows: runners without built-in commands shell
+            out instead, so an <code>rm -rf ..</code> in a script is unconfined either way,
+            and mise gates its config behind a trust prompt rather than a rule about which
+            variables it may set. None of these sandbox what a task <em>spawns</em> —
+            neither does tsr.{" "}
             <Link href="/docs/security">What tsr does and doesn't guard →</Link>
           </p>
         </div>

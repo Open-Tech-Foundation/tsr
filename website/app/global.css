@@ -545,6 +545,27 @@ h1.title .grad {
   color: var(--text-dim);
   flex-wrap: wrap;
 }
+/* Category band above the tool columns: comparing a package runner with a build
+   system on a single axis is how a table like this misleads, so the groups are
+   named rather than left to be inferred from column order. */
+.compare .cmp-groups td,
+.compare .cmp-groups th {
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+.compare .cmp-groups th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+}
+.compare .cmp-groups th + th {
+  border-left: 1px solid var(--line);
+}
+
 /* Footnote under the comparison table: the caveats the ticks can't carry. */
 .cmp-note {
   margin: 14px 0 0;

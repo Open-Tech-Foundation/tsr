@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard rows in the comparison table — with a footnote for the caveats a tick
   cannot carry.
 
+### Changed (website)
+
+- The landing-page comparison table is now grouped by what each tool is *for* —
+  task runners, package runners, build systems — since comparing a package
+  runner with a build system on one axis is how a table like this misleads.
+  Corrections from review: `go-task` and `mise` are native binaries and now read
+  ✅ on "no runtime boot"; the ambiguous rows (parallelism, workspace fan-out,
+  declarative env) say what 🟡 means for them instead of leaving it inferred.
+
 - CI: `cargo audit` runs against the locked dependency set.
 
 - **Guarded environment variables (SPEC §12.2).** A config may no longer set the
