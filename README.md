@@ -159,12 +159,14 @@ it performs itself:
   `tsr`, always preferred over `/bin/rm`, so nothing else can stop it. Widen it
   with `[security] allow_paths = ["../shared-cache"]`.
 - **Guarded environment variables** — a config or a `.env` may not set
-  `LD_PRELOAD`, `NODE_OPTIONS`, `GIT_SSH_COMMAND` and friends, which decide what
-  code an unrelated program loads. `PATH` may be extended (`"./bin:$PATH"`) but
-  not replaced. Lift with `--allow-unsafe-env` — a CLI flag, never a config key.
+  `LD_PRELOAD`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `GOFLAGS`, `GIT_SSH_COMMAND`
+  and friends, which decide what code an unrelated program loads. `PATH` may be
+  extended (`"./bin:$PATH"`) but not replaced, and may not carry an empty or `.`
+  entry — both silently mean the working directory. Lift with
+  `--allow-unsafe-env` — a CLI flag, never a config key.
 - **Bounded discovery** — the walk up to `tasks.toml` stops at the repository
-  root, `$HOME`, or a filesystem boundary, and a world-writable config is
-  refused.
+  root, `$HOME`, or a filesystem boundary, and a world-writable config, `.env` or
+  `env_file` is refused.
 - **Process-tree containment** — a fail-fast or a Ctrl-C tears down the whole
   process group, not just the child `tsr` spawned.
 

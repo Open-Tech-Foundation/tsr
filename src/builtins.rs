@@ -388,7 +388,7 @@ fn cp(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
             code = FAIL;
             continue;
         }
-        if let Err(e) = copy_tree(&src, &dst) {
+        if let Err(e) = copy_tree(&src, &dst, bounds) {
             code = fail("cp", &src, &e);
         }
     }
@@ -413,7 +413,7 @@ fn mv(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
         }
         // A rename across filesystems fails on every platform; fall back to a
         // copy-then-delete so `mv build/out /tmp/x` still works.
-        let r = copy_tree(&src, &dst).and_then(|()| {
+        let r = copy_tree(&src, &dst, bounds).and_then(|()| {
             if src.is_dir() {
                 fs::remove_dir_all(&src)
             } else {
@@ -428,17 +428,30 @@ fn mv(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
 }
 
 /// Copy a file, or a directory tree, to `dst`.
-fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(src)?.is_dir() {
+///
+/// The operand itself was bounds-checked by the caller, but a *tree* is walked,
+/// and a symlink found inside it is a second way out: [`fs::copy`] follows one,
+/// so `cp -r tree out` where `tree/link → /etc/passwd` would pull that file into
+/// the workspace. Each link encountered on the walk is therefore checked against
+/// the boundary in its own right (SPEC §12.1).
+fn copy_tree(src: &Path, dst: &Path, bounds: &Bounds) -> io::Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+    if meta.is_dir() {
         fs::create_dir_all(dst)?;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
-            copy_tree(&entry.path(), &dst.join(entry.file_name()))?;
+            copy_tree(&entry.path(), &dst.join(entry.file_name()), bounds)?;
         }
-        Ok(())
-    } else {
-        fs::copy(src, dst).map(|_| ())
+        return Ok(());
     }
+    if meta.is_symlink() && !bounds.permits_target(src) {
+        return Err(io::Error::other(format!(
+            "'{}' links outside the workspace at '{}'",
+            src.display(),
+            bounds.root().display()
+        )));
+    }
+    fs::copy(src, dst).map(|_| ())
 }
 
 #[cfg(test)]
@@ -635,6 +648,33 @@ mod tests {
 
         assert_eq!(call("rm", &["-rf", "link/keep.txt"], &dir), FAIL);
         assert!(victim.is_file());
+    }
+
+    /// A tree walk is a second way out: the operand is inside the workspace, but
+    /// `fs::copy` follows a symlink found *within* it.
+    #[test]
+    #[cfg(unix)]
+    fn cp_r_refuses_a_symlink_that_leaves_the_workspace() {
+        let dir = scratch();
+        let outside = scratch();
+        write(&outside, "secret.txt", "precious");
+        fs::create_dir_all(dir.join("tree")).unwrap();
+        write(&dir, "tree/ordinary.txt", "fine");
+        std::os::unix::fs::symlink(outside.join("secret.txt"), dir.join("tree/escape")).unwrap();
+
+        assert_eq!(call("cp", &["-r", "tree", "out"], &dir), FAIL);
+        assert!(
+            !dir.join("out/escape").exists(),
+            "a file from outside the workspace was copied in"
+        );
+
+        // A link that stays inside is still followed, as `cp` does.
+        let ok = scratch();
+        fs::create_dir_all(ok.join("tree")).unwrap();
+        write(&ok, "tree/real.txt", "body");
+        std::os::unix::fs::symlink(ok.join("tree/real.txt"), ok.join("tree/alias")).unwrap();
+        assert_eq!(call("cp", &["-r", "tree", "out"], &ok), 0);
+        assert_eq!(fs::read_to_string(ok.join("out/alias")).unwrap(), "body");
     }
 
     #[test]

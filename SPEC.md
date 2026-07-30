@@ -538,6 +538,8 @@ Every path `tsr` resolves itself must stay inside the workspace — the director
 
 Resolution is **physical**: the longest existing prefix of a path is canonicalized, so a symlink inside the workspace pointing out of it is out of it. Only a not-yet-created tail is joined lexically, where no symlink can remain.
 
+The check follows the operation, not just the operand. `cp -r` and `mv` walk a tree, and a symlink found *inside* one is a second way out — `fs::copy` would follow it — so every link met on the walk is checked in its own right. `rm -r` does not follow directory symlinks at all. `env_file` is re-checked when it is read, not only when it is validated, so a link created in between is not followed.
+
 The escape hatch is a config key, for builds that genuinely write outside their tree:
 
 ```toml
@@ -549,16 +551,30 @@ allow_paths = ["../shared-cache", "/tmp/build"]
 
 A **config** may not set a variable whose only purpose is to decide what code some *other* program loads:
 
-`LD_PRELOAD` · `LD_AUDIT` · `DYLD_INSERT_LIBRARIES` · `DYLD_LIBRARY_PATH` · `NODE_OPTIONS` · `BASH_ENV` · `PYTHONSTARTUP` · `PERL5OPT` · `RUBYOPT` · `GIT_SSH` · `GIT_SSH_COMMAND` · `GIT_EXTERNAL_DIFF` · `GIT_PROXY_COMMAND` · `SSH_ASKPASS` · `SUDO_ASKPASS` · anything prefixed `TSR_`
+| Group | Variables |
+|---|---|
+| Dynamic-loader injection | `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` |
+| Interpreter startup hooks | `NODE_OPTIONS`, `BASH_ENV`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`, `PHP_INI_SCAN_DIR` |
+| JVM injection | `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS` |
+| Module search paths | `PYTHONPATH`, `PERL5LIB`, `RUBYLIB` |
+| Toolchain flags naming a program to run | `GOFLAGS` (`-toolexec`), `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` |
+| Programs git & ssh shell out to | `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND`, `SSH_ASKPASS`, `SUDO_ASKPASS` |
+| `tsr`'s own namespace | anything prefixed `TSR_` |
 
 Without this, a `tasks.toml` — or a committed `.env` — that appears to run `cargo test` can execute arbitrary code inside an unrelated process. Names are compared the way the platform compares them: exactly on unix, case-insensitively on Windows.
 
-`PATH` is not banned, since extending it is ordinary. It may be set only to a value that still references `$PATH`, so it augments rather than replaces — the same "merged, never wiped" rule the env model already follows (§7.1):
+**The list is not exhaustive, and cannot be.** Every toolchain ships some way to make its compiler or interpreter load extra code, and new ones arrive with new tools. Variables that are *commonly* set on purpose (`CC`, `CLASSPATH`, `GOPATH`, `PYTHONHOME`) are deliberately left out: a guard that fires on ordinary configuration gets switched off wholesale, which is worse than not having it. Treat §12.2 as a guard against the well-known vectors, not as a boundary.
+
+`PATH` is not banned, since extending it is ordinary. Two rules apply instead:
+
+1. The value must still reference `$PATH`, so it augments rather than replaces — the same "merged, never wiped" rule the env model already follows (§7.1).
+2. No entry may be **empty** or a bare `.`. Both are read as the working directory by every shell, so they put whatever directory a task happens to run in ahead of the real `PATH`. An explicit relative entry is fine: the objection is to the invisible form, since `":$PATH"` looks like nothing in a diff.
 
 ```toml
 [env]
-PATH = "./bin:$PATH"   # fine
-PATH = "/only/mine"    # rejected
+PATH = "./bin:$PATH"   # fine — written out
+PATH = "/only/mine"    # rejected — replaces
+PATH = ":$PATH"        # rejected — the empty entry is the working directory
 ```
 
 **Scope.** Only config-supplied sources are checked — `[env]`, task `env`, `env_file`, and the root `.env` — over the tasks that will actually run. The **process** environment is passed through untouched: it belongs to whoever invoked `tsr`, and a runner that refused the environment it was given would be broken rather than safe.
@@ -575,13 +591,18 @@ Which `tasks.toml` is found decides what gets to run commands, so the upward wal
 
 Without this, a `tasks.toml` left in `/tmp` or in a home directory silently governs every project beneath it.
 
-A config that is **world-writable**, or that sits in a world-writable non-sticky directory, is refused (unix): anyone on the machine could otherwise choose what `tsr` runs. Group-writable is accepted — a `umask` of `002` is a common default and rejecting it would fire on ordinary checkouts. Ownership is not checked, for the same reason git's "dubious ownership" is a recurring nuisance; a file another user owns is only reachable through a directory they can write to, which the above already catches.
+A config that is **world-writable**, or that sits in a world-writable non-sticky directory, is refused (unix): anyone on the machine could otherwise choose what `tsr` runs. The same check covers the root `.env` and every `env_file` a reachable task loads — those set the environment each child inherits, so whoever can write one chooses what the build sees. Only *writability* is checked, never readability: a world-readable `.env` is what `umask 022` produces, and failing on it would fire on nearly every repo. Group-writable is accepted — a `umask` of `002` is a common default and rejecting it would fire on ordinary checkouts. Ownership is not checked, for the same reason git's "dubious ownership" is a recurring nuisance; a file another user owns is only reachable through a directory they can write to, which the above already catches.
 
 ### 12.4 Process-tree containment
 
 Killing the process `tsr` spawned is not the same as stopping the work: `npm run dev` is a launcher whose `vite` keeps the port. A child that a run may have to kill is therefore spawned into its own **process group** (unix) or **job object** (windows), and the group is what is torn down — `SIGTERM`, then `SIGKILL` after a 2s grace.
 
-Isolation is not applied unconditionally, because on unix it costs interactivity: a process group outside the terminal's foreground one is stopped by `SIGTTIN` the moment it reads stdin. It is applied exactly when a kill is possible — when the run's reachable tasks include a `parallel = true` batch (§5.1). A lone `tsr dev` keeps the inherited group and stays interactive.
+Isolation is withheld in exactly one case, because on unix it costs interactivity: a process group outside the terminal's foreground one is stopped by `SIGTTIN` the moment it reads stdin. Both of these must hold for it to be withheld:
+
+- **stdin is a terminal.** Under CI, a pipe, or `< /dev/null` there is no foreground group to be outside of, so isolation costs nothing and is always applied.
+- **No parallelism.** Nothing in a sequential run can abort a child that is already running, because there is no sibling to fail — so there is no kill to reach a tree with.
+
+A lone interactive `tsr dev` therefore keeps the inherited group; everything else, including that same run under CI, is contained.
 
 **Interrupts.** `SIGINT`/`SIGTERM` (and `CTRL_C_EVENT` on Windows) abort the run through the same path a failure uses: stop launching, tear down what is running, exit `130` (§10). `--no-bail` does not override it — the user asked to stop. A second interrupt exits immediately, so a wedged child cannot trap the terminal.
 
@@ -598,7 +619,9 @@ Stated plainly, so the boundary is not mistaken for more than it is:
 - **Spawned programs.** Once a child starts it has the user's full privileges. Use a container or a sandbox if that is not acceptable.
 - **`delegate` and `run` targets.** Naming a binary is the feature; `tsr` does not decide which binaries are allowed.
 - **`node_modules/.bin` on `PATH`** (§9.2). A repo-local binary shadowing a global one is what npm does and what makes `run = "vite"` work.
-- **Secrets in a child's output.** Children inherit stdio; what they print is theirs.
+- **Secrets in a child's output.** Children inherit stdio; what they print is theirs. (`tsr` itself never prints an environment *value* — `--dry-run` prints commands before expansion, and no reporter event carries env — so there is nothing for it to mask.)
+- **Resource exhaustion.** There are no CPU/memory/fd limits on a task. `RLIMIT`s would be config-declared, so they would be no defence against a config that simply omits them; use `systemd-run`, `ulimit` or a container.
+- **A local attacker racing the run.** The path checks resolve, then act; they are not TOCTOU-hardened. Someone who can create symlinks inside your workspace while a build runs already controls the repository.
 - **`[security] allow_paths` against a hostile config.** It is a config key, so a config can widen it; §12.1 is an accident guard, by design.
 
 ---

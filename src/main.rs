@@ -88,6 +88,8 @@ fn run() -> error::Result<i32> {
             // Reject config-set variables that decide what code some *other*
             // program loads (SPEC §12.2) — before anything is spawned.
             env::validate_guarded_vars(&cfg, &reachable, opts.allow_unsafe_env)?;
+            // The files that env comes from decide it too (SPEC §12.3).
+            env::validate_env_file_permissions(&cfg, &reachable)?;
             // Both package filters need the graph, so build it once and only
             // when one of them was actually asked for — an ordinary run must not
             // pay for scanning the workspace.

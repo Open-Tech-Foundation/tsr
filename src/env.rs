@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::{Config, Task};
+use crate::confine::Bounds;
 use crate::error::{Result, TsrError};
 use crate::shell;
 
@@ -151,10 +152,10 @@ fn lookup_program(program: &str, path: &str, pathext: &str) -> Option<PathBuf> {
 
 /// Build the merged, fully-expanded environment for `task` (SPEC §7.1), reading
 /// the real process env, the root `.env`, and the task's `env_file`(s).
-pub fn build(cfg: &Config, task: &Task) -> HashMap<String, String> {
+pub fn build(cfg: &Config, task: &Task, bounds: &Bounds) -> HashMap<String, String> {
     let process: HashMap<String, String> = std::env::vars().collect();
     let dotenv = load_dotenv(&cfg.root);
-    let file_env = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
+    let file_env = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files, bounds);
     build_from(process, &dotenv, &cfg.env, &file_env, &task.env)
 }
 
@@ -171,9 +172,15 @@ fn task_base_dir(root: &Path, task: &Task) -> PathBuf {
 /// Load each of a task's `env_file`s (left → right), relative to `base`. Later
 /// files override earlier ones. A missing or unreadable file is skipped (so an
 /// optional `.env.local` need not exist), matching the root `.env`.
-fn load_env_files(base: &Path, files: &[String]) -> Vec<(String, String)> {
+fn load_env_files(base: &Path, files: &[String], bounds: &Bounds) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for f in files {
+        // Re-checked here, not only at load: validation happens once, up front,
+        // and a symlink created in between would otherwise be followed on the
+        // read that matters (SPEC §12.1).
+        if !bounds.permits_operand(base, f) {
+            continue;
+        }
         if let Ok(text) = std::fs::read_to_string(base.join(f)) {
             out.extend(parse_dotenv(&text));
         }
@@ -326,6 +333,10 @@ fn read_var(chars: &[char], start: usize) -> Option<(String, usize)> {
 /// invoked `tsr`, and a runner that refused to pass on the environment it was
 /// given would be broken rather than safe. Only config-supplied values —
 /// `[env]`, task `env`, `env_file`, and the root `.env` — are subject to this.
+/// The list is **not** exhaustive, and cannot be: every toolchain ships some way
+/// to make its compiler or interpreter load extra code, and new ones appear with
+/// new tools. It covers the vectors that are well known and rarely set on
+/// purpose. Treat it as a guard against the obvious, not as a boundary.
 const GUARDED: &[&str] = &[
     // Dynamic-loader injection.
     "LD_PRELOAD",
@@ -338,6 +349,22 @@ const GUARDED: &[&str] = &[
     "PYTHONSTARTUP",
     "PERL5OPT",
     "RUBYOPT",
+    "PHP_INI_SCAN_DIR",
+    // JVM: both are read by every `java` on the machine, and both take
+    // `-javaagent`, which is arbitrary code before `main`.
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "_JAVA_OPTIONS",
+    // Module search paths. A directory prepended here is where the interpreter
+    // looks *first*, so a file named after a stdlib module shadows it.
+    "PYTHONPATH",
+    "PERL5LIB",
+    "RUBYLIB",
+    // Toolchain flags that name a program to run: `GOFLAGS=-toolexec=…` and
+    // `RUSTC_WRAPPER` both execute a binary of their choosing on every build.
+    "GOFLAGS",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
     // Programs git and ssh shell out to.
     "GIT_SSH",
     "GIT_SSH_COMMAND",
@@ -384,6 +411,65 @@ fn path_extends_inherited(value: &str) -> bool {
     value.contains("$PATH") || value.contains("${PATH}")
 }
 
+/// The first `PATH` entry that silently means "the current directory", if any.
+///
+/// An **empty** entry — a leading or trailing separator, or a doubled one — is
+/// read as the working directory by every unix shell, and a bare `.` says so
+/// outright. Either one puts whatever directory the task happens to run in ahead
+/// of the real `PATH`, so a file dropped in a package folder becomes the `make`
+/// or `python` that the rest of the run resolves.
+///
+/// The danger is that it is *invisible*: `":$PATH"` and `"$PATH:"` look like
+/// nothing at all in a diff. An explicit relative entry (`./bin:$PATH`) is left
+/// alone — it is written down, and it is the documented way to add a local
+/// binary directory.
+fn implicit_cwd_entry(value: &str) -> Option<&'static str> {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    for entry in value.split(sep) {
+        if entry.is_empty() {
+            return Some("an empty entry");
+        }
+        if entry == "." {
+            return Some("a '.' entry");
+        }
+    }
+    None
+}
+
+/// Refuse `.env` and `env_file`s that anyone on the machine can rewrite
+/// (SPEC §12.3).
+///
+/// The same reasoning as `tasks.toml`: these files feed the environment of every
+/// child the run spawns, so whoever can write one chooses what the build sees.
+///
+/// Only **writability** is checked, not readability. A `.env` that is
+/// world-*readable* is the norm — `umask 022` produces exactly that — and
+/// failing on it would fire on nearly every repo while telling the user nothing
+/// they can act on inside `tsr`.
+pub fn validate_env_file_permissions(cfg: &Config, keys: &[String]) -> Result<()> {
+    let mut paths = vec![cfg.root.join(DOTENV_FILE)];
+    for key in keys {
+        let Some(task) = cfg.task(key) else { continue };
+        let base = task_base_dir(&cfg.root, task);
+        paths.extend(task.env_files.iter().map(|f| base.join(f)));
+    }
+    for path in paths {
+        if !path.is_file() {
+            continue; // a missing env file is skipped, not an error (SPEC §7.2)
+        }
+        if let Some(target) = crate::config::world_writable(&path) {
+            return Err(TsrError::config(format!(
+                "'{}' is world-writable, and '{}' sets the environment every task \
+                 inherits — `chmod o-w '{}'` before using it",
+                target.display(),
+                path.display(),
+                target.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Reject guarded variables set by the config (SPEC §12.2).
 ///
 /// Checked at load time over the tasks that will actually run, so a config that
@@ -395,6 +481,7 @@ pub fn validate_guarded_vars(cfg: &Config, keys: &[String], allow: bool) -> Resu
     if allow {
         return Ok(());
     }
+    let bounds = cfg.bounds();
     let dotenv = load_dotenv(&cfg.root);
     let mut sources: Vec<(String, &[(String, String)])> = vec![
         (format!("the root '{DOTENV_FILE}'"), &dotenv),
@@ -405,7 +492,7 @@ pub fn validate_guarded_vars(cfg: &Config, keys: &[String], allow: bool) -> Resu
     for key in keys {
         let Some(task) = cfg.task(key) else { continue };
         sources.push((format!("task '{}' env", task.key), &task.env));
-        let loaded = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
+        let loaded = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files, &bounds);
         task_files.push((format!("task '{}' env_file", task.key), loaded));
     }
     for (label, pairs) in &task_files {
@@ -420,12 +507,21 @@ pub fn validate_guarded_vars(cfg: &Config, keys: &[String], allow: bool) -> Resu
                      loads — pass `--allow-unsafe-env` if that is intended"
                 )));
             }
-            if name.eq_ignore_ascii_case("PATH") && !path_extends_inherited(value) {
-                return Err(TsrError::config(format!(
-                    "{source} replaces '{name}' instead of extending it — write \
-                     '{name} = \"…:$PATH\"' so the inherited PATH survives, or pass \
-                     `--allow-unsafe-env`"
-                )));
+            if name.eq_ignore_ascii_case("PATH") {
+                if !path_extends_inherited(value) {
+                    return Err(TsrError::config(format!(
+                        "{source} replaces '{name}' instead of extending it — write \
+                         '{name} = \"…:$PATH\"' so the inherited PATH survives, or pass \
+                         `--allow-unsafe-env`"
+                    )));
+                }
+                if let Some(what) = implicit_cwd_entry(value) {
+                    return Err(TsrError::config(format!(
+                        "{source} sets '{name}' with {what}, which every shell reads as \
+                         the working directory — write the directory out (e.g. \
+                         './bin:$PATH') so it is visible, or pass `--allow-unsafe-env`"
+                    )));
+                }
             }
         }
     }
@@ -452,7 +548,11 @@ fn validate_run_vars_from(
         if vars.is_empty() {
             continue;
         }
-        let file_env = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
+        let file_env = load_env_files(
+            &task_base_dir(&cfg.root, task),
+            &task.env_files,
+            &cfg.bounds(),
+        );
         let map = build_from(process.clone(), dotenv, &cfg.env, &file_env, &task.env);
         for var in vars {
             if !map.contains_key(&var.name) {
@@ -757,6 +857,7 @@ mod tests {
         let files = load_env_files(
             &base,
             &owned_paths(&[".env.local", ".env.test", ".env.missing"]),
+            &Bounds::new(&base, &[]),
         );
         // Collapse to a map to check the effective (last-wins) values.
         let map = build_from(HashMap::new(), &[], &[], &files, &[]);
@@ -857,6 +958,110 @@ mod tests {
         ))
         .unwrap();
         assert!(validate_guarded_vars(&cfg, &["t".to_string()], false).is_ok());
+    }
+
+    #[test]
+    fn the_guarded_list_covers_the_toolchain_injection_vectors() {
+        // Each of these makes a compiler or interpreter load code of the
+        // config's choosing, in a process the config never names.
+        for key in [
+            "JAVA_TOOL_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "_JAVA_OPTIONS",
+            "PYTHONPATH",
+            "PERL5LIB",
+            "RUBYLIB",
+            "GOFLAGS",
+            "RUSTC_WRAPPER",
+            "PHP_INI_SCAN_DIR",
+        ] {
+            assert!(is_guarded(key), "{key} should be guarded");
+        }
+        // Near-neighbours that are ordinary build configuration stay allowed —
+        // the list is a guard against the obvious, not a wall.
+        for key in [
+            "CC",
+            "CXX",
+            "CLASSPATH",
+            "GOPATH",
+            "CARGO_HOME",
+            "PYTHONHOME",
+        ] {
+            assert!(!is_guarded(key), "{key} should not be guarded");
+        }
+    }
+
+    #[test]
+    fn path_may_not_smuggle_in_the_working_directory() {
+        // An empty entry is read as `.` by every shell, and it is invisible in a
+        // diff — which is exactly what makes it worth refusing.
+        for value in [":$PATH", "$PATH:", "./bin::$PATH", ".:$PATH", "$PATH:."] {
+            let cfg = Config::load(&write_config(&format!(
+                "[env]\nPATH = \"{value}\"\n\n[tasks.t]\nrun = \"true\"\n"
+            )))
+            .unwrap();
+            let err = validate_guarded_vars(&cfg, &["t".to_string()], false).unwrap_err();
+            assert!(
+                err.to_string().contains("working directory"),
+                "'{value}': {err}"
+            );
+        }
+        // A directory written out explicitly is the documented form and stays fine.
+        let cfg = Config::load(&write_config(
+            "[env]\nPATH = \"./bin:$PATH\"\n\n[tasks.t]\nrun = \"true\"\n",
+        ))
+        .unwrap();
+        assert!(validate_guarded_vars(&cfg, &["t".to_string()], false).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_world_writable_env_file_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = write_config("[tasks.t]\nrun = \"true\"\nenv_file = \".env.test\"\n");
+        let root = path.parent().unwrap();
+        let env_file = root.join(".env.test");
+        std::fs::write(&env_file, "K=v\n").unwrap();
+        let cfg = Config::load(&path).unwrap();
+        let keys = vec!["t".to_string()];
+        assert!(validate_env_file_permissions(&cfg, &keys).is_ok());
+
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let err = validate_env_file_permissions(&cfg, &keys).unwrap_err();
+        assert!(err.to_string().contains("world-writable"), "{err}");
+
+        // World-*readable* is the norm (umask 022) and must stay acceptable.
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(validate_env_file_permissions(&cfg, &keys).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_env_file_symlinked_out_of_the_workspace_is_not_read() {
+        // The load-time check runs once; a link created afterwards would be
+        // followed by the read that matters, so the read re-checks.
+        let path = write_config("[tasks.t]\nrun = \"true\"\n");
+        let root = path.parent().unwrap();
+        let outside = root.parent().unwrap().join(format!(
+            "tsr-env-outside-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secrets.env"), "LEAKED=yes\n").unwrap();
+        let link = root.join(".env.linked");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(outside.join("secrets.env"), &link).unwrap();
+
+        let loaded = load_env_files(
+            root,
+            &owned_paths(&[".env.linked"]),
+            &Bounds::new(root, &[]),
+        );
+        assert!(
+            loaded.is_empty(),
+            "read through a link out of the workspace"
+        );
     }
 
     #[test]

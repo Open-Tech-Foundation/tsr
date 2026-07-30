@@ -32,7 +32,7 @@ short:
 | Guard | What it stops |
 |-------|---------------|
 | **Workspace confinement** | The in-process builtins (`rm`, `cp`, `mv`, …) touching anything outside the workspace. `rm` is `tsr`, not `/bin/rm`, so nothing else can stop it. |
-| **Guarded env variables** | A config or a `.env` setting `LD_PRELOAD`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`, … — variables that make an *unrelated* program load code of the config's choosing. |
+| **Guarded env variables** | A config or a `.env` setting `LD_PRELOAD`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `GOFLAGS`, `GIT_SSH_COMMAND`, … — variables that make an *unrelated* program load code of the config's choosing. The list is not exhaustive and cannot be; see SPEC §12.2. |
 | **Discovery boundary** | A `tasks.toml` planted above your project (in `/tmp`, in `$HOME`) silently governing it, or a world-writable one deciding what runs. |
 | **Process-tree containment** | Orphaned children surviving a failure or a Ctrl-C. |
 
@@ -64,6 +64,12 @@ describe the tool working as designed:
 - `node_modules/.bin` shadowing a global binary on `PATH` — npm's behaviour, and
   what makes `run = "vite"` work.
 - `[security] allow_paths` being widened by the config that it constrains.
+- The absence of resource limits on a task. Limits declared in `tasks.toml` would
+  be no defence against a config that omits them; use a container or `ulimit`.
+- A local attacker racing the run — creating a symlink inside the workspace
+  while a build executes. Anyone who can do that already controls the repository.
+- A guarded-variable name that is not on the list. Please still report it: the
+  list is meant to grow with known vectors, it just cannot be complete.
 
 ## Verifying a release
 

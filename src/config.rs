@@ -156,6 +156,25 @@ fn glob_prefix(pattern: &str) -> &str {
 /// checking it would reproduce git's "dubious ownership" friction on every CI
 /// checkout that runs as a different uid.
 fn check_writability(path: &Path) -> Result<()> {
+    match world_writable(path) {
+        Some(target) => Err(TsrError::config(format!(
+            "'{}' is world-writable, and '{}' decides what commands run — \
+             `chmod o-w '{}'` before using it",
+            target.display(),
+            path.display(),
+            target.display()
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Whether `path` — or the directory holding it — is writable by anyone on the
+/// machine, returning whichever one is (SPEC §12.3).
+///
+/// The directory matters as much as the file: a config you cannot rewrite is no
+/// protection if the directory lets it be replaced. Unix only; there is no cheap
+/// equivalent of the mode bits on Windows.
+pub(crate) fn world_writable(path: &Path) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -163,29 +182,19 @@ fn check_writability(path: &Path) -> Result<()> {
         const STICKY: u32 = 0o1000;
 
         let mode = |p: &Path| fs::metadata(p).map(|m| m.permissions().mode()).ok();
+        if mode(path).is_some_and(|m| m & WORLD_WRITE != 0) {
+            return Some(path.to_path_buf());
+        }
         let dir = path.parent().unwrap_or(Path::new("."));
-        let exposed = [
-            (path, mode(path).is_some_and(|m| m & WORLD_WRITE != 0)),
-            (
-                dir,
-                mode(dir).is_some_and(|m| m & WORLD_WRITE != 0 && m & STICKY == 0),
-            ),
-        ];
-        for (target, is_exposed) in exposed {
-            if is_exposed {
-                return Err(TsrError::config(format!(
-                    "'{}' is world-writable, and '{}' decides what commands run — \
-                     `chmod o-w '{}'` before using it",
-                    target.display(),
-                    path.display(),
-                    target.display()
-                )));
-            }
+        // A sticky directory is fine — that is exactly what the bit means: `/tmp`
+        // is world-writable, but only a file's owner may replace it.
+        if mode(dir).is_some_and(|m| m & WORLD_WRITE != 0 && m & STICKY == 0) {
+            return Some(dir.to_path_buf());
         }
     }
     #[cfg(not(unix))]
     let _ = path;
-    Ok(())
+    None
 }
 
 /// Locate the nearest existing `tasks.toml` at/above `start`, if any. Used by the

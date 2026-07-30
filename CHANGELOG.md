@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Isolation costs interactivity on unix: a process group outside the terminal's
   foreground one is stopped by `SIGTTIN` as soon as it reads stdin. So it is
-  applied only to runs whose reachable tasks include a `parallel = true` batch —
-  exactly the runs where `tsr` can be the one doing the killing. A lone
-  `tsr dev` keeps the inherited group and stays interactive.
+  withheld in exactly one case — an attached terminal **and** no parallelism,
+  meaning nothing that could kill a child mid-run. Under CI, a pipe, or
+  `< /dev/null` there is no foreground group to be outside of, so isolation costs
+  nothing and always applies. A lone interactive `tsr dev` keeps the inherited
+  group and stays interactive; the same run in CI is contained.
 
 - **Ctrl-C is handled rather than fatal (SPEC §12).** `SIGINT`/`SIGTERM` (and
   `CTRL_C_EVENT` on Windows) now abort the run through the same path a failure
@@ -37,7 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A **world-writable** config, or one in a world-writable non-sticky directory,
   is refused on unix — anyone on the machine could otherwise choose what runs.
   Group-writable is accepted (`umask 002` is a common default) and ownership is
-  not checked, so CI checkouts running as a different uid are unaffected.
+  not checked, so CI checkouts running as a different uid are unaffected. The
+  same check now covers the root `.env` and every `env_file` a reachable task
+  loads, since those set the environment each child inherits. Only *writability*
+  is checked, never readability — a world-readable `.env` is what `umask 022`
+  produces.
 
 - **`SECURITY.md`, SPEC §12 and a Security page in the docs.** The whole model in
   one place: the threat model each guard answers, per-guard detail with the
@@ -90,6 +96,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what you are wary of, and a guard a config could switch off would not survive
   that case.
 
+  Following security review the list also covers `JAVA_TOOL_OPTIONS`,
+  `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `PYTHONPATH`, `PERL5LIB`, `RUBYLIB`,
+  `GOFLAGS`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and `PHP_INI_SCAN_DIR`.
+  It is documented as **not exhaustive** — every toolchain has such a variable,
+  and one that fires on ordinary configuration (`CC`, `CLASSPATH`, `GOPATH`) gets
+  switched off wholesale, which is worse than not having it.
+
+  `PATH` gained a second rule: no entry may be **empty** or a bare `.`. Both are
+  read as the working directory by every shell, so `PATH = ":$PATH"` silently
+  puts whatever folder a task runs in ahead of the real `PATH` — and it looks
+  like nothing at all in a diff. An explicit `./bin:$PATH` is still fine.
+
 - **Workspace confinement for everything `tsr` does itself (SPEC §12.1).**
   The in-process builtins (`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`) now refuse
   an operand that resolves outside the workspace, and `dir`, `env_file`,
@@ -100,7 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Builtins are where this matters most: `rm` is `tsr` itself, always preferred
   over any binary of the same name, so there is no `PATH`, sandbox or audit to
   fall back on. Resolution is physical — a symlink inside the workspace that
-  points out of it is out of it.
+  points out of it is out of it — and the check follows the *operation*, not just
+  the operand: links met while `cp -r`/`mv` walk a tree are checked too, and
+  `env_file` is re-checked when it is read, not only when it is validated.
 
   **Breaking** for a config that deliberately reaches outside its own tree.
   Widen the boundary explicitly:
@@ -122,6 +142,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parallel = true` batches, so the plan is readable.
 
 ### Fixed
+
+- **`cp -r` and `mv` could pull a file in from outside the workspace.** The
+  operand was bounds-checked, but the *tree walk* was not: a symlink found inside
+  a copied directory was followed, so `cp -r tree out` with
+  `tree/link → /etc/passwd` copied that file into the workspace. Every link met
+  on the walk is now checked in its own right. Found in security review.
 
 - CI (Windows): a `--no-bail` e2e test named `sh` outright without a
   `#[cfg(unix)]` guard, so it would have failed the Windows matrix job.

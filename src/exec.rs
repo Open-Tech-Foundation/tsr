@@ -646,7 +646,7 @@ impl<'a> Ctx<'a> {
         label: String,
         passthrough: &[String],
     ) -> std::result::Result<Job, String> {
-        let mut env = env::build(self.cfg, task);
+        let mut env = env::build(self.cfg, task, &self.bounds);
         // Resolve locally-installed binaries (`vite`, `eslint`, …) the way
         // npm/bun do, so `run = "vite"` is a real `npm run` replacement (SPEC §9.2).
         env::prepend_node_bin(&mut env, dir, &self.cfg.root);
@@ -969,21 +969,31 @@ enum LeafWait {
 /// mini-shell sequence — the "resolved command" that passthrough targets.
 /// A task's ordinary `deps` — everything that is not an `^upstream` marker.
 /// Those are resolved per package during the fan-out, not as task-key edges.
-/// Whether this run's children need process groups of their own (SPEC §12).
+/// Whether this run's children need process groups of their own (SPEC §12.4).
 ///
-/// Isolation is what lets a kill reach a whole process tree, but on unix it also
-/// moves the child out of the terminal's foreground group, so reading stdin
-/// stops it with `SIGTTIN`. The trade is decided by the one thing that makes a
-/// kill possible at all: parallelism. Nothing in a sequential run can abort a
-/// child that is already running — there is no sibling to fail — so those keep
-/// the inherited group and stay interactive, while any run whose reachable tasks
-/// include a `parallel = true` batch isolates every child it spawns.
+/// Isolation is what lets a kill reach a whole process tree. The only reason not
+/// to apply it always is that on unix it moves the child out of the terminal's
+/// foreground group, so reading stdin stops it with `SIGTTIN` — which would
+/// break every interactive task. So it is withheld in exactly one case: an
+/// attached terminal *and* nothing that could kill a child mid-run.
+///
+/// - **No terminal on stdin** — CI, a pipe, `< /dev/null` — means no foreground
+///   group to be outside of, so isolation costs nothing and is always applied.
+/// - **Parallelism** is what makes a kill possible at all; nothing in a
+///   sequential run can abort a child that is already running, because there is
+///   no sibling to fail.
+///
+/// A lone interactive `tsr dev` therefore keeps the inherited group, and
+/// everything else — including that same run under CI — is contained.
 fn isolation_for(cfg: &Config, root: &str) -> proc::Isolation {
+    use std::io::IsTerminal;
+
+    let interactive = std::io::stdin().is_terminal();
     let parallel = crate::graph::reachable(cfg, root)
         .iter()
         .filter_map(|key| cfg.task(key))
         .any(|task| task.parallel);
-    if parallel {
+    if parallel || !interactive {
         proc::Isolation::Isolated
     } else {
         proc::Isolation::Inherited
@@ -1162,27 +1172,32 @@ mod tests {
         assert_eq!(run_task(toml, "top"), 0);
     }
 
-    /// Isolation is bought at the cost of interactivity (SPEC §12), so it is
-    /// spent only on runs that can actually kill a child — the parallel ones.
+    /// Isolation is withheld only where it would cost interactivity (SPEC §12.4):
+    /// an attached terminal *and* no sibling that could kill the child.
     #[test]
-    fn only_a_parallel_run_isolates_its_children() {
+    fn only_an_interactive_sequential_run_keeps_the_inherited_group() {
+        use std::io::IsTerminal;
+
         let (cfg, _r) = setup(
             "[tasks.lint]\nrun = \"true\"\n\
              [tasks.dev]\nrun = \"vite\"\n\
              [tasks.ci]\ndeps = [\"lint\"]\nparallel = true\n",
         );
-        assert_eq!(
-            isolation_for(&cfg, "dev"),
-            proc::Isolation::Inherited,
-            "a lone interactive task must keep the terminal's process group"
-        );
+        // A parallel run is contained however it was invoked.
         assert_eq!(isolation_for(&cfg, "ci"), proc::Isolation::Isolated);
-        // Reached *through* a parallel batch, so it can be killed by a sibling.
-        assert_eq!(
-            isolation_for(&cfg, "lint"),
-            proc::Isolation::Inherited,
-            "run on its own, `lint` has no sibling that could abort it"
-        );
+
+        // The sequential ones depend on whether a terminal is attached, which
+        // the harness decides — under `cargo test` stdin is not a tty, so this
+        // asserts the CI half; a developer running it from a terminal gets the
+        // other. Both are correct, so assert against the same signal the code
+        // reads rather than pinning one.
+        let expected = if std::io::stdin().is_terminal() {
+            proc::Isolation::Inherited
+        } else {
+            proc::Isolation::Isolated
+        };
+        assert_eq!(isolation_for(&cfg, "dev"), expected);
+        assert_eq!(isolation_for(&cfg, "lint"), expected);
     }
 
     #[test]

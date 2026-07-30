@@ -1958,3 +1958,65 @@ fn a_world_writable_config_is_refused() {
     assert!(stderr(&out).contains("world-writable"), "{}", stderr(&out));
     assert!(!ws.join("ran.txt").exists());
 }
+
+#[test]
+#[cfg(unix)]
+fn cp_cannot_pull_a_file_in_through_a_symlink() {
+    // The operand is inside the workspace; the escape is a link found while
+    // walking the tree, which `cp` would otherwise follow.
+    let ws = workspace();
+    let outside = ws.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.txt"), "precious").unwrap();
+
+    let root = ws.join("repo");
+    fs::create_dir_all(root.join("tree")).unwrap();
+    std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("tree/escape")).unwrap();
+    write(
+        &root,
+        "tasks.toml",
+        "[tasks.stage]\nrun = \"cp -r tree staged\"\n",
+    );
+
+    let out = tsr(&root, &["stage"]);
+    assert_ne!(code(&out), 0, "the copy should have failed");
+    assert!(
+        !root.join("staged/escape").exists(),
+        "a file from outside the workspace was copied in"
+    );
+}
+
+#[test]
+fn a_config_cannot_smuggle_the_cwd_onto_path() {
+    // An empty PATH entry means "the working directory" to every shell, and is
+    // invisible in a diff.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[env]\nPATH = \":$PATH\"\n\n[tasks.t]\nrun = \"touch ran.txt\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("working directory"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!ws.join("ran.txt").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_world_writable_env_file_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace();
+    write(&ws, ".env", "K=v\n");
+    write(&ws, "tasks.toml", "[tasks.t]\nrun = \"touch ran.txt\"\n");
+    fs::set_permissions(ws.join(".env"), fs::Permissions::from_mode(0o666)).unwrap();
+
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("world-writable"), "{}", stderr(&out));
+    assert!(!ws.join("ran.txt").exists());
+}

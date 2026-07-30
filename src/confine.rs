@@ -92,6 +92,13 @@ impl Bounds {
         self.permits(&resolve(base, arg))
     }
 
+    /// The boundary check for a path `tsr` built itself rather than took from a
+    /// config — a directory entry reached while walking a tree, say. Resolved
+    /// physically, so a symlink is judged by where it lands.
+    pub fn permits_target(&self, path: &Path) -> bool {
+        self.permits(&resolve_path(path))
+    }
+
     /// The workspace root, physically resolved.
     pub fn root(&self) -> &Path {
         &self.root
@@ -113,9 +120,13 @@ pub fn resolve(base: &Path, arg: &str) -> PathBuf {
     } else {
         base.join(arg)
     };
+    resolve_path(&joined)
+}
 
+/// [`resolve`] for a path that is already joined.
+pub fn resolve_path(joined: &Path) -> PathBuf {
     let mut tail: Vec<OsString> = Vec::new();
-    let mut cur = joined.clone();
+    let mut cur = joined.to_path_buf();
     loop {
         if let Ok(real) = cur.canonicalize() {
             return append(real, &tail);
@@ -123,12 +134,12 @@ pub fn resolve(base: &Path, arg: &str) -> PathBuf {
         // Nothing on this path exists (or it cannot be read): resolve what is
         // left textually. Absolute already, since `base` is.
         let Some(name) = cur.file_name().map(OsString::from) else {
-            return lexical(&joined);
+            return lexical(joined);
         };
         tail.push(name);
         match cur.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => cur = parent.to_path_buf(),
-            _ => return lexical(&joined),
+            _ => return lexical(joined),
         }
     }
 }

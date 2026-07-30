@@ -119,6 +119,17 @@ run = "rm -rf config-link/hosts"   # …still rejected: it lands in /etc
 A purely textual check would have seen a path starting inside the workspace and
 allowed it.
 
+The check follows the **operation**, not just the operand:
+
+- `cp -r` and `mv` walk a tree, and a symlink found *inside* one is a second way
+  out — copying follows it. Every link met on the walk is checked in its own
+  right, so `cp -r tree out` where `tree/link → /etc/passwd` is refused even
+  though `tree` itself is perfectly legal.
+- `rm -r` does not follow directory symlinks at all: the link is removed, never
+  the thing it points at.
+- `env_file` is re-checked when it is **read**, not only when it is validated, so
+  a link created in between is not followed.
+
 ### Widening it
 
 For a build that genuinely writes outside its own tree:
@@ -150,9 +161,22 @@ program loads**.
 | Group | Variables |
 |---|---|
 | Dynamic-loader injection | `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` |
-| Interpreter startup hooks | `NODE_OPTIONS`, `BASH_ENV`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT` |
+| Interpreter startup hooks | `NODE_OPTIONS`, `BASH_ENV`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`, `PHP_INI_SCAN_DIR` |
+| JVM injection | `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS` |
+| Module search paths | `PYTHONPATH`, `PERL5LIB`, `RUBYLIB` |
+| Toolchain flags that name a program | `GOFLAGS` (`-toolexec`), `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` |
 | Programs git & ssh shell out to | `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND`, `SSH_ASKPASS`, `SUDO_ASKPASS` |
 | `tsr`'s own namespace | anything prefixed `TSR_` |
+
+<Callout type="warning" title="The list is not exhaustive — and cannot be">
+  Every toolchain ships some way to make its compiler or interpreter load extra
+  code, and new ones arrive with new tools. Variables that are commonly set on
+  purpose — <code>CC</code>, <code>CLASSPATH</code>, <code>GOPATH</code>,{" "}
+  <code>PYTHONHOME</code> — are deliberately left out, because a guard that fires
+  on ordinary configuration gets switched off wholesale, which is worse than not
+  having it. Treat this as a guard against the well-known vectors, not as a
+  boundary.
+</Callout>
 
 ### What it stops
 
@@ -184,21 +208,28 @@ unrelated program loads — pass `--allow-unsafe-env` if that is intended
 reconfigure a nested `tsr` invocation, least of all to talk it out of these
 checks.
 
-### `PATH` gets a rule, not a ban
+### `PATH` gets rules, not a ban
 
-Extending `PATH` is ordinary and useful, so it is not forbidden — only
-*replacing* it is. The value must still reference `$PATH`, which is exactly the
-"merged, never wiped" principle the [environment model](/docs/environment)
-already follows everywhere else:
+Extending `PATH` is ordinary and useful, so it is not forbidden. Two rules apply
+instead:
 
 ```toml
 [env]
-PATH = "./bin:$PATH"   # fine — augments the inherited PATH
-PATH = "/only/mine"    # rejected — decides what every bare command resolves to
+PATH = "./bin:$PATH"   # fine — written out, and it augments
+PATH = "/only/mine"    # rejected — replaces the inherited PATH
+PATH = ":$PATH"        # rejected — the empty entry *is* the working directory
 ```
 
-A replaced `PATH` is an injection vector wearing ordinary clothes: it silently
-changes which binary every unqualified command in the run resolves to.
+1. **It must still reference `$PATH`.** A replaced `PATH` is an injection vector
+   wearing ordinary clothes: it silently changes which binary every unqualified
+   command in the run resolves to. Requiring the reference is exactly the
+   "merged, never wiped" principle the
+   [environment model](/docs/environment) already follows everywhere else.
+2. **No entry may be empty or a bare `.`.** Every shell reads both as the working
+   directory, so they put whatever folder a task happens to run in ahead of the
+   real `PATH` — and in a `packages` fan-out that is a different folder each
+   time. An explicit relative entry is fine; the objection is to the invisible
+   form, since `":$PATH"` and `"$PATH:"` look like nothing at all in a diff.
 
 ### Scope: config sources only
 
@@ -274,6 +305,12 @@ worked around rather than heeded:
   checking it would reproduce git's "dubious ownership" friction on every CI
   checkout that runs as a different uid.
 
+The same check covers the root `.env` and every `env_file` a reachable task
+loads: those set the environment each child inherits, so whoever can write one
+chooses what the build sees. Only *writability* is checked, never readability — a
+world-readable `.env` is exactly what `umask 022` produces, and failing on it
+would fire on nearly every repo while telling you nothing you can act on.
+
 ---
 
 ## Process-tree containment
@@ -293,10 +330,16 @@ Isolation is not free on unix. A process group outside the terminal's foreground
 group is stopped with `SIGTTIN` the moment it reads stdin — which would break
 every interactive task (`tsr dev`, `tsr test -- --watch`).
 
-So it is applied exactly when a kill is possible: when the run's reachable tasks
-include a `parallel = true` batch. Nothing in a sequential run can abort a child
-that is already running, because there is no sibling to fail. A lone `tsr dev`
-keeps the inherited group and stays interactive.
+So it is withheld in exactly one case — both of these must hold:
+
+- **stdin is a terminal.** Under CI, a pipe or `< /dev/null` there is no
+  foreground group to be outside of, so isolation costs nothing and always
+  applies.
+- **No parallelism.** Nothing in a sequential run can abort a child that is
+  already running, because there is no sibling to fail.
+
+A lone interactive `tsr dev` therefore keeps the inherited group and stays
+interactive — and that same run in CI is fully contained.
 
 ### Ctrl-C
 
@@ -357,10 +400,10 @@ tsr ci                    # only then
 | Builtin operands confined to the workspace | on | `[security] allow_paths` | Builtin exits `1` |
 | `dir` / `env_file` / `packages` / `members` confined | on | `[security] allow_paths` | Exit `64` at load |
 | Guarded env variables rejected | on | `--allow-unsafe-env` | Exit `64` at load |
-| `PATH` must extend, not replace | on | `--allow-unsafe-env` | Exit `64` at load |
+| `PATH` must extend, and hide no cwd entry | on | `--allow-unsafe-env` | Exit `64` at load |
 | Discovery bounded at repo / `$HOME` / filesystem | on | — | Task not found, exit `64` |
-| World-writable config refused | on (unix) | `chmod o-w` | Exit `64` at load |
-| Process-tree teardown | parallel runs | — | — |
+| World-writable config / `.env` / `env_file` refused | on (unix) | `chmod o-w` | Exit `64` at load |
+| Process-tree teardown | parallel runs, and any non-tty run | — | — |
 | Ctrl-C aborts and exits `130` | on | — | — |
 
 ## What is *not* guarded
@@ -375,7 +418,15 @@ Stated plainly, so the boundary is not mistaken for more than it is:
   is npm's own behaviour, and what makes `run = "vite"` work
   ([§9.2](/docs/monorepo)).
 - **A child's output.** Children inherit stdio; whatever they print — including
-  secrets — is theirs.
+  secrets — is theirs. `tsr` itself never prints an environment *value*:
+  `--dry-run` prints commands before expansion and no reporter event carries env,
+  so there is nothing for it to mask.
+- **Resource exhaustion.** There are no CPU, memory or file-descriptor limits on
+  a task. Limits declared in `tasks.toml` would be no defence against a config
+  that simply omits them — use `systemd-run`, `ulimit` or a container.
+- **A local attacker racing the run.** The path checks resolve, then act; they
+  are not TOCTOU-hardened. Someone who can create symlinks inside your workspace
+  *while* a build runs already controls the repository.
 - **`allow_paths` against a hostile config.** It is a config key, so a config can
   widen it. It guards accidents, by design.
 - **Supply chain of what you install.** Release archives ship a `checksums.txt`
