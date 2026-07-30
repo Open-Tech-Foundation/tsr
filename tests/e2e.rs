@@ -1989,12 +1989,15 @@ fn cp_cannot_pull_a_file_in_through_a_symlink() {
 #[test]
 fn a_config_cannot_smuggle_the_cwd_onto_path() {
     // An empty PATH entry means "the working directory" to every shell, and is
-    // invisible in a diff.
+    // invisible in a diff. Joined with the platform's own separator, since that
+    // is what the check splits on: `";$PATH"` is the Windows spelling.
+    let value = std::env::join_paths(["", "$PATH"]).unwrap();
+    let value = value.to_str().unwrap();
     let ws = workspace();
     write(
         &ws,
         "tasks.toml",
-        "[env]\nPATH = \":$PATH\"\n\n[tasks.t]\nrun = \"touch ran.txt\"\n",
+        &format!("[env]\nPATH = \"{value}\"\n\n[tasks.t]\nrun = \"touch ran.txt\"\n"),
     );
     let out = tsr(&ws, &["t"]);
     assert_eq!(code(&out), 64, "stdout {}", stdout(&out));

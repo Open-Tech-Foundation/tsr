@@ -424,12 +424,13 @@ fn path_extends_inherited(value: &str) -> bool {
 /// alone — it is written down, and it is the documented way to add a local
 /// binary directory.
 fn implicit_cwd_entry(value: &str) -> Option<&'static str> {
-    let sep = if cfg!(windows) { ';' } else { ':' };
-    for entry in value.split(sep) {
-        if entry.is_empty() {
+    // Split the same way the rest of the module reads `PATH` (and the same way
+    // the platform does), rather than assuming a separator.
+    for entry in std::env::split_paths(value) {
+        if entry.as_os_str().is_empty() {
             return Some("an empty entry");
         }
-        if entry == "." {
+        if entry == Path::new(".") {
             return Some("a '.' entry");
         }
     }
@@ -581,6 +582,16 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// Join `entries` into a `PATH` value with the platform's own separator, so
+    /// a case written once reads the same on unix and Windows.
+    fn path_value(entries: &[&str]) -> String {
+        std::env::join_paths(entries)
+            .expect("test PATH entries must not contain a separator")
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
     fn owned(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -994,8 +1005,17 @@ mod tests {
     #[test]
     fn path_may_not_smuggle_in_the_working_directory() {
         // An empty entry is read as `.` by every shell, and it is invisible in a
-        // diff — which is exactly what makes it worth refusing.
-        for value in [":$PATH", "$PATH:", "./bin::$PATH", ".:$PATH", "$PATH:."] {
+        // diff — which is exactly what makes it worth refusing. Values are joined
+        // with the platform's own separator, since that is what the check splits
+        // on: `";$PATH"` is the Windows spelling of the same smuggle.
+        for entries in [
+            ["", "$PATH"].as_slice(),
+            ["$PATH", ""].as_slice(),
+            ["./bin", "", "$PATH"].as_slice(),
+            [".", "$PATH"].as_slice(),
+            ["$PATH", "."].as_slice(),
+        ] {
+            let value = path_value(entries);
             let cfg = Config::load(&write_config(&format!(
                 "[env]\nPATH = \"{value}\"\n\n[tasks.t]\nrun = \"true\"\n"
             )))
@@ -1007,9 +1027,10 @@ mod tests {
             );
         }
         // A directory written out explicitly is the documented form and stays fine.
-        let cfg = Config::load(&write_config(
-            "[env]\nPATH = \"./bin:$PATH\"\n\n[tasks.t]\nrun = \"true\"\n",
-        ))
+        let value = path_value(&["./bin", "$PATH"]);
+        let cfg = Config::load(&write_config(&format!(
+            "[env]\nPATH = \"{value}\"\n\n[tasks.t]\nrun = \"true\"\n"
+        )))
         .unwrap();
         assert!(validate_guarded_vars(&cfg, &["t".to_string()], false).is_ok());
     }

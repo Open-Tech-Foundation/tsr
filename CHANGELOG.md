@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- CI (Windows): the `PATH` cwd-smuggling tests spelled their values with a
+  colon, but `PATH` is split on `;` there, so `":$PATH"` is a single ordinary
+  entry and the expected rejection never came. The guard itself was correct on
+  both platforms; only the tests assumed one. Values are now joined with
+  `std::env::join_paths`, and the check splits with `std::env::split_paths` — the
+  same helpers the rest of the module already used — instead of switching on the
+  separator by hand.
+
 ## [0.7.0] - 2026-07-30
 
 ### Added
