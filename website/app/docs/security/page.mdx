@@ -1,6 +1,6 @@
 ---
 title: Security
-description: What tsr guards and what it does not — workspace confinement, guarded environment variables, bounded config discovery, process-tree containment, and --dry-run.
+description: The tsr security model in full — the trust boundary, workspace confinement, guarded environment variables, bounded config discovery, process-tree containment, --dry-run, and what is deliberately not guarded.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -12,35 +12,62 @@ same as `npm run build`, `make`, or `cargo test`. `tsr` does not sandbox the
 programs it spawns, and it is not designed to make an untrusted repository safe
 to build. For that, use a container.
 
-<Callout type="info" title="Where the boundary actually is">
-  <code>tsr</code> guards the parts with no process boundary around them — the
-  things <strong>it does itself</strong>: the in-process builtins, the
-  environment it hands every child, which <code>tasks.toml</code> it obeys, and
-  the lifetime of what it spawns.
+What it *does* guard is the part with no process boundary around it: **the things
+`tsr` performs itself**. That is a narrow surface, but it is the surface nothing
+else can protect.
+
+| `tsr` does this itself | Why nothing else can guard it | Guard |
+|---|---|---|
+| Runs in-process builtins (`rm`, `cp`, `mv`, …) | There is no `/bin/rm` to audit, deny, or leave off `PATH` — the builtin *is* `tsr` | [Workspace confinement](#workspace-confinement) |
+| Builds the environment every child inherits | The child is already running by the time anything could inspect it | [Guarded variables](#guarded-environment-variables) |
+| Chooses which `tasks.toml` gets to run commands | The choice happens before any config is read | [Bounded discovery](#bounded-config-discovery) |
+| Owns the lifetime of every process it spawns | Only the parent knows what it started | [Process-tree containment](#process-tree-containment) |
+
+Every guard below is **on by default**. A rejected guard is a runner-level error
+— exit [`64`](/docs/exit-codes) — raised before the first child is spawned.
+
+## Threat model
+
+The guards exist for three concrete situations. Being explicit about which is
+which matters, because they call for different defences.
+
+| Situation | Example | What helps |
+|---|---|---|
+| **Accident** | A `dir = "../.."` left over from a refactor; a glob that reaches further than intended | Workspace confinement — a config may widen it, which is fine, because nobody is trying to defeat it |
+| **Untrusted config** | You cloned a repo, or you are running a fork's PR branch in CI | The env guards (no config key can lift them), bounded discovery, and `--dry-run` to read the config first |
+| **Shared machine** | Another local user plants a `tasks.toml` where you will `cd` | Bounded discovery + the world-writable refusal |
+
+<Callout type="warning" title="What no guard here covers">
+  A <code>tasks.toml</code> that simply runs a malicious command
+  (<code>run = "curl … | sh"</code>) is not stopped by any of this, and is not
+  meant to be. Running the repo's commands is the entire purpose of a task
+  runner. The guards narrow what a config can do <em>beyond</em> the commands it
+  visibly declares.
 </Callout>
 
-Everything below is on by default. A rejected guard is a runner-level error —
-exit `64`, before the first child is spawned.
-
-## Two kinds of guard
+## Two tiers of guard
 
 |  | Relaxed by | Defends against |
 |---|---|---|
-| Workspace confinement | `[security] allow_paths` (config) | Accidents — a stale `dir`, a glob that reached too far |
-| Guarded env variables | `--allow-unsafe-env` (CLI only) | A `tasks.toml` you don't trust |
+| [Workspace confinement](#workspace-confinement) | `[security] allow_paths` — a **config** key | Accidents |
+| [Guarded env variables](#guarded-environment-variables) | `--allow-unsafe-env` — a **CLI flag**, no config equivalent | A config you don't trust |
 
-The difference is deliberate. A guard a config can widen is no defence against a
-config you are wary of, so the guards that exist for *that* case have no config
-equivalent at all.
+The asymmetry is deliberate. A guard a `tasks.toml` can widen is no defence
+against a `tasks.toml` you are wary of — it would simply widen itself. So the
+guards that exist for *that* case have no config-side switch at all.
+
+---
 
 ## Workspace confinement
 
-Every path `tsr` resolves itself must stay inside the workspace — the directory
-holding `tasks.toml`.
+Every path `tsr` resolves **itself** must stay inside the workspace: the
+directory holding `tasks.toml`.
+
+### What it stops
 
 ```toml
 [tasks.clean]
-run = "rm -rf ../../build"   # rejected
+run = "rm -rf ../../build"
 ```
 
 ```text
@@ -48,22 +75,49 @@ rm: refusing to touch '/home/you/build': outside the workspace at
 '/home/you/project' — add it to `[security] allow_paths` if that is intended
 ```
 
-This matters most for the [builtins](/docs/run-and-shell#built-in-commands).
-`rm` in a `run` string is **`tsr` itself**, always preferred over any binary of
-the same name — there is no `PATH` to adjust, no sandbox to deny it, no audit
-log. The boundary check is the only guard that can exist for it.
+The builtin case is the one that matters most. `rm` inside a `run` string is
+**`tsr` itself** — the [builtins](/docs/run-and-shell#built-in-commands) always
+win over a binary of the same name, so that `rm -rf dist` behaves identically on
+Linux, macOS and Windows. The consequence is that there is no `PATH` to adjust,
+no sandbox to deny it, and no audit trail. A boundary check inside `tsr` is the
+only guard that can exist for it.
 
-Rejected at **load** time, before anything runs:
+Confined builtins: `rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`. (`echo`, `pwd`,
+`true` and `false` touch no files.)
 
-- `dir` pointing outside the workspace;
-- `env_file` pointing outside it;
-- `packages` and `workspace.members` patterns whose literal prefix is outside it
-  (`apps/*` can't escape `apps/`; `../*` already has).
+### Rejected at load time
 
-Resolution is **physical**: the longest existing prefix of a path is
-canonicalized, so a symlink inside the workspace that points out of it is out of
-it. Only a path that doesn't exist yet — a file about to be created — is joined
-textually, where there is no symlink left to follow.
+These fail before *anything* runs, so a config that would step outside never gets
+halfway through a build first:
+
+| Field | Rejected when |
+|---|---|
+| `dir` | It resolves outside the workspace |
+| `env_file` | It resolves outside the workspace |
+| `packages` | Its literal prefix is outside |
+| `workspace.members` | Its literal prefix is outside |
+
+A glob is judged by its **literal prefix** — the part with a fixed location.
+`apps/*` cannot escape `apps/` however it expands; `../*` has already left before
+the wildcard is considered.
+
+### Resolution is physical, not textual
+
+The check follows symlinks as far as the filesystem actually goes: the longest
+*existing* prefix of a path is canonicalized, and only a not-yet-created tail is
+joined textually — where, by definition, there is no symlink left to follow.
+
+```sh
+ln -s /etc config-link          # inside the workspace…
+```
+
+```toml
+[tasks.oops]
+run = "rm -rf config-link/hosts"   # …still rejected: it lands in /etc
+```
+
+A purely textual check would have seen a path starting inside the workspace and
+allowed it.
 
 ### Widening it
 
@@ -74,84 +128,188 @@ For a build that genuinely writes outside its own tree:
 allow_paths = ["../shared-cache", "/tmp/build"]
 ```
 
+Relative entries resolve against the workspace root. Each entry admits that
+directory and its contents — not its parent, not its siblings.
+
+<Callout type="info" title="Why this one is config-relaxable">
+  Reaching outside the repo is a legitimate thing for a build to do, and the
+  workspace owner is the one who knows whether it is intended. This guard is
+  aimed at the stale <code>../..</code>, not at an adversary — an adversarial
+  config would just add the <code>allow_paths</code> entry itself.
+</Callout>
+
+---
+
 ## Guarded environment variables
 
-A config may not set a variable whose purpose is to decide what code some
-*other* program loads:
+A config may not set a variable whose purpose is to decide **what code some other
+program loads**.
 
-`LD_PRELOAD` · `LD_AUDIT` · `DYLD_INSERT_LIBRARIES` · `DYLD_LIBRARY_PATH` ·
-`NODE_OPTIONS` · `BASH_ENV` · `PYTHONSTARTUP` · `PERL5OPT` · `RUBYOPT` ·
-`GIT_SSH` · `GIT_SSH_COMMAND` · `GIT_EXTERNAL_DIFF` · `GIT_PROXY_COMMAND` ·
-`SSH_ASKPASS` · `SUDO_ASKPASS` · anything prefixed `TSR_`
+### The list
 
-Without this, a `tasks.toml` — or a committed `.env`, which is the file people
-read least — that appears to run `cargo test` can execute arbitrary code inside
-an unrelated process:
+| Group | Variables |
+|---|---|
+| Dynamic-loader injection | `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` |
+| Interpreter startup hooks | `NODE_OPTIONS`, `BASH_ENV`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT` |
+| Programs git & ssh shell out to | `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND`, `SSH_ASKPASS`, `SUDO_ASKPASS` |
+| `tsr`'s own namespace | anything prefixed `TSR_` |
+
+### What it stops
+
+Without this, a config that appears to run one thing can execute something else
+entirely, inside a process it never names:
 
 ```toml
-# rejected: this runs evil.js inside every `node` the build touches
+# rejected — this runs evil.js inside every `node` the build touches,
+# including ones started by tools tsr never invoked directly
 [env]
 NODE_OPTIONS = "--require ./evil.js"
 ```
 
-### `PATH` is a rule, not a ban
+```toml
+# rejected — replaces the binary `git` shells out to for every fetch and push
+[env]
+GIT_SSH_COMMAND = "./harvest-keys.sh"
+```
 
-Extending `PATH` is ordinary, so it isn't forbidden — only *replacing* it is. The
-value must still reference `$PATH`, which is the same "merged, never wiped"
-principle the [environment model](/docs/environment) already follows:
+The `.env` variant is the one to watch. It is the file people read least and
+commit most often, and it is loaded automatically from the workspace root:
+
+```text
+✗ config error: the root '.env' sets 'LD_PRELOAD', which decides what code an
+unrelated program loads — pass `--allow-unsafe-env` if that is intended
+```
+
+`TSR_` is reserved for the same reason: a config should not be able to
+reconfigure a nested `tsr` invocation, least of all to talk it out of these
+checks.
+
+### `PATH` gets a rule, not a ban
+
+Extending `PATH` is ordinary and useful, so it is not forbidden — only
+*replacing* it is. The value must still reference `$PATH`, which is exactly the
+"merged, never wiped" principle the [environment model](/docs/environment)
+already follows everywhere else:
 
 ```toml
 [env]
-PATH = "./bin:$PATH"   # fine — augments
+PATH = "./bin:$PATH"   # fine — augments the inherited PATH
 PATH = "/only/mine"    # rejected — decides what every bare command resolves to
 ```
 
-### Scope
+A replaced `PATH` is an injection vector wearing ordinary clothes: it silently
+changes which binary every unqualified command in the run resolves to.
 
-Only config-supplied sources are checked — `[env]`, task `env`, `env_file`, and
-the root `.env` — and only over the tasks that will actually run.
+### Scope: config sources only
 
-The **process** environment is passed through untouched. It belongs to whoever
-invoked `tsr`, and a runner that refused the environment it was handed would be
-broken rather than safe.
+| Source | Checked? |
+|---|---|
+| `[env]` | ✅ |
+| Task `env` | ✅ |
+| `env_file` | ✅ |
+| Root `.env` | ✅ |
+| **Process environment** | ❌ — passed through untouched |
 
-Pass `--allow-unsafe-env` to lift the guard for a run.
+The process environment belongs to whoever invoked `tsr`. A runner that refused
+the environment it was handed would be broken rather than safe — and the user who
+exported `LD_PRELOAD` in their own shell has already made that decision.
+
+Only the tasks that will actually run are checked, so an unrelated task elsewhere
+in `tasks.toml` cannot block a run that never touches it.
+
+### Lifting it
+
+```sh
+tsr build --allow-unsafe-env
+```
+
+<Callout type="warning" title="A flag, never a config key">
+  There is deliberately no <code>[security]</code> equivalent. These guards exist
+  for the case where the <code>tasks.toml</code> is what you are wary of, and a
+  guard the config could switch off would not survive that case. The decision has
+  to be made by the person typing the command.
+</Callout>
+
+`NODE_OPTIONS` has legitimate uses (`--max-old-space-size=4096`) and is guarded
+anyway, because it is also the classic `--require` injection. If your repo needs
+it, pass the flag — the error message names it.
+
+---
 
 ## Bounded config discovery
 
-Which `tasks.toml` is found decides what gets to run commands, so the walk up
-from your working directory stops at the first of:
+`tsr` finds the workspace root by walking **up** from your working directory to
+the nearest `tasks.toml`. Which file it lands on decides what gets to run
+commands on your machine, so the walk is bounded. It stops at the first of:
 
-- the **repository root** — a directory holding `.git`;
+- the **repository root** — a directory holding `.git`, checked *after* that
+  directory itself, since a workspace anchored at the repo root is the norm;
 - your **home directory**;
-- a **filesystem boundary** — the rule `git` applies to its own discovery.
+- a **filesystem boundary** — the same rule `git` applies to its own discovery.
 
-Without this, a `tasks.toml` left in `/tmp` or in a home directory would silently
-govern every project beneath it.
+Without a bound, a `tasks.toml` left in `/tmp` — or in a home directory, or on a
+mounted share — silently governs every project beneath it, and `tsr test` in an
+unrelated checkout runs whatever it says.
 
-A **world-writable** config, or one in a world-writable non-sticky directory, is
-refused on unix — anyone on the machine could otherwise choose what runs.
-Group-writable is fine (`umask 002` is a common default), and ownership is not
-checked, so CI checkouts running as a different uid keep working.
+### World-writable configs are refused
+
+```text
+✗ config error: '/tmp/shared/tasks.toml' is world-writable, and it decides what
+commands run — `chmod o-w '/tmp/shared/tasks.toml'` before using it
+```
+
+The check covers the file and the directory it sits in — a config you cannot
+rewrite is no protection if the directory lets it be replaced. Unix only; there
+is no cheap equivalent of the mode bits on Windows.
+
+Two deliberate narrowings, because a guard that fires on ordinary setups gets
+worked around rather than heeded:
+
+- **Group-writable is accepted.** A `umask` of `002` with a per-user group is a
+  common default; rejecting it would fail on almost every checkout.
+- **Sticky directories are accepted.** That is what the bit means: `/tmp` is
+  world-writable, but only a file's owner may replace it.
+- **Ownership is not checked.** A file another user owns is only reachable
+  through a directory they can write to, which the above already catches — and
+  checking it would reproduce git's "dubious ownership" friction on every CI
+  checkout that runs as a different uid.
+
+---
 
 ## Process-tree containment
 
-Killing the process `tsr` spawned isn't the same as stopping the work: `npm run
-dev` is a launcher whose `vite` keeps the port. So a child that a run may have to
-kill is spawned into its own **process group** (unix) or **job object**
-(windows), and the whole group is torn down — `SIGTERM`, then `SIGKILL` after a
-2s grace.
+Killing the process `tsr` spawned is not the same as stopping the work. `npm run
+dev` is a launcher: the Node process it starts spawns `vite`, and killing the
+launcher leaves `vite` holding the port.
 
-Isolation isn't unconditional, because on unix it costs interactivity: a process
-group outside the terminal's foreground one is stopped by `SIGTTIN` the moment it
-reads stdin. It applies exactly when a kill is possible — when the run's
-reachable tasks include a `parallel = true` batch. A lone `tsr dev` keeps the
-inherited group and stays interactive.
+So a child that a run may have to kill is spawned into its own **process group**
+(unix) or **job object** (windows), and the whole group is torn down — `SIGTERM`
+first, then `SIGKILL` after a 2s grace, long enough for a dev server to close its
+listeners.
 
-**Ctrl-C** aborts through the same path a failure uses: stop launching, tear down
-what's running, exit [`130`](/docs/exit-codes). `--no-bail` doesn't override it —
-you asked to stop. A second interrupt exits immediately, so a wedged child can
-never trap your terminal.
+### Why isolation is conditional
+
+Isolation is not free on unix. A process group outside the terminal's foreground
+group is stopped with `SIGTTIN` the moment it reads stdin — which would break
+every interactive task (`tsr dev`, `tsr test -- --watch`).
+
+So it is applied exactly when a kill is possible: when the run's reachable tasks
+include a `parallel = true` batch. Nothing in a sequential run can abort a child
+that is already running, because there is no sibling to fail. A lone `tsr dev`
+keeps the inherited group and stays interactive.
+
+### Ctrl-C
+
+`SIGINT` and `SIGTERM` (and `CTRL_C_EVENT` on Windows) abort through the same
+path a task failure uses: stop launching, tear down what is running, exit
+[`130`](/docs/exit-codes).
+
+- `--no-bail` does **not** override it. You asked to stop.
+- A second interrupt exits immediately, so a wedged child can never trap your
+  terminal.
+- Previously `tsr` died mid-`wait()` and left its children to init.
+
+---
 
 ## Reading a config before you run it
 
@@ -159,25 +317,77 @@ never trap your terminal.
 tsr <task> --dry-run
 ```
 
-prints every command the run would execute, in order, **before** `$VAR`
-expansion — so the plan is safe to paste into an issue and cannot leak what your
-`.env` holds. See [`--dry-run`](/docs/cli#tsr-task-dry-run).
+Walks the dependency graph and prints every unit of work the run would perform —
+label, directory, command — without running any of it.
+
+```text
+· lint
+    dir: .
+    cmd: eslint .
+· build (packages/ui)
+    dir: packages/ui
+    cmd: vite build
+```
+
+Two properties make it safe to use on a config you don't trust:
+
+- **Commands print as written**, before `$VAR` expansion. A plan pasted into an
+  issue or captured in a CI log cannot carry what your `.env` holds.
+- **The walk is always sequential**, even for `parallel = true` batches, so the
+  order you read is the order things would happen.
+
+A config that cannot be resolved still fails with the same error a real run would
+give — a dry run is an inspection, not a bypass. See
+[`--dry-run`](/docs/cli#tsr-task-dry-run).
+
+### Working with a repo you haven't read
+
+```sh
+tsr ci --dry-run          # what would run, and where
+cat tasks.toml .env       # what the plan resolved from
+tsr ci                    # only then
+```
+
+---
+
+## Guard reference
+
+| Guard | Default | Relaxed by | Failure |
+|---|---|---|---|
+| Builtin operands confined to the workspace | on | `[security] allow_paths` | Builtin exits `1` |
+| `dir` / `env_file` / `packages` / `members` confined | on | `[security] allow_paths` | Exit `64` at load |
+| Guarded env variables rejected | on | `--allow-unsafe-env` | Exit `64` at load |
+| `PATH` must extend, not replace | on | `--allow-unsafe-env` | Exit `64` at load |
+| Discovery bounded at repo / `$HOME` / filesystem | on | — | Task not found, exit `64` |
+| World-writable config refused | on (unix) | `chmod o-w` | Exit `64` at load |
+| Process-tree teardown | parallel runs | — | — |
+| Ctrl-C aborts and exits `130` | on | — | — |
 
 ## What is *not* guarded
 
-Stated plainly, so the boundary isn't mistaken for more than it is:
+Stated plainly, so the boundary is not mistaken for more than it is:
 
-- **Spawned programs.** Once a child starts it has your full privileges.
-- **`delegate` and `run` targets.** Naming a binary is the feature.
+- **Spawned programs.** Once a child starts it has your full privileges. `tsr`
+  cannot and does not sandbox it.
+- **`delegate` and `run` targets.** Naming a binary to execute is the feature;
+  `tsr` does not decide which binaries are allowed.
 - **`node_modules/.bin` on `PATH`.** A repo-local binary shadowing a global one
-  is npm's behaviour, and what makes `run = "vite"` work.
-- **A child's output.** Children inherit stdio; what they print is theirs.
-- **`allow_paths` against a hostile config.** It's a config key, so a config can
-  widen it. It guards against accidents, by design.
+  is npm's own behaviour, and what makes `run = "vite"` work
+  ([§9.2](/docs/monorepo)).
+- **A child's output.** Children inherit stdio; whatever they print — including
+  secrets — is theirs.
+- **`allow_paths` against a hostile config.** It is a config key, so a config can
+  widen it. It guards accidents, by design.
+- **Supply chain of what you install.** Release archives ship a `checksums.txt`
+  that both installers verify, and carry build provenance attestations, but what
+  `npm`, `cargo` or `uv` then fetch is between you and them.
 
 ## Reporting a vulnerability
 
 Privately, through GitHub's
 [private vulnerability reporting](https://github.com/Open-Tech-Foundation/tsr/security/advisories/new)
-— not a public issue. Details in
+— not a public issue. Include your version, platform, and a `tasks.toml` that
+reproduces it. Full policy:
 [SECURITY.md](https://github.com/Open-Tech-Foundation/tsr/blob/main/SECURITY.md).
+
+The full normative model is [SPEC §12](https://github.com/Open-Tech-Foundation/tsr/blob/main/SPEC.md#12-security-model).

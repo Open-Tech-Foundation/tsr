@@ -40,8 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not checked, so CI checkouts running as a different uid are unaffected.
 
 - **`SECURITY.md`, SPEC §12 and a Security page in the docs.** The whole model in
-  one place: what is guarded, what deliberately is not, and how to report a
-  vulnerability privately.
+  one place: the threat model each guard answers, per-guard detail with the
+  rejections they produce, a guard reference table, what deliberately is *not*
+  guarded, and how to report a vulnerability privately.
+
+- Website: the landing page now leads with the guarantees — a "Guarded by
+  default" section next to the feature grid, showing a confinement refusal, an
+  env-guard rejection and a `--dry-run` plan.
 
 - CI: `cargo audit` runs against the locked dependency set.
 

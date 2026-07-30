@@ -105,9 +105,16 @@ export default function Home() {
               graph and opt-in parallelism, and delegates caching to Turbo/Nx instead of
               reinventing it.
             </p>
+            <p class="lede">
+              And it is <strong>guarded by default</strong>: no config can delete outside
+              your workspace or inject <code>LD_PRELOAD</code> into your build.
+            </p>
             <div class="cta-row">
               <Link class="btn btn-primary" href="/docs">
                 Get started <ArrowRightIcon stroke="#ffffff" />
+              </Link>
+              <Link class="btn btn-ghost" href="/docs/security">
+                Security model <ArrowRightIcon />
               </Link>
             </div>
           </div>
@@ -197,6 +204,124 @@ export default function Home() {
               <p>
                 Content-hash and remote caching are ceded to Turbo/Nx — never
                 reimplemented. tsr stays a lightweight command runner.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* --- security --- */}
+      <section class="section">
+        <div class="container">
+          <h2>Guarded by default</h2>
+          <p class="sub">
+            A task runner runs the repo's code — that is the job. What it should not do is
+            let a config reach past the commands it visibly declares. tsr guards the parts
+            it performs itself, with no flag to turn on.
+          </p>
+
+          <div class="two-col">
+            <div class="split-copy">
+              <ul>
+                <li>
+                  <strong>Nothing tsr touches leaves the workspace.</strong> The in-process
+                  builtins (<code>rm</code>, <code>cp</code>, <code>mv</code>) refuse
+                  operands outside it — symlinks included — and <code>dir</code>,{" "}
+                  <code>env_file</code> and <code>packages</code> are rejected at load.
+                </li>
+                <li>
+                  <strong>No environment injection.</strong> A config or a committed{" "}
+                  <code>.env</code> cannot set <code>LD_PRELOAD</code>,{" "}
+                  <code>NODE_OPTIONS</code> or <code>GIT_SSH_COMMAND</code>, and{" "}
+                  <code>PATH</code> may be extended but never replaced.
+                </li>
+                <li>
+                  <strong>Discovery stops at your repo.</strong> The walk up to{" "}
+                  <code>tasks.toml</code> never climbs past the git root, your home
+                  directory, or a filesystem boundary — and a world-writable config is
+                  refused outright.
+                </li>
+                <li>
+                  <strong>Nothing outlives the run.</strong> A failure or a Ctrl-C tears
+                  down the whole process group, so a killed <code>npm run dev</code> never
+                  leaves <code>vite</code> holding the port.
+                </li>
+              </ul>
+              <div class="cta-row" style="margin-top:20px">
+                <Link class="btn btn-ghost" href="/docs/security">
+                  Read the security model <ArrowRightIcon />
+                </Link>
+              </div>
+            </div>
+
+            <div class="term-window">
+              <div class="term-bar">
+                <span class="term-dot" />
+                <span class="term-dot" />
+                <span class="term-dot" />
+                <span class="term-title">~/app — guards</span>
+              </div>
+              <div class="term-body">
+                <div>
+                  <span class="p">$</span> <span class="c">tsr clean</span>{" "}
+                  <span class="muted"># run = "rm -rf ../../build"</span>
+                </div>
+                <div class="warn">rm: refusing to touch '/home/you/build':</div>
+                <div class="warn">
+                  &nbsp;&nbsp;&nbsp;&nbsp;outside the workspace at '/home/you/app'
+                </div>
+                <div>&nbsp;</div>
+                <div>
+                  <span class="p">$</span> <span class="c">tsr build</span>{" "}
+                  <span class="muted"># .env sets LD_PRELOAD</span>
+                </div>
+                <div class="cross">✗ config error: the root '.env' sets 'LD_PRELOAD',</div>
+                <div class="cross">
+                  &nbsp;&nbsp;which decides what code an unrelated program loads
+                </div>
+                <div>&nbsp;</div>
+                <div>
+                  <span class="p">$</span> <span class="c">tsr ci --dry-run</span>{" "}
+                  <span class="muted"># read it before you run it</span>
+                </div>
+                <div class="muted">· lint&nbsp;&nbsp;&nbsp;dir: .&nbsp;&nbsp;cmd: eslint .</div>
+                <div class="muted">
+                  · build&nbsp;&nbsp;dir: packages/ui&nbsp;&nbsp;cmd: vite build
+                </div>
+                <div>
+                  <span class="ok">✓ nothing executed</span>{" "}
+                  <span class="muted">— exit 0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid" style="margin-top:22px">
+            <div class="card">
+              <div class="ico">🛡️</div>
+              <h3>Deny by default</h3>
+              <p>
+                Every guard is on out of the box. Widening workspace confinement takes an
+                explicit <code>[security] allow_paths</code>; lifting the environment
+                guards takes <code>--allow-unsafe-env</code> on the command line.
+              </p>
+            </div>
+            <div class="card">
+              <div class="ico">🔒</div>
+              <h3>No config self-service</h3>
+              <p>
+                The env guards exist for the case where the <code>tasks.toml</code> is what
+                you're wary of — so there is deliberately no config key that can switch
+                them off. Only the person typing the command can.
+              </p>
+            </div>
+            <div class="card">
+              <div class="ico">👀</div>
+              <h3>Inspect before you run</h3>
+              <p>
+                <code>tsr &lt;task&gt; --dry-run</code> prints every command a run would
+                execute, in order — <em>before</em> <code>$VAR</code> expansion, so the
+                plan can't leak what your <code>.env</code> holds.
               </p>
             </div>
           </div>
