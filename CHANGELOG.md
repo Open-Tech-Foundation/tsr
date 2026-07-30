@@ -27,6 +27,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   died mid-`wait()` and left its children to init. A second interrupt exits
   immediately, so a wedged child can never trap the terminal.
 
+- **Workspace confinement for everything `tsr` does itself (SPEC §12.1).**
+  The in-process builtins (`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`) now refuse
+  an operand that resolves outside the workspace, and `dir`, `env_file`,
+  `packages` and `workspace.members` are rejected at **load** time if they point
+  outside it (exit `64`). `rm -rf ../..` in a `run` string used to delete
+  whatever was there.
+
+  Builtins are where this matters most: `rm` is `tsr` itself, always preferred
+  over any binary of the same name, so there is no `PATH`, sandbox or audit to
+  fall back on. Resolution is physical — a symlink inside the workspace that
+  points out of it is out of it.
+
+  **Breaking** for a config that deliberately reaches outside its own tree.
+  Widen the boundary explicitly:
+
+  ```toml
+  [security]
+  allow_paths = ["../shared-cache"]
+  ```
+
+  This guard is about accidents, not malice: a `tasks.toml` can widen it, so it
+  is not a defence against a config you do not trust. `tsr` still cannot confine
+  the programs it *spawns* — that is what a sandbox is for.
+
 - **`--dry-run` — print the plan, run nothing (SPEC §12).** Walks the dependency
   graph and prints each leaf's label, directory and command, so an unfamiliar
   `tasks.toml` can be read before it is handed a shell. Commands print **as

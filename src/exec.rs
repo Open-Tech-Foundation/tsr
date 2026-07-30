@@ -197,6 +197,10 @@ struct Ctx<'a> {
     memo: Mutex<HashMap<String, std::sync::Arc<TaskSlot>>>,
     /// Whether children are spawned into their own process group (SPEC §12).
     isolation: proc::Isolation,
+    /// The workspace boundary the in-process builtins are confined to
+    /// (SPEC §12.1). Resolved once: it canonicalises the root, which is a
+    /// syscall no leaf should repeat.
+    bounds: crate::confine::Bounds,
 }
 
 impl<'a> Ctx<'a> {
@@ -210,6 +214,7 @@ impl<'a> Ctx<'a> {
             results: Mutex::new(Vec::new()),
             memo: Mutex::new(HashMap::new()),
             isolation: isolation_for(cfg, root),
+            bounds: cfg.bounds(),
         }
     }
 
@@ -858,7 +863,7 @@ impl<'a> Ctx<'a> {
         if builtins::is_builtin(program) {
             // Builtins are in-process and always fast, so there is no child to
             // poll; an abort is honoured by the caller's between-command check.
-            return LeafWait::Exited(builtins::run(program, args, &job.dir));
+            return LeafWait::Exited(builtins::run(program, args, &job.dir, &self.bounds));
         }
         self.spawn_wait(program, args, job)
     }

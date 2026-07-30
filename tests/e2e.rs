@@ -1712,3 +1712,133 @@ fn dry_run_still_reports_a_broken_config() {
     let out = tsr(&ws, &["a", "--dry-run"]);
     assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
 }
+
+// --- workspace confinement (SPEC §12.1) ---
+
+#[test]
+fn a_builtin_refuses_to_delete_outside_the_workspace() {
+    // `rm` is tsr itself, not `/bin/rm`, and it always wins over a binary of the
+    // same name — so this check is the only thing between a stray `../` and
+    // whatever sits next to the repo.
+    let ws = workspace();
+    let outside = ws.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let victim = outside.join("keep.txt");
+    fs::write(&victim, "precious").unwrap();
+
+    let root = ws.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    write(
+        &root,
+        "tasks.toml",
+        "[tasks.clean]\nrun = \"rm -rf ../outside/keep.txt\"\n",
+    );
+
+    let out = tsr(&root, &["clean"]);
+    assert_ne!(code(&out), 0, "the run should have failed");
+    assert!(
+        stderr(&out).contains("outside the workspace"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        victim.is_file(),
+        "the file outside the workspace was deleted"
+    );
+}
+
+#[test]
+fn allow_paths_permits_a_builtin_outside_the_workspace() {
+    let ws = workspace();
+    let cache = ws.join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    let root = ws.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    write(
+        &root,
+        "tasks.toml",
+        "[security]\nallow_paths = [\"../cache\"]\n\n\
+         [tasks.stamp]\nrun = \"touch ../cache/stamp\"\n",
+    );
+
+    let out = tsr(&root, &["stamp"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(cache.join("stamp").is_file());
+}
+
+#[test]
+fn a_task_dir_outside_the_workspace_is_rejected_at_load() {
+    let ws = workspace();
+    let root = ws.join("repo");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    write(
+        &root,
+        "tasks.toml",
+        "[tasks.build]\nrun = \"touch marker\"\ndir = \"../\"\n",
+    );
+
+    let out = tsr(&root, &["build"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("outside the workspace"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!ws.join("marker").exists(), "nothing should have run");
+}
+
+#[test]
+fn an_env_file_outside_the_workspace_is_rejected_at_load() {
+    let ws = workspace();
+    fs::write(ws.join("secrets.env"), "TOKEN=leak\n").unwrap();
+    let root = ws.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    write(
+        &root,
+        "tasks.toml",
+        "[tasks.deploy]\nrun = \"true\"\nenv_file = \"../secrets.env\"\n",
+    );
+
+    let out = tsr(&root, &["deploy"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("outside the workspace"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn workspace_members_outside_the_workspace_are_rejected() {
+    let ws = workspace();
+    let root = ws.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    write(
+        &root,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"../*\"]\n\n[tasks.test]\npackages = [\"*\"]\n",
+    );
+
+    let out = tsr(&root, &["test"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("outside the workspace"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_glob_inside_the_workspace_is_still_allowed() {
+    // The prefix check must not turn ordinary globs into errors.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.clean]\nrun = \"rm -rf dist/*\"\n",
+    );
+    write(&ws, "dist/a.js", "");
+    let out = tsr(&ws, &["clean"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(!ws.join("dist/a.js").exists());
+}

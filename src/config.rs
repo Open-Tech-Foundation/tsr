@@ -28,11 +28,26 @@ pub struct Config {
     pub env: Vec<(String, String)>,
     /// Tasks keyed by their full table key (may contain a `#` package prefix).
     pub tasks: BTreeMap<String, Task>,
+    /// `[security]` — the workspace's own relaxations of the default guards
+    /// (SPEC §12).
+    pub security: Security,
     /// The parsed document, retained so comments and unknown keys survive a
     /// round-trip when the config is rewritten (SPEC §1.5). Not read on the
     /// execution path; consumed by tooling and the round-trip test.
     #[allow(dead_code)]
     pub doc: DocumentMut,
+}
+
+/// The `[security]` table (SPEC §12.1).
+///
+/// Only guards against *accidents* belong here. A hostile `tasks.toml` could
+/// widen anything it declares, so the guards a config must not be able to lift
+/// — the env ones (SPEC §12.2) — take a CLI flag instead, never a config key.
+#[derive(Debug, Clone, Default)]
+pub struct Security {
+    /// Directories outside the workspace that builtins, `dir` and `env_file` may
+    /// still reach. Relative entries resolve against the workspace root.
+    pub allow_paths: Vec<String>,
 }
 
 /// A backend hand-off target (SPEC §3, form 1).
@@ -92,6 +107,32 @@ impl Config {
     pub fn task(&self, key: &str) -> Option<&Task> {
         self.tasks.get(key)
     }
+
+    /// The workspace boundary this config's file operations are confined to
+    /// (SPEC §12.1).
+    pub fn bounds(&self) -> crate::confine::Bounds {
+        crate::confine::Bounds::new(&self.root, &self.security.allow_paths)
+    }
+}
+
+/// The literal directory prefix of a glob — everything before the first
+/// metacharacter, cut at a path separator.
+///
+/// A glob is checked by its prefix because that is the only part with a fixed
+/// location: `apps/*` cannot reach outside `apps/` however it expands, while
+/// `../*` has already left the workspace before the wildcard is considered.
+fn glob_prefix(pattern: &str) -> &str {
+    let Some(meta) = pattern.find(['*', '?', '[']) else {
+        return pattern;
+    };
+    match pattern[..meta].rfind('/') {
+        // A separator at 0 means an absolute pattern (`/*`): the prefix is the
+        // filesystem root, which is emphatically not the workspace.
+        Some(0) => "/",
+        Some(cut) => &pattern[..cut],
+        // No separator before the wildcard: the pattern is rooted where it sits.
+        None => ".",
+    }
 }
 
 /// Locate the nearest existing `tasks.toml` at/above `start`, if any. Used by the
@@ -138,6 +179,7 @@ pub fn implicit(root: PathBuf, task: &str) -> Config {
         members: Vec::new(),
         env: Vec::new(),
         tasks,
+        security: Security::default(),
         doc: DocumentMut::new(),
     }
 }
@@ -199,6 +241,13 @@ fn parse(text: &str, root: PathBuf) -> Result<Config> {
         None => Vec::new(),
     };
 
+    let mut security = Security::default();
+    if let Some(sec) = doc.get("security").and_then(Item::as_table_like)
+        && let Some(paths) = sec.get("allow_paths")
+    {
+        security.allow_paths = parse_string_array(paths, "security.allow_paths")?;
+    }
+
     let mut tasks = BTreeMap::new();
     if let Some(tbl) = doc.get("tasks").and_then(Item::as_table_like) {
         for (key, item) in tbl.iter() {
@@ -212,6 +261,7 @@ fn parse(text: &str, root: PathBuf) -> Result<Config> {
         members,
         env,
         tasks,
+        security,
         doc,
     })
 }
@@ -348,8 +398,37 @@ impl Config {
     /// Structural validation performed once at load time (SPEC §3.3, §4).
     /// `$VAR` resolution is validated later, against the merged env (SPEC §7.3).
     fn validate(&self) -> Result<()> {
+        // Every directory the config points `tsr` at must stay inside the
+        // workspace (SPEC §12.1). Checked here, at load, rather than at use:
+        // a config that would step outside should fail before the first task
+        // runs, not halfway through a build.
+        let bounds = self.bounds();
+        for member in &self.members {
+            // A glob's literal prefix is what matters — `apps/*` cannot escape,
+            // `../*` escapes before the wildcard is reached.
+            bounds.check("workspace.members", &self.root, glob_prefix(member))?;
+        }
+
         for task in self.tasks.values() {
             validate_task_key(&task.key)?;
+
+            if let Some(dir) = &task.dir {
+                bounds.check(&format!("task '{}': dir", task.key), &self.root, dir)?;
+            }
+            let base = match &task.dir {
+                Some(d) => self.root.join(d),
+                None => self.root.clone(),
+            };
+            for file in &task.env_files {
+                bounds.check(&format!("task '{}': env_file", task.key), &base, file)?;
+            }
+            for pattern in task.packages.iter().flatten() {
+                bounds.check(
+                    &format!("task '{}': packages", task.key),
+                    &self.root,
+                    glob_prefix(pattern),
+                )?;
+            }
 
             if task.dir.is_some() && task.packages.is_some() {
                 return Err(TsrError::config(format!(
@@ -546,6 +625,44 @@ mod tests {
         let cfg = load(src).unwrap();
         // Unknown key is tolerated (not modeled) but survives via the document.
         assert_eq!(cfg.doc.to_string(), src);
+    }
+
+    #[test]
+    fn glob_prefix_is_the_part_with_a_fixed_location() {
+        // Everything before the first metacharacter, cut at a separator.
+        assert_eq!(glob_prefix("apps/*"), "apps");
+        assert_eq!(glob_prefix("apps/**/pkg"), "apps");
+        assert_eq!(glob_prefix("packages/ui"), "packages/ui");
+        assert_eq!(glob_prefix("../*"), "..");
+        assert_eq!(glob_prefix("*"), ".");
+        assert_eq!(glob_prefix("/*"), "/");
+        assert_eq!(glob_prefix("a/b[0-9]c"), "a");
+    }
+
+    #[test]
+    fn parses_the_security_table() {
+        let cfg = load("[security]\nallow_paths = [\"/tmp/cache\", \"../shared\"]\n").unwrap();
+        assert_eq!(cfg.security.allow_paths, ["/tmp/cache", "../shared"]);
+        // Absent by default — the guards are on unless a config relaxes them.
+        let cfg = load("[tasks.t]\nrun = \"true\"\n").unwrap();
+        assert!(cfg.security.allow_paths.is_empty());
+    }
+
+    #[test]
+    fn rejects_a_dir_outside_the_workspace() {
+        let err = load("[tasks.t]\nrun = \"true\"\ndir = \"../elsewhere\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside the workspace"), "{err}");
+        assert!(err.contains("dir"), "{err}");
+    }
+
+    #[test]
+    fn allow_paths_admits_an_outside_dir() {
+        let cfg = load(
+            "[security]\nallow_paths = [\"..\"]\n\n[tasks.t]\nrun = \"true\"\ndir = \"../elsewhere\"\n",
+        );
+        assert!(cfg.is_ok(), "{:?}", cfg.err());
     }
 
     #[test]

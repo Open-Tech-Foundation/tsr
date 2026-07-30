@@ -4,6 +4,7 @@ mod builtins;
 mod changed;
 mod cli;
 mod config;
+mod confine;
 mod detect;
 mod env;
 mod error;

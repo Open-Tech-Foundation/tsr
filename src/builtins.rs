@@ -18,6 +18,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::confine::Bounds;
+
 /// Exit code for a usage error (bad flag, missing operand), as in coreutils.
 const USAGE: i32 = 2;
 /// Exit code for a failed operation.
@@ -34,22 +36,23 @@ pub fn is_builtin(name: &str) -> bool {
 }
 
 /// Run a builtin and return its exit code. `cwd` is the job's directory, which
-/// every relative path operand is resolved against.
-pub fn run(name: &str, args: &[String], cwd: &Path) -> i32 {
+/// every relative path operand is resolved against, and `bounds` is the
+/// workspace boundary each of those operands must stay inside (SPEC §12.1).
+pub fn run(name: &str, args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     match name {
-        "cat" => cat(args, cwd),
-        "cp" => cp(args, cwd),
+        "cat" => cat(args, cwd, bounds),
+        "cp" => cp(args, cwd, bounds),
         "echo" => echo(args),
         // POSIX: both ignore their operands entirely. `cmd || true` is the
         // portable way to make a step non-fatal, so these have to exist on
         // Windows too, where there is no `/bin/true` to fall back on.
         "false" => FAIL,
         "true" => 0,
-        "mkdir" => mkdir(args, cwd),
-        "mv" => mv(args, cwd),
+        "mkdir" => mkdir(args, cwd, bounds),
+        "mv" => mv(args, cwd, bounds),
         "pwd" => pwd(cwd),
-        "rm" => rm(args, cwd),
-        "touch" => touch(args, cwd),
+        "rm" => rm(args, cwd, bounds),
+        "touch" => touch(args, cwd, bounds),
         _ => {
             errln(format_args!("tsr: '{name}' is not a builtin"));
             USAGE
@@ -59,14 +62,25 @@ pub fn run(name: &str, args: &[String], cwd: &Path) -> i32 {
 
 // --- shared helpers ---
 
-/// Resolve an operand against the job directory, leaving absolute paths alone.
-fn resolve(cwd: &Path, arg: &str) -> PathBuf {
-    let p = Path::new(arg);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        cwd.join(p)
+/// Resolve an operand against the job directory and confirm it stays inside the
+/// workspace (SPEC §12.1), reporting and yielding `None` when it does not.
+///
+/// Builtins are the one file-touching code path with no process boundary around
+/// it — `rm` here is `tsr` itself, always preferred over any `/bin/rm`, so this
+/// check is the only thing standing between a stray `../..` and the user's home
+/// directory.
+fn resolve(cmd: &str, cwd: &Path, arg: &str, bounds: &Bounds) -> Option<PathBuf> {
+    let path = crate::confine::resolve(cwd, arg);
+    if bounds.permits_operand(cwd, arg) {
+        return Some(path);
     }
+    errln(format_args!(
+        "{cmd}: refusing to touch '{}': outside the workspace at '{}' — \
+         add it to `[security] allow_paths` if that is intended",
+        path.display(),
+        bounds.root().display()
+    ));
+    None
 }
 
 fn errln(args: std::fmt::Arguments) {
@@ -135,9 +149,17 @@ fn flags<'a>(
 /// operation should perform, following the coreutils rule: with more than one
 /// source — or a destination that is an existing directory — each source lands
 /// *inside* the destination directory.
-fn pairs(cmd: &str, operands: &[&str], cwd: &Path) -> Result<Vec<(PathBuf, PathBuf)>, i32> {
+fn pairs(
+    cmd: &str,
+    operands: &[&str],
+    cwd: &Path,
+    bounds: &Bounds,
+) -> Result<Vec<(PathBuf, PathBuf)>, i32> {
     let (srcs, dst) = match operands.split_last() {
-        Some((dst, srcs)) if !srcs.is_empty() => (srcs, resolve(cwd, dst)),
+        Some((dst, srcs)) if !srcs.is_empty() => match resolve(cmd, cwd, dst, bounds) {
+            Some(path) => (srcs, path),
+            None => return Err(FAIL),
+        },
         _ => return Err(usage(cmd, "missing destination operand")),
     };
     let into_dir = dst.is_dir();
@@ -147,17 +169,18 @@ fn pairs(cmd: &str, operands: &[&str], cwd: &Path) -> Result<Vec<(PathBuf, PathB
             &format!("target '{}' is not a directory", dst.display()),
         ));
     }
-    Ok(srcs
-        .iter()
-        .map(|s| {
-            let src = resolve(cwd, s);
-            let target = match (into_dir, src.file_name()) {
-                (true, Some(name)) => dst.join(name),
-                _ => dst.clone(),
-            };
-            (src, target)
-        })
-        .collect())
+    let mut out = Vec::with_capacity(srcs.len());
+    for s in srcs {
+        let Some(src) = resolve(cmd, cwd, s, bounds) else {
+            return Err(FAIL);
+        };
+        let target = match (into_dir, src.file_name()) {
+            (true, Some(name)) => dst.join(name),
+            _ => dst.clone(),
+        };
+        out.push((src, target));
+    }
+    Ok(out)
 }
 
 // --- builtins ---
@@ -190,7 +213,7 @@ fn pwd(cwd: &Path) -> i32 {
 }
 
 /// `cat [FILE]...` — concatenate to stdout; stdin when no operands.
-fn cat(args: &[String], cwd: &Path) -> i32 {
+fn cat(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     let (_, operands) = match flags("cat", args, &[]) {
         Ok(v) => v,
         Err(code) => return code,
@@ -207,7 +230,10 @@ fn cat(args: &[String], cwd: &Path) -> i32 {
     }
     let mut code = 0;
     for op in operands {
-        let path = resolve(cwd, op);
+        let Some(path) = resolve("cat", cwd, op, bounds) else {
+            code = FAIL;
+            continue;
+        };
         // A failed file does not abort the rest, matching `cat`.
         match File::open(&path).and_then(|mut f| io::copy(&mut f, &mut out)) {
             Ok(_) => {}
@@ -218,7 +244,7 @@ fn cat(args: &[String], cwd: &Path) -> i32 {
 }
 
 /// `mkdir [-p] DIR...`
-fn mkdir(args: &[String], cwd: &Path) -> i32 {
+fn mkdir(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     let (set, operands) = match flags("mkdir", args, &[('p', "parents")]) {
         Ok(v) => v,
         Err(code) => return code,
@@ -229,7 +255,10 @@ fn mkdir(args: &[String], cwd: &Path) -> i32 {
     let parents = set.contains('p');
     let mut code = 0;
     for op in operands {
-        let path = resolve(cwd, op);
+        let Some(path) = resolve("mkdir", cwd, op, bounds) else {
+            code = FAIL;
+            continue;
+        };
         // `-p` also makes an existing directory a no-op, as in coreutils.
         let r = if parents {
             fs::create_dir_all(&path)
@@ -244,7 +273,7 @@ fn mkdir(args: &[String], cwd: &Path) -> i32 {
 }
 
 /// `touch FILE...` — create when missing, otherwise bump the timestamps.
-fn touch(args: &[String], cwd: &Path) -> i32 {
+fn touch(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     let (_, operands) = match flags("touch", args, &[]) {
         Ok(v) => v,
         Err(code) => return code,
@@ -256,7 +285,10 @@ fn touch(args: &[String], cwd: &Path) -> i32 {
     let times = FileTimes::new().set_accessed(now).set_modified(now);
     let mut code = 0;
     for op in operands {
-        let path = resolve(cwd, op);
+        let Some(path) = resolve("touch", cwd, op, bounds) else {
+            code = FAIL;
+            continue;
+        };
         let r = OpenOptions::new()
             .write(true)
             .create(true)
@@ -271,7 +303,7 @@ fn touch(args: &[String], cwd: &Path) -> i32 {
 }
 
 /// `rm [-r] [-f] FILE...`
-fn rm(args: &[String], cwd: &Path) -> i32 {
+fn rm(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     let (set, operands) = match flags("rm", args, &[('r', "recursive"), ('R', ""), ('f', "force")])
     {
         Ok(v) => v,
@@ -292,7 +324,10 @@ fn rm(args: &[String], cwd: &Path) -> i32 {
 
     let mut code = 0;
     for op in operands {
-        let path = resolve(cwd, op);
+        let Some(path) = resolve("rm", cwd, op, bounds) else {
+            code = FAIL;
+            continue;
+        };
         // Refuse to recurse into a filesystem root, as coreutils does.
         if path.parent().is_none() {
             errln(format_args!(
@@ -332,13 +367,13 @@ fn rm(args: &[String], cwd: &Path) -> i32 {
 }
 
 /// `cp [-r] SRC... DST`
-fn cp(args: &[String], cwd: &Path) -> i32 {
+fn cp(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     let (set, operands) = match flags("cp", args, &[('r', "recursive"), ('R', "")]) {
         Ok(v) => v,
         Err(code) => return code,
     };
     let recursive = set.contains('r') || set.contains('R');
-    let jobs = match pairs("cp", &operands, cwd) {
+    let jobs = match pairs("cp", &operands, cwd, bounds) {
         Ok(v) => v,
         Err(code) => return code,
     };
@@ -361,12 +396,12 @@ fn cp(args: &[String], cwd: &Path) -> i32 {
 }
 
 /// `mv SRC... DST`
-fn mv(args: &[String], cwd: &Path) -> i32 {
+fn mv(args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     let (_, operands) = match flags("mv", args, &[]) {
         Ok(v) => v,
         Err(code) => return code,
     };
-    let jobs = match pairs("mv", &operands, cwd) {
+    let jobs = match pairs("mv", &operands, cwd, bounds) {
         Ok(v) => v,
         Err(code) => return code,
     };
@@ -424,8 +459,16 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
+    /// Run a builtin with the workspace boundary set to the scratch directory
+    /// it runs in — the arrangement every real job has.
     fn call(name: &str, list: &[&str], cwd: &Path) -> i32 {
-        run(name, &args(list), cwd)
+        run(name, &args(list), cwd, &Bounds::new(cwd, &[]))
+    }
+
+    /// The same, with the boundary lifted, for the tests that assert on
+    /// behaviour rather than on confinement.
+    fn call_unbounded(name: &str, list: &[&str], cwd: &Path) -> i32 {
+        run(name, &args(list), cwd, &Bounds::unbounded())
     }
 
     fn write(dir: &Path, rel: &str, body: &str) -> PathBuf {
@@ -543,9 +586,66 @@ mod tests {
         let other = scratch();
         let target = other.join("marker");
         assert_eq!(
-            call("touch", &[target.to_str().unwrap()], &dir),
+            call_unbounded("touch", &[target.to_str().unwrap()], &dir),
             0,
             "absolute operands must not be joined onto cwd"
+        );
+        assert!(target.is_file());
+    }
+
+    // --- confinement (SPEC §12.1) ---
+
+    /// The guard that matters most: `rm` here is `tsr` itself, always preferred
+    /// over any `/bin/rm`, so a stray `../..` has nothing else to stop it.
+    #[test]
+    fn destructive_builtins_refuse_to_leave_the_workspace() {
+        let dir = scratch();
+        let outside = scratch();
+        let victim = write(&outside, "keep.txt", "precious");
+        let up = format!(
+            "../{}/keep.txt",
+            outside.file_name().unwrap().to_str().unwrap()
+        );
+
+        for name in ["rm", "mv", "cp", "touch", "mkdir", "cat"] {
+            // `mv`/`cp` need a second operand; the first is the one that escapes.
+            let list: Vec<&str> = match name {
+                "mv" | "cp" => vec![up.as_str(), "landing"],
+                "rm" => vec!["-rf", up.as_str()],
+                _ => vec![up.as_str()],
+            };
+            assert_eq!(
+                call(name, &list, &dir),
+                FAIL,
+                "{name} must refuse an operand outside the workspace"
+            );
+        }
+        assert!(victim.is_file(), "the file outside the workspace survived");
+    }
+
+    /// A path is judged by where it lands, not by how it is spelled: a symlink
+    /// inside the workspace that points out of it is still out of it.
+    #[test]
+    #[cfg(unix)]
+    fn confinement_follows_symlinks() {
+        let dir = scratch();
+        let outside = scratch();
+        let victim = write(&outside, "keep.txt", "precious");
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+
+        assert_eq!(call("rm", &["-rf", "link/keep.txt"], &dir), FAIL);
+        assert!(victim.is_file());
+    }
+
+    #[test]
+    fn allow_paths_lets_a_builtin_out() {
+        let dir = scratch();
+        let cache = scratch();
+        let bounds = Bounds::new(&dir, &[cache.to_str().unwrap().to_string()]);
+        let target = cache.join("stamp");
+        assert_eq!(
+            run("touch", &args(&[target.to_str().unwrap()]), &dir, &bounds),
+            0
         );
         assert!(target.is_file());
     }
