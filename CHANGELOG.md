@@ -56,7 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runner with a build system on one axis is how a table like this misleads.
   Corrections from review: `go-task` and `mise` are native binaries and now read
   ✅ on "no runtime boot"; the ambiguous rows (parallelism, workspace fan-out,
-  declarative env) say what 🟡 means for them instead of leaving it inferred.
+  declarative env) say what 🟡 means for them in a one-line row note instead of
+  leaving it inferred, which keeps the caveats in the table rather than in prose
+  beneath it.
 
 - CI: `cargo audit` runs against the locked dependency set.
 

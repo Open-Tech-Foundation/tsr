@@ -410,14 +410,7 @@ export default function Home() {
             </Link>
           </div>
           <p class="cmp-note">
-            A ❌ is not a criticism — several of these are capabilities a tool has no reason
-            to have. The package runners resolve <code>node_modules/.bin</code> because
-            that is their job; <code>just</code> has no workspace model because it is not a
-            monorepo tool. On the two guard rows: runners without built-in commands shell
-            out instead, so an <code>rm -rf ..</code> in a script is unconfined either way,
-            and mise gates its config behind a trust prompt rather than a rule about which
-            variables it may set. None of these sandbox what a task <em>spawns</em> —
-            neither does tsr.{" "}
+            None of these sandbox what a task <em>spawns</em> — tsr included.{" "}
             <Link href="/docs/security">What tsr does and doesn't guard →</Link>
           </p>
         </div>
