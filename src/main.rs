@@ -85,6 +85,9 @@ fn run() -> error::Result<i32> {
             // i.e. the invoked task and its dependency closure (SPEC §7.3).
             let reachable = graph::reachable(&cfg, &task);
             env::validate_run_vars(&cfg, &reachable)?;
+            // Reject config-set variables that decide what code some *other*
+            // program loads (SPEC §12.2) — before anything is spawned.
+            env::validate_guarded_vars(&cfg, &reachable, opts.allow_unsafe_env)?;
             // Both package filters need the graph, so build it once and only
             // when one of them was actually asked for — an ordinary run must not
             // pay for scanning the workspace.

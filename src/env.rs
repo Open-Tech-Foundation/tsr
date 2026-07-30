@@ -313,6 +313,125 @@ fn read_var(chars: &[char], start: usize) -> Option<(String, usize)> {
 /// given tasks is defined in that task's merged env (SPEC §7.3). Undefined →
 /// exit `64`. Only the tasks that will actually run are checked, so an unrelated
 /// broken task does not block the invoked one.
+/// Environment variables a **config** may not set (SPEC §12.2).
+///
+/// Every one of these makes some *other* program load and run code chosen by
+/// whoever set it: `LD_PRELOAD` injects a library into every dynamically linked
+/// child, `NODE_OPTIONS=--require ./x.js` runs a script inside any `node`,
+/// `GIT_SSH_COMMAND` replaces the binary `git` shells out to. Left unguarded,
+/// a `tasks.toml` or a `.env` that only appears to run `cargo test` can execute
+/// arbitrary code somewhere entirely unrelated.
+///
+/// The process environment is deliberately *not* checked: it belongs to whoever
+/// invoked `tsr`, and a runner that refused to pass on the environment it was
+/// given would be broken rather than safe. Only config-supplied values —
+/// `[env]`, task `env`, `env_file`, and the root `.env` — are subject to this.
+const GUARDED: &[&str] = &[
+    // Dynamic-loader injection.
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    // Interpreter startup hooks.
+    "NODE_OPTIONS",
+    "BASH_ENV",
+    "PYTHONSTARTUP",
+    "PERL5OPT",
+    "RUBYOPT",
+    // Programs git and ssh shell out to.
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_PROXY_COMMAND",
+    "SSH_ASKPASS",
+    "SUDO_ASKPASS",
+];
+
+/// Prefix reserved for `tsr`'s own settings, so a config cannot reconfigure a
+/// nested `tsr` invocation — including talking it out of these very guards.
+const GUARDED_PREFIX: &str = "TSR_";
+
+/// Whether a config-supplied `name` is one of the guarded variables.
+///
+/// Windows environment names are case-insensitive, so the comparison follows the
+/// platform: `path` and `PATH` are the same variable there, and a guard that
+/// only matched one spelling would not be a guard.
+fn is_guarded(name: &str) -> bool {
+    let eq = |a: &str, b: &str| {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    GUARDED.iter().any(|g| eq(name, g))
+        || if cfg!(windows) {
+            name.to_ascii_uppercase().starts_with(GUARDED_PREFIX)
+        } else {
+            name.starts_with(GUARDED_PREFIX)
+        }
+}
+
+/// Whether a `PATH` value keeps the inherited one (SPEC §12.2).
+///
+/// `PATH` is not banned outright: prepending a directory is ordinary and useful
+/// (`PATH = "./bin:$PATH"`). Replacing it wholesale is not — it decides which
+/// binary every bare command in the run resolves to. So the rule is the same one
+/// the env model already follows everywhere else (SPEC §7.1): sources are
+/// merged, never wiped. A value that still references `$PATH` extends it; one
+/// that does not, replaces it.
+fn path_extends_inherited(value: &str) -> bool {
+    value.contains("$PATH") || value.contains("${PATH}")
+}
+
+/// Reject guarded variables set by the config (SPEC §12.2).
+///
+/// Checked at load time over the tasks that will actually run, so a config that
+/// would hijack a child fails before the first one is spawned. `allow` is the
+/// `--allow-unsafe-env` opt-in: a **CLI** decision, never a config key, because
+/// a guard a `tasks.toml` could switch off would not survive the one case it
+/// exists for.
+pub fn validate_guarded_vars(cfg: &Config, keys: &[String], allow: bool) -> Result<()> {
+    if allow {
+        return Ok(());
+    }
+    let dotenv = load_dotenv(&cfg.root);
+    let mut sources: Vec<(String, &[(String, String)])> = vec![
+        (format!("the root '{DOTENV_FILE}'"), &dotenv),
+        ("workspace [env]".into(), &cfg.env),
+    ];
+
+    let mut task_files = Vec::new();
+    for key in keys {
+        let Some(task) = cfg.task(key) else { continue };
+        sources.push((format!("task '{}' env", task.key), &task.env));
+        let loaded = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files);
+        task_files.push((format!("task '{}' env_file", task.key), loaded));
+    }
+    for (label, pairs) in &task_files {
+        sources.push((label.clone(), pairs));
+    }
+
+    for (source, pairs) in sources {
+        for (name, value) in pairs {
+            if is_guarded(name) {
+                return Err(TsrError::config(format!(
+                    "{source} sets '{name}', which decides what code an unrelated program \
+                     loads — pass `--allow-unsafe-env` if that is intended"
+                )));
+            }
+            if name.eq_ignore_ascii_case("PATH") && !path_extends_inherited(value) {
+                return Err(TsrError::config(format!(
+                    "{source} replaces '{name}' instead of extending it — write \
+                     '{name} = \"…:$PATH\"' so the inherited PATH survives, or pass \
+                     `--allow-unsafe-env`"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_run_vars(cfg: &Config, keys: &[String]) -> Result<()> {
     let process: HashMap<String, String> = std::env::vars().collect();
     let dotenv = load_dotenv(&cfg.root);
@@ -671,6 +790,84 @@ mod tests {
         let path = dir.join("tasks.toml");
         std::fs::write(&path, text).unwrap();
         path
+    }
+
+    // --- guarded variables (SPEC §12.2) ---
+
+    #[test]
+    fn a_config_may_not_set_a_guarded_variable() {
+        for (key, value) in [
+            ("LD_PRELOAD", "./evil.so"),
+            ("NODE_OPTIONS", "--require ./evil.js"),
+            ("GIT_SSH_COMMAND", "./evil.sh"),
+            ("TSR_ANYTHING", "1"),
+        ] {
+            let cfg = Config::load(&write_config(&format!(
+                "[env]\n{key} = \"{value}\"\n\n[tasks.t]\nrun = \"true\"\n"
+            )))
+            .unwrap();
+            let err = validate_guarded_vars(&cfg, &["t".to_string()], false).unwrap_err();
+            assert!(err.to_string().contains(key), "{err}");
+            assert!(err.to_string().contains("--allow-unsafe-env"), "{err}");
+            assert_eq!(err.exit_code(), 64);
+            // …unless the *user* says so on the command line.
+            assert!(validate_guarded_vars(&cfg, &["t".to_string()], true).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_guarded_variable_in_task_env_is_caught_too() {
+        // Every config-controlled source is subject to the guard, not just [env].
+        let cfg = Config::load(&write_config(
+            "[tasks.t]\nrun = \"true\"\nenv = { LD_PRELOAD = \"./x.so\" }\n",
+        ))
+        .unwrap();
+        assert!(validate_guarded_vars(&cfg, &["t".to_string()], false).is_err());
+        // A task that will not run is not checked.
+        assert!(validate_guarded_vars(&cfg, &[], false).is_ok());
+    }
+
+    #[test]
+    fn path_may_be_extended_but_not_replaced() {
+        let extend = Config::load(&write_config(
+            "[env]\nPATH = \"./bin:$PATH\"\n\n[tasks.t]\nrun = \"true\"\n",
+        ))
+        .unwrap();
+        assert!(
+            validate_guarded_vars(&extend, &["t".to_string()], false).is_ok(),
+            "prepending to PATH is ordinary and must keep working"
+        );
+
+        let replace = Config::load(&write_config(
+            "[env]\nPATH = \"/only/mine\"\n\n[tasks.t]\nrun = \"true\"\n",
+        ))
+        .unwrap();
+        let err = validate_guarded_vars(&replace, &["t".to_string()], false).unwrap_err();
+        assert!(err.to_string().contains("PATH"), "{err}");
+        assert!(
+            err.to_string().contains("$PATH"),
+            "should show the fix: {err}"
+        );
+    }
+
+    #[test]
+    fn ordinary_variables_are_untouched() {
+        let cfg = Config::load(&write_config(
+            "[env]\nNODE_ENV = \"production\"\nCI = \"true\"\n\n[tasks.t]\nrun = \"true\"\n",
+        ))
+        .unwrap();
+        assert!(validate_guarded_vars(&cfg, &["t".to_string()], false).is_ok());
+    }
+
+    #[test]
+    fn guard_matching_follows_the_platform() {
+        // Windows env names are case-insensitive, so the guard is too — and on
+        // unix `ld_preload` is simply a different variable.
+        assert!(is_guarded("LD_PRELOAD"));
+        assert_eq!(is_guarded("ld_preload"), cfg!(windows));
+        assert!(!is_guarded("LD_PRELOAD_EXTRA"));
+        assert!(is_guarded("TSR_ALLOW"));
+        assert!(!is_guarded("NODE_ENV"));
     }
 
     #[test]

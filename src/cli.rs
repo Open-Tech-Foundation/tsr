@@ -23,6 +23,7 @@ OPTIONS (after a task name):
     --resume-from <pkg>    skip packages ordered before <pkg>
     --no-bail              keep going after a failure instead of stopping
     --dry-run              print what would run, and run nothing
+    --allow-unsafe-env     let the config set LD_PRELOAD, NODE_OPTIONS, …
     --reporter <fmt>       'human' (default) or 'ndjson' (JSON lines on stderr)
     --reporter-file <path> also write JSON lines to <path> (safe to parse)
 
@@ -89,6 +90,14 @@ pub struct RunOptions {
     pub resume_from: Option<String>,
     /// `--no-bail`: keep running siblings after a task fails (SPEC §5.2).
     pub no_bail: bool,
+    /// `--allow-unsafe-env`: let the config set the guarded environment
+    /// variables — `LD_PRELOAD`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`, … — and
+    /// replace `PATH` outright (SPEC §12.2).
+    ///
+    /// A CLI flag rather than a `[security]` key on purpose: these guards exist
+    /// for the case where the `tasks.toml` itself is what you are wary of, and a
+    /// guard that config could switch off would not survive it.
+    pub allow_unsafe_env: bool,
     /// `--dry-run`: walk the graph and print each command instead of running it
     /// (SPEC §12) — the way to read what an unfamiliar `tasks.toml` would do
     /// before handing it your shell. Commands print **as written**, before
@@ -225,6 +234,10 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
             }
             "--dry-run" => {
                 opts.dry_run = true;
+                i += 1;
+            }
+            "--allow-unsafe-env" => {
+                opts.allow_unsafe_env = true;
                 i += 1;
             }
             "--reporter-file" => {
@@ -647,6 +660,7 @@ mod tests {
                     since: Some("main".into()),
                     resume_from: Some("packages/ui".into()),
                     no_bail: true,
+                    allow_unsafe_env: false,
                     dry_run: false,
                     reporter: Reporter::Ndjson,
                     reporter_file: None,

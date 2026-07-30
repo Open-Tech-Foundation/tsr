@@ -1050,6 +1050,7 @@ mod tests {
         since: None,
         resume_from: None,
         no_bail: false,
+        allow_unsafe_env: false,
         dry_run: false,
         reporter: Reporter::Human,
         reporter_file: None,

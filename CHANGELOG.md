@@ -27,6 +27,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   died mid-`wait()` and left its children to init. A second interrupt exits
   immediately, so a wedged child can never trap the terminal.
 
+- **Guarded environment variables (SPEC §12.2).** A config may no longer set the
+  variables that decide what code some *other* program loads — `LD_PRELOAD`,
+  `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS`, `BASH_ENV`,
+  `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`,
+  `SSH_ASKPASS`, and anything starting `TSR_`. Without this, a `tasks.toml` or a
+  committed `.env` that appears to run `cargo test` can execute arbitrary code
+  inside an unrelated process.
+
+  `PATH` gets its own rule instead of a ban, since extending it is ordinary: it
+  may be set only to a value that still references `$PATH`, so it augments rather
+  than replaces — the same "merged, never wiped" principle the env model already
+  follows (SPEC §7.1).
+
+  ```toml
+  [env]
+  PATH = "./bin:$PATH"   # fine
+  PATH = "/only/mine"    # rejected — it decides what every bare command resolves to
+  ```
+
+  The process environment is untouched: it belongs to whoever ran `tsr`. Only
+  `[env]`, task `env`, `env_file` and the root `.env` are checked, over the tasks
+  that will actually run, before anything is spawned (exit `64`).
+
+  The opt-in is the CLI flag **`--allow-unsafe-env`**, deliberately not a
+  `[security]` key: these guards exist for the case where the `tasks.toml` is
+  what you are wary of, and a guard a config could switch off would not survive
+  that case.
+
 - **Workspace confinement for everything `tsr` does itself (SPEC §12.1).**
   The in-process builtins (`rm`, `cp`, `mv`, `mkdir`, `touch`, `cat`) now refuse
   an operand that resolves outside the workspace, and `dir`, `env_file`,

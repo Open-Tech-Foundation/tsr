@@ -1842,3 +1842,73 @@ fn a_glob_inside_the_workspace_is_still_allowed() {
     assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
     assert!(!ws.join("dist/a.js").exists());
 }
+
+// --- guarded environment variables (SPEC §12.2) ---
+
+#[test]
+fn a_config_cannot_set_a_guarded_variable() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[env]\nLD_PRELOAD = \"./evil.so\"\n\n[tasks.test]\nrun = \"touch ran.txt\"\n",
+    );
+    let out = tsr(&ws, &["test"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("LD_PRELOAD"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("--allow-unsafe-env"),
+        "the error must name the opt-in: {}",
+        stderr(&out)
+    );
+    assert!(!ws.join("ran.txt").exists(), "nothing should have run");
+}
+
+#[test]
+fn a_dotenv_cannot_set_a_guarded_variable() {
+    // `.env` is the source people read least and commit most often.
+    let ws = workspace();
+    write(&ws, ".env", "NODE_OPTIONS=--require ./evil.js\n");
+    write(&ws, "tasks.toml", "[tasks.test]\nrun = \"touch ran.txt\"\n");
+    let out = tsr(&ws, &["test"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("NODE_OPTIONS"), "{}", stderr(&out));
+    assert!(!ws.join("ran.txt").exists());
+}
+
+#[test]
+fn allow_unsafe_env_lifts_the_guard() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[env]\nNODE_OPTIONS = \"--max-old-space-size=4096\"\n\n\
+         [tasks.test]\nrun = \"touch ran.txt\"\n",
+    );
+    let out = tsr(&ws, &["test", "--allow-unsafe-env"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(ws.join("ran.txt").is_file());
+}
+
+#[test]
+fn path_may_be_extended_but_not_replaced() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[env]\nPATH = \"./bin:$PATH\"\n\n[tasks.test]\nrun = \"touch ran.txt\"\n",
+    );
+    assert_eq!(code(&tsr(&ws, &["test"])), 0, "extending PATH must work");
+    assert!(ws.join("ran.txt").is_file());
+
+    let ws2 = workspace();
+    write(
+        &ws2,
+        "tasks.toml",
+        "[env]\nPATH = \"/only/mine\"\n\n[tasks.test]\nrun = \"touch ran.txt\"\n",
+    );
+    let out = tsr(&ws2, &["test"]);
+    assert_eq!(code(&out), 64, "stdout {}", stdout(&out));
+    assert!(stderr(&out).contains("PATH"), "{}", stderr(&out));
+    assert!(!ws2.join("ran.txt").exists());
+}
