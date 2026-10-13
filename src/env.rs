@@ -555,7 +555,10 @@ fn validate_run_vars_from(
 ) -> Result<()> {
     for key in keys {
         let Some(task) = cfg.task(key) else { continue };
-        let Some(run) = &task.run else { continue };
+        // The platform shell expands a `shell = true` string itself.
+        let Some(run) = task.run.as_ref().filter(|_| !task.shell) else {
+            continue;
+        };
         let plan = shell::parse(run)?;
         let vars = plan.referenced_vars();
         if vars.is_empty() {

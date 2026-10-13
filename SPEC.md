@@ -106,6 +106,7 @@ deps = ["ui#build"]
 |-------|------|---------|
 | `desc` | string | One-line description shown by `tsr --list`. Never executed. |
 | `run` | string | Command to spawn directly (form 2). |
+| `shell` | bool | Run `run` through the platform shell instead of the mini-shell (§8.3). Default `false`. |
 | `delegate` | string \| table | Backend to hand off to (form 1). String → `<bin> run <task>`. Table → `{ bin = "...", args = [...] }`. |
 | `dir` | string | Directory to run in. Defaults to workspace root. Mutually exclusive with `packages`. |
 | `packages` | array | Fan out across matching packages (globs or exact names). Mutually exclusive with `dir`. |
@@ -396,11 +397,21 @@ These are rejected at **load time** with a clear, specific error (exit `64`), be
 
 ### 8.3 Escape hatch
 
-When a `run` string needs real shell power, opt in explicitly:
+When a `run` string needs real shell power, opt in explicitly with `shell = true`:
 
 ```toml
 [tasks.pipeline]
-delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
+run = "cat x | grep y > z"
+shell = true
+```
+
+The string is handed to the platform shell — `sh -c '<run> "$@"' sh` on unix, `cmd /d /s /c <run>` on Windows — instead of the mini-shell. None of §8.1–§8.2 applies: the load-time metacharacter check and `$VAR` check are skipped (the shell expands variables itself, from the task's merged env), and builtins (§8.5) are not used. On unix, task `args` and CLI passthrough arrive as `$1…` and reach the command through `"$@"`, so they are never re-parsed as shell syntax. `shell = true` without `run` is a config error. The task is no longer portable; that is the trade it names.
+
+For full control, `delegate` a shell directly:
+
+```toml
+[tasks.pipeline]
+delegate = { bin = "bash", args = ["-c", "set -o pipefail; cat x | grep y > z"] }
 ```
 
 …or point `run` at a script file: `run = "./scripts/build.sh"`.

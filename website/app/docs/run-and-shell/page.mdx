@@ -175,11 +175,30 @@ too, so `find . -exec rm {} +` and `--define:{}` stay legal.
 ## The escape hatch
 
 When a `run` string genuinely needs a real shell, opt in explicitly with
-`delegate`, or point `run` at a script file:
+`shell = true`:
 
 ```toml
 [tasks.pipeline]
-delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
+run = "cat x | grep y > z"
+shell = true
+```
+
+The string goes to `sh -c` (or `cmd /c` on Windows) instead of the mini-shell,
+so pipes, redirects and anything else the shell supports work. The shell expands
+`$VAR` itself, with the task's environment. Task `args` and passthrough reach
+the command as arguments, never as shell syntax.
+
+<Callout type="warning" title="shell = true gives up portability">
+  The string means whatever the platform's shell makes of it, so a task that
+  works under <code>sh</code> may not work under <code>cmd</code>. Builtins don't
+  apply either. Only reach for it when the mini-shell can't express the task.
+</Callout>
+
+For full control, `delegate` a binary, or point `run` at a script file:
+
+```toml
+[tasks.pipeline]
+delegate = { bin = "bash", args = ["-c", "set -o pipefail; cat x | grep y > z"] }
 
 [tasks.build]
 run = "./scripts/build.sh"

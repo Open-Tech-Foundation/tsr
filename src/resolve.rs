@@ -40,8 +40,13 @@ pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
         });
     }
 
-    // Precedence 2: run.
+    // Precedence 2: run — through the platform shell when asked, otherwise
+    // the mini-shell.
     if let Some(run) = &task.run {
+        if task.shell {
+            let (program, args) = platform_shell(run);
+            return Ok(Invocation::Direct { program, args });
+        }
         return Ok(Invocation::Run(run.clone()));
     }
 
@@ -66,6 +71,28 @@ pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
     }
     let (program, args) = eco.native_command(task.task_name());
     Ok(Invocation::Direct { program, args })
+}
+
+/// `(program, args)` running `run` in the platform shell, with room for task
+/// `args` and CLI passthrough to be appended as further arguments.
+///
+/// On unix the string becomes `sh -c '<run> "$@"' sh`: appended arguments
+/// arrive as `$1…`, and `"$@"` hands them to the command intact — no
+/// re-quoting, so passthrough can never be reinterpreted as shell syntax. With
+/// none, `"$@"` expands to nothing. On Windows, `cmd /d /s /c <run>`, with
+/// appended arguments following the string.
+pub fn platform_shell(run: &str) -> (String, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "cmd".into(),
+            vec!["/d".into(), "/s".into(), "/c".into(), run.into()],
+        )
+    } else {
+        (
+            "sh".into(),
+            vec!["-c".into(), format!("{run} \"$@\""), "sh".into()],
+        )
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +236,25 @@ mod tests {
                 args: vec!["run".into(), "serve".into()],
             }
         );
+    }
+
+    #[test]
+    fn shell_true_runs_through_the_platform_shell() {
+        let mut t = task("p");
+        t.run = Some("cat a | grep b".into());
+        t.shell = true;
+        let Invocation::Direct { program, args } =
+            resolve(&t, &scratch(), &std::env::temp_dir()).unwrap()
+        else {
+            panic!("expected a direct spawn of the shell")
+        };
+        if cfg!(windows) {
+            assert_eq!(program, "cmd");
+            assert_eq!(args, ["/d", "/s", "/c", "cat a | grep b"]);
+        } else {
+            assert_eq!(program, "sh");
+            assert_eq!(args, ["-c", "cat a | grep b \"$@\"", "sh"]);
+        }
     }
 
     #[test]

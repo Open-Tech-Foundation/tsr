@@ -69,6 +69,10 @@ pub struct Task {
     /// One-line human description, shown by `tsr --list`. Never executed.
     pub desc: Option<String>,
     pub run: Option<String>,
+    /// `shell = true`: hand `run` to the platform shell (`sh -c` / `cmd /c`)
+    /// instead of the mini-shell (SPEC §8.3). Pipes and redirects work; the
+    /// task stops being portable, and builtins no longer apply.
+    pub shell: bool,
     pub delegate: Option<Delegate>,
     pub dir: Option<String>,
     pub packages: Option<Vec<String>>,
@@ -453,6 +457,11 @@ fn parse_task(key: &str, item: &Item) -> Result<Task> {
                     TsrError::config(format!("task '{key}': 'parallel' must be a boolean"))
                 })?
             }
+            "shell" => {
+                task.shell = value.as_bool().ok_or_else(|| {
+                    TsrError::config(format!("task '{key}': 'shell' must be a boolean"))
+                })?
+            }
             "env" => task.env = parse_env_table(value, &format!("tasks.{key}.env"))?,
             "env_file" => {
                 task.env_files = parse_string_or_array(value, &format!("tasks.{key}.env_file"))?
@@ -636,10 +645,18 @@ fn validate_task(root: &Path, bounds: &crate::confine::Bounds, task: &Task) -> R
         }
     }
 
+    if task.shell && task.run.is_none() {
+        return Err(TsrError::config(format!(
+            "task '{}': 'shell = true' needs a 'run' string to hand to the shell",
+            task.key
+        )));
+    }
+
     // Reject unsupported mini-shell metacharacters at load time (SPEC
     // §8.2/§8.4). `$VAR` resolution is checked later, once the env is
-    // merged (SPEC §7.3).
-    if let Some(run) = &task.run {
+    // merged (SPEC §7.3). A `shell = true` string is the platform shell's to
+    // parse, not ours.
+    if let Some(run) = task.run.as_ref().filter(|_| !task.shell) {
         crate::shell::parse(run)
             .map_err(|e| TsrError::config(format!("task '{}': {}", task.key, strip_prefix(&e))))?;
     }
@@ -744,6 +761,26 @@ mod tests {
 
     fn load(text: &str) -> Result<Config> {
         Config::load(&write_config(text))
+    }
+
+    #[test]
+    fn shell_true_skips_the_mini_shell_checks() {
+        // A pipe is the mini-shell's error, but the platform shell's business.
+        let cfg = load("[tasks.p]\nrun = \"cat a | grep b > out\"\nshell = true\n").unwrap();
+        assert!(cfg.tasks["p"].shell);
+        assert!(load("[tasks.p]\nrun = \"cat a | grep b\"\n").is_err());
+    }
+
+    #[test]
+    fn shell_true_needs_a_run_string_and_a_boolean() {
+        let err = load("[tasks.p]\ndelegate = \"turbo\"\nshell = true\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("needs a 'run' string"), "{err}");
+        let err = load("[tasks.p]\nrun = \"x\"\nshell = \"yes\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'shell' must be a boolean"), "{err}");
     }
 
     #[test]

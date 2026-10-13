@@ -479,6 +479,9 @@ fn describe(task: &Task) -> String {
     }
     if let Some(run) = &task.run {
         parts.push(format!("run: {run}"));
+        if task.shell {
+            parts.push("shell".to_string());
+        }
     }
     if let Some(pkgs) = &task.packages {
         parts.push(format!("packages: {}", pkgs.join(", ")));

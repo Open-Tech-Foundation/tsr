@@ -44,6 +44,7 @@ Each task is a `[tasks.<name>]` table. The full field list:
 |-------|------|---------|
 | `desc` | string | One-line description shown by `tsr --list`. |
 | `run` | string | Command to spawn directly (form 2). |
+| `shell` | bool | Run `run` through `sh -c` / `cmd /c` instead of the mini-shell. Default `false`. |
 | `delegate` | string \| table | Backend to hand off to (form 1). |
 | `dir` | string | Directory to run in. Defaults to the workspace root. **Mutually exclusive with `packages`.** |
 | `packages` | array | Fan out across matching packages (globs or names). **Mutually exclusive with `dir`.** |

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`shell = true`.** Hands a task's `run` string to `sh -c` (`cmd /c` on
+  Windows) instead of the mini-shell, so pipes and redirects work without the
+  full `delegate = { bin = "sh", args = ["-c", …] }` table. The shell expands
+  variables itself, with the task's env. Task `args` and passthrough arrive as
+  arguments through `"$@"`, never as shell syntax. The task gives up
+  portability, and the docs say so.
+
 - **`--dry-run --expand`.** A debugging view of the plan. Each leaf gains a
   `run:` line with the command after `$VAR` and glob expansion, and an `env:`
   line for every variable `tsr` sets or changes for it. It prints values, so it

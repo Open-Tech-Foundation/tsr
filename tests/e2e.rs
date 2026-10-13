@@ -2807,3 +2807,88 @@ fn plain_dry_run_still_hides_values() {
         "{all}"
     );
 }
+
+// --- shell = true ---
+
+#[cfg(unix)]
+#[test]
+fn shell_true_gets_pipes_and_redirects() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.p]\nshell = true\nrun = \"echo hello | tr h j > out.txt && cat out.txt\"\n",
+    );
+    let out = tsr(&ws, &["p"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "jello");
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_true_passes_arguments_through_untouched() {
+    // Passthrough reaches the command as arguments, never as shell syntax.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.p]\nshell = true\nrun = \"printf '[%s]\\\\n'\"\nargs = [\"a b\"]\n",
+    );
+    let out = tsr(&ws, &["p", "--", "$HOME", "x;touch pwned"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let text = stdout(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines, ["[a b]", "[$HOME]", "[x;touch pwned]"], "{text}");
+    assert!(!ws.join("pwned").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_true_sees_the_task_env() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.p]\nshell = true\nrun = \"echo \\\"[$GREETING]\\\"\"\nenv = { GREETING = \"hi\" }\n",
+    );
+    let out = tsr(&ws, &["p"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "[hi]");
+}
+
+#[cfg(windows)]
+#[test]
+fn shell_true_runs_through_cmd_on_windows() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.p]\nshell = true\nrun = \"echo hello | findstr hello\"\n",
+    );
+    let out = tsr(&ws, &["p"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("hello"), "{}", stdout(&out));
+}
+
+#[test]
+fn shell_true_lists_and_previews_as_written() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.p]\nshell = true\nrun = \"cat a | grep b\"\n",
+    );
+    let out = tsr(&ws, &["--list"]);
+    assert!(
+        stdout(&out).contains("run: cat a | grep b  ·  shell"),
+        "{}",
+        stdout(&out)
+    );
+    let out = tsr(&ws, &["p", "--dry-run"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("cmd: cat a | grep b"),
+        "{}",
+        stdout(&out)
+    );
+}
