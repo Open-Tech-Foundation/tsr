@@ -2619,3 +2619,52 @@ fn upstream_tasks_get_the_same_load_time_env_checks() {
         stderr(&out)
     );
 }
+
+// --- --jobs ---
+
+/// Run `n` parallel tasks that each record how many others were running when
+/// it started, and return the most any of them saw.
+#[cfg(unix)]
+fn peak_concurrency(extra: &[&str]) -> usize {
+    let ws = workspace();
+    fs::create_dir_all(ws.join("running")).unwrap();
+    let mut toml = String::from("[tasks.all]\nparallel = true\ndeps = [");
+    for i in 0..6 {
+        toml.push_str(&format!("\"t{i}\", "));
+    }
+    toml.push_str("]\n");
+    for i in 0..6 {
+        toml.push_str(&format!(
+            "[tasks.t{i}]\ndelegate = {{ bin = \"sh\", args = [\"-c\", \
+             \"ls running | wc -l >> seen; touch running/{i}; sleep 0.2; rm running/{i}\"] }}\n"
+        ));
+    }
+    write(&ws, "tasks.toml", &toml);
+    let mut args = vec!["all"];
+    args.extend_from_slice(extra);
+    let out = tsr(&ws, &args);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    fs::read_to_string(ws.join("seen"))
+        .unwrap()
+        .lines()
+        .map(|l| l.trim().parse::<usize>().unwrap())
+        .max()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn jobs_caps_how_many_commands_run_at_once() {
+    // A task sees the *others* running, so a cap of N shows up as N - 1.
+    assert_eq!(peak_concurrency(&["--jobs", "1"]), 0);
+    assert!(peak_concurrency(&["-j", "2"]) <= 1);
+}
+
+#[test]
+fn jobs_rejects_a_bad_count() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.a]\nrun = \"true\"\n");
+    let out = tsr(&ws, &["a", "--jobs", "0"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(stderr(&out).contains("at least 1"), "{}", stderr(&out));
+}

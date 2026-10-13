@@ -30,6 +30,7 @@ These options may follow a task name. Each value-taking one accepts
 | [`--resume-from <pkg>`](#tsr-task-resume-from-pkg) | — | Skip packages ordered before `<pkg>`. |
 | [`--no-bail`](#tsr-task-no-bail) | off | Run everything; don't stop at the first failure. |
 | [`--dry-run`](#tsr-task-dry-run) | off | Print what would run, and run nothing. |
+| [`-j`, `--jobs <n>`](#tsr-task-jobs-n) | unlimited | Run at most `<n>` commands at once. |
 | [`--allow-unsafe-env`](#tsr-task-allow-unsafe-env) | off | Let the config set guarded env variables. |
 | [`--reporter <fmt>`](#tsr-task-reporter-fmt) | `human` | Terminal format: `human` or `ndjson`. |
 | [`--reporter-file <path>`](#tsr-task-reporter-file-path) | — | Also write the NDJSON stream to a file. |
@@ -162,6 +163,20 @@ issue or a CI log cannot carry what your `.env` holds. The walk is always
 sequential — even for `parallel = true` batches — so the output stays readable,
 and a config that can't be resolved still fails with the same error a real run
 would give.
+
+## `tsr <task> --jobs <n>`
+
+Caps how many commands run at once, across the whole run. Every `deps` batch
+and `packages` fan-out counts against the same limit, including nested ones, so
+`--jobs 4` means four processes at most, however wide the graph is.
+
+```bash
+tsr build -j 4          # a 200-package parallel fan-out, four at a time
+```
+
+`--jobs` never adds parallelism: a task without `parallel = true` still runs its
+batch one at a time. A command still waiting for a slot when the run fails fast
+never starts, and shows as skipped.
 
 ## `tsr <task> --allow-unsafe-env`
 

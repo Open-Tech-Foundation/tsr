@@ -206,6 +206,55 @@ struct Ctx<'a> {
     /// (SPEC §12.1). Resolved once: it canonicalises the root, which is a
     /// syscall no leaf should repeat.
     bounds: crate::confine::Bounds,
+    /// `--jobs N`: the free command slots. `None` when unlimited.
+    slots: Option<Slots>,
+}
+
+/// A counting semaphore over running commands (`--jobs N`).
+///
+/// Only a **leaf** takes a slot, and only while its command runs. A task that
+/// is waiting on its deps, or on a fan-out, holds none — so a slot is never
+/// held by something that is itself waiting for a slot, and nesting cannot
+/// deadlock however deep the graph goes.
+struct Slots {
+    free: Mutex<usize>,
+    freed: Condvar,
+}
+
+/// A held slot, returned on drop.
+struct SlotGuard<'s>(&'s Slots);
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.free.lock().unwrap() += 1;
+        self.0.freed.notify_one();
+    }
+}
+
+impl Slots {
+    fn new(n: usize) -> Slots {
+        Slots {
+            free: Mutex::new(n),
+            freed: Condvar::new(),
+        }
+    }
+
+    /// Wait for a free slot, or `None` once `stop` says the run is over — a
+    /// queued command must not start after a fail-fast or a Ctrl-C.
+    fn acquire(&self, stop: impl Fn() -> bool) -> Option<SlotGuard<'_>> {
+        let mut free = self.free.lock().unwrap();
+        loop {
+            if stop() {
+                return None;
+            }
+            if *free > 0 {
+                *free -= 1;
+                return Some(SlotGuard(self));
+            }
+            // Timed, so an abort is noticed even if no slot is ever freed.
+            free = self.freed.wait_timeout(free, POLL_MAX).unwrap().0;
+        }
+    }
 }
 
 impl<'a> Ctx<'a> {
@@ -220,6 +269,7 @@ impl<'a> Ctx<'a> {
             memo: Mutex::new(HashMap::new()),
             isolation: isolation_for(cfg, root),
             bounds: cfg.bounds(),
+            slots: sel.opts.jobs.map(Slots::new),
         }
     }
 
@@ -807,6 +857,18 @@ impl<'a> Ctx<'a> {
             self.record(&job.label, ResultKind::Skipped, None);
             return Status::Ok;
         }
+        // `--jobs`: wait for a slot. Time spent queued is not the command's,
+        // so the clock starts once one is held.
+        let _slot = match &self.slots {
+            Some(slots) => match slots.acquire(|| self.aborted()) {
+                Some(guard) => Some(guard),
+                None => {
+                    self.record(&job.label, ResultKind::Skipped, None);
+                    return Status::Skipped;
+                }
+            },
+            None => None,
+        };
         let start = Instant::now();
         let wait = self.execute_action(&job);
         let dur = start.elapsed();
@@ -1136,6 +1198,50 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
 }
 
 #[cfg(test)]
+mod slots_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn never_more_than_n_held_at_once() {
+        let slots = Arc::new(Slots::new(2));
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let (slots, running, peak) = (&slots, &running, &peak);
+                scope.spawn(move || {
+                    let _g = slots.acquire(|| false).unwrap();
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(20));
+                    running.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        });
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert_eq!(*slots.free.lock().unwrap(), 2, "every slot came back");
+    }
+
+    #[test]
+    fn a_waiter_gives_up_when_the_run_stops() {
+        let slots = Slots::new(1);
+        let _held = slots.acquire(|| false).unwrap();
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| slots.acquire(|| stop.load(Ordering::SeqCst)).is_none());
+            std::thread::sleep(Duration::from_millis(30));
+            stop.store(true, Ordering::SeqCst);
+            assert!(
+                waiter.join().unwrap(),
+                "a stopped run must not hand out a slot"
+            );
+        });
+    }
+}
+
+#[cfg(test)]
 mod millis_tests {
     use super::*;
 
@@ -1171,6 +1277,7 @@ mod tests {
         no_bail: false,
         allow_unsafe_env: false,
         dry_run: false,
+        jobs: None,
         reporter: Reporter::Human,
         reporter_file: None,
     };

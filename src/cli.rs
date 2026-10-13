@@ -24,6 +24,7 @@ OPTIONS (after a task name):
     --resume-from <pkg>    skip packages ordered before <pkg>
     --no-bail              keep going after a failure instead of stopping
     --dry-run              print what would run, and run nothing
+    -j, --jobs <n>         run at most <n> commands at once
     --allow-unsafe-env     let the config set LD_PRELOAD, NODE_OPTIONS, …
     --reporter <fmt>       'human' (default) or 'ndjson' (JSON lines on stderr)
     --reporter-file <path> also write JSON lines to <path> (safe to parse)
@@ -104,6 +105,10 @@ pub struct RunOptions {
     /// before handing it your shell. Commands print **as written**, before
     /// `$VAR` expansion, so nothing a `.env` holds can reach the output.
     pub dry_run: bool,
+    /// `--jobs N` / `-j N`: at most `N` commands running at once across the
+    /// whole run, nested fan-outs included. `None` is unlimited — `parallel`
+    /// alone decides, as before.
+    pub jobs: Option<usize>,
     /// `--reporter <fmt>`.
     pub reporter: Reporter,
     /// `--reporter-file <path>`: an independent NDJSON sink (SPEC §6.2).
@@ -246,6 +251,23 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
             "--allow-unsafe-env" => {
                 opts.allow_unsafe_env = true;
                 i += 1;
+            }
+            "--jobs" | "-j" => {
+                let value = value_of(
+                    rest,
+                    &mut i,
+                    arg,
+                    name,
+                    "a number of jobs (e.g. `--jobs 4`)",
+                )?;
+                opts.jobs = match value.parse::<usize>() {
+                    Ok(n) if n > 0 => Some(n),
+                    _ => {
+                        return Err(TsrError::runtime(format!(
+                            "'{name}' needs a whole number of at least 1, got '{value}'"
+                        )));
+                    }
+                };
             }
             "--reporter-file" => {
                 opts.reporter_file = Some(
@@ -483,6 +505,24 @@ mod tests {
                 opts: RunOptions::default(),
             }
         );
+    }
+
+    #[test]
+    fn parses_jobs() {
+        for args in [
+            &["b", "--jobs", "4"][..],
+            &["b", "-j", "4"],
+            &["b", "--jobs=4"],
+        ] {
+            let Cli::Run { opts, .. } = parse_ok(args) else {
+                panic!("expected a run")
+            };
+            assert_eq!(opts.jobs, Some(4), "{args:?}");
+        }
+        for bad in ["0", "-1", "x", ""] {
+            assert_eq!(parse_err(&["b", "--jobs", bad]).exit_code(), 64, "{bad}");
+        }
+        assert_eq!(parse_err(&["b", "--jobs"]).exit_code(), 64);
     }
 
     #[test]
@@ -747,6 +787,7 @@ mod tests {
                     no_bail: true,
                     allow_unsafe_env: false,
                     dry_run: false,
+                    jobs: None,
                     reporter: Reporter::Ndjson,
                     reporter_file: None,
                 },

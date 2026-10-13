@@ -174,6 +174,8 @@ Execution is **sequential by default**. Concurrency is opt-in via `parallel = tr
 
 There are no exceptions: nothing runs concurrently unless a task explicitly sets `parallel = true`. This keeps default behaviour predictable and race-free.
 
+**`--jobs N`** (`-j N`) caps concurrency for the whole run: at most `N` commands execute at once, counting every leaf — `deps`, `packages` fan-outs, nested ones — together. It never *adds* parallelism: a batch without `parallel = true` stays sequential. Only a running command holds a slot; a task waiting on its deps holds none, so nesting cannot deadlock. A command still queued when the run fails fast (or is interrupted) never starts, and is reported as skipped. Time spent queued is not counted in its duration.
+
 ### 5.2 Failure handling (fail-fast)
 
 On any failure within a task's batch, `tsr` **fails fast**: it stops launching new work and kills still-running siblings, then prints a summary and exits.
@@ -250,6 +252,7 @@ args after `--`" error.
 | `--resume-from <pkg>` | Skip every package ordered before `pkg` (§9.4). |
 | `--no-bail` | Run every batch to completion instead of stopping at the first failure (§5.2). |
 | `--dry-run` | Print the plan and run nothing (§12.5). |
+| `-j`, `--jobs <n>` | Run at most `n` commands at once across the whole run (§5.1). |
 | `--allow-unsafe-env` | Let the config set the guarded environment variables (§12.2). |
 | `--reporter <fmt>` | Terminal format: `human` (default) or `ndjson` (§6.2). |
 | `--reporter-file <path>` | Also write the NDJSON stream to `path` (§6.2). |

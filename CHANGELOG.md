@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--jobs N` / `-j N`.** Caps how many commands run at once across the whole
+  run, nested fan-outs included, so a wide `parallel = true` fan-out can't use
+  up CI memory. The default stays unlimited. A command still queued when the
+  run fails fast never starts.
+
 - **Deno and Make detection.** A `deno.json`/`deno.jsonc` project now runs
   `deno task <task>`. It is checked before `package.json`, since `deno task`
   also reads `package.json` scripts. A directory with only a `Makefile` runs
