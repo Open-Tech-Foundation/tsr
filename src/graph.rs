@@ -22,7 +22,10 @@ fn plain_deps(task: &Task) -> impl Iterator<Item = &String> {
 /// defined task, and the graph must be acyclic.
 pub fn validate(cfg: &Config, root: &str) -> Result<()> {
     if cfg.task(root).is_none() {
-        return Err(TsrError::runtime(format!("unknown task '{root}'")));
+        return Err(TsrError::runtime(format!(
+            "unknown task '{root}'{}",
+            did_you_mean(cfg, root)
+        )));
     }
     let mut on_stack: Vec<String> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
@@ -66,9 +69,12 @@ fn dfs(
         return Ok(());
     }
 
-    let task = cfg
-        .task(key)
-        .ok_or_else(|| TsrError::config(format!("task depends on unknown task '{key}'")))?;
+    let task = cfg.task(key).ok_or_else(|| {
+        TsrError::config(format!(
+            "task depends on unknown task '{key}'{}",
+            did_you_mean(cfg, key)
+        ))
+    })?;
 
     on_stack.push(key.to_string());
     for dep in plain_deps(task) {
@@ -77,6 +83,58 @@ fn dfs(
     on_stack.pop();
     visited.insert(key.to_string());
     Ok(())
+}
+
+/// A `" — did you mean 'x'?"` suffix naming the defined task closest to `key`,
+/// or an empty string when nothing is close enough to be a plausible typo.
+///
+/// Distance is optimal-string-alignment (Levenshtein plus adjacent
+/// transpositions, so `biuld` is one edit from `build`), compared
+/// case-insensitively. The bound scales with the name — a third of its length,
+/// at least one — so a short name only matches a near-identical one rather than
+/// every other three-letter task. Ties go to the first key in config order
+/// (`tasks` is a `BTreeMap`, so that is alphabetical).
+fn did_you_mean(cfg: &Config, key: &str) -> String {
+    let want: Vec<char> = key.to_lowercase().chars().collect();
+    let bound = want.len().div_ceil(3).max(1);
+    let best = cfg
+        .tasks
+        .keys()
+        .map(|k| {
+            (
+                osa_distance(&want, &k.to_lowercase().chars().collect::<Vec<_>>()),
+                k,
+            )
+        })
+        .filter(|(d, _)| *d <= bound)
+        .min_by_key(|(d, _)| *d);
+    match best {
+        Some((_, k)) => format!(" — did you mean '{k}'?"),
+        None => String::new(),
+    }
+}
+
+/// Optimal string alignment distance between two char sequences.
+fn osa_distance(a: &[char], b: &[char]) -> usize {
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
 }
 
 #[cfg(test)]
@@ -136,5 +194,48 @@ mod tests {
     fn unknown_dep_is_error() {
         let c = cfg("[tasks.a]\ndeps=[\"ghost\"]\n");
         assert!(validate(&c, "a").unwrap_err().to_string().contains("ghost"));
+    }
+
+    #[test]
+    fn unknown_task_suggests_the_closest_name() {
+        let c = cfg("[tasks.ok]\nrun=\"x\"\n[tasks.build]\nrun=\"x\"\n");
+        let msg = |k: &str| validate(&c, k).unwrap_err().to_string();
+        assert!(msg("okk").contains("did you mean 'ok'?"), "{}", msg("okk"));
+        // A transposition is one edit, and case is ignored.
+        assert!(msg("biuld").contains("did you mean 'build'?"));
+        assert!(msg("Build").contains("did you mean 'build'?"));
+    }
+
+    #[test]
+    fn unknown_task_without_a_close_name_has_no_suggestion() {
+        let c = cfg("[tasks.ok]\nrun=\"x\"\n[tasks.build]\nrun=\"x\"\n");
+        let msg = validate(&c, "deploy").unwrap_err().to_string();
+        assert!(msg.contains("unknown task 'deploy'"), "{msg}");
+        assert!(!msg.contains("did you mean"), "{msg}");
+        // Short names need a near-exact match, not any two-letter task.
+        let msg = validate(&c, "xy").unwrap_err().to_string();
+        assert!(!msg.contains("did you mean"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_dep_suggests_the_closest_name() {
+        let c = cfg("[tasks.ci]\ndeps=[\"lnit\"]\n[tasks.lint]\nrun=\"x\"\n");
+        let msg = validate(&c, "ci").unwrap_err().to_string();
+        assert!(msg.contains("did you mean 'lint'?"), "{msg}");
+    }
+
+    #[test]
+    fn osa_distance_counts_edits() {
+        let d = |a: &str, b: &str| {
+            osa_distance(
+                &a.chars().collect::<Vec<_>>(),
+                &b.chars().collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(d("", ""), 0);
+        assert_eq!(d("ok", "okk"), 1);
+        assert_eq!(d("build", "biuld"), 1);
+        assert_eq!(d("kitten", "sitting"), 3);
+        assert_eq!(d("", "abc"), 3);
     }
 }

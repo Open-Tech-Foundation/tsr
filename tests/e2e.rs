@@ -225,6 +225,19 @@ fn unknown_task_is_runner_error_64() {
 }
 
 #[test]
+fn unknown_task_suggests_a_close_match() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.ok]\nrun = \"true\"\n");
+    let out = tsr(&ws, &["okk"]);
+    assert_eq!(code(&out), 64);
+    assert!(
+        stderr(&out).contains("unknown task 'okk' — did you mean 'ok'?"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn dir_and_packages_together_is_config_error_64() {
     let ws = workspace();
     write(

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **"Did you mean…?" for unknown tasks.** `tsr okk` with an `ok` task defined
+  now reports `unknown task 'okk' — did you mean 'ok'?`, and so does a `deps`
+  entry naming a task that does not exist. The closest defined name is offered
+  only when it is within a third of the name's length in edits (adjacent
+  transpositions count as one, case is ignored), so an unrelated name gets no
+  suggestion.
+
 ### Fixed
 
 - Auto-detect (Go): `tsr run` mapped to a bare `go run`, which lists no files
