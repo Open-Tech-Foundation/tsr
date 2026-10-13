@@ -169,10 +169,18 @@ fn run_task(
         None => None,
     };
 
+    // `--filter` narrows every fan-out to the named packages (SPEC §9.5).
+    let filter = if opts.filter.is_empty() {
+        None
+    } else {
+        Some(workspace::filter_set(&cfg, &opts.filter)?)
+    };
+
     // exec::run owns its own failure reporting and returns the exit code.
     let selection = exec::Selection {
         affected: affected.as_ref(),
         skip: skip.as_ref(),
+        filter: filter.as_ref(),
         opts: &opts,
         events: events.as_ref(),
     };

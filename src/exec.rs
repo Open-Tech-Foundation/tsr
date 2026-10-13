@@ -82,6 +82,8 @@ pub struct Selection<'a> {
     pub affected: Option<&'a HashSet<String>>,
     /// `--resume-from`: packages to treat as already done (SPEC §9.4).
     pub skip: Option<&'a HashSet<String>>,
+    /// `--filter`: the only packages a fan-out may run in (SPEC §9.5).
+    pub filter: Option<&'a HashSet<String>>,
     pub opts: &'a RunOptions,
     /// `--reporter-file`: an opened NDJSON sink. Owned by the caller so that a
     /// failure to create it is reported before any task runs, rather than after
@@ -98,6 +100,7 @@ impl<'a> Selection<'a> {
         Selection {
             affected: None,
             skip: None,
+            filter: None,
             opts,
             events: None,
         }
@@ -672,11 +675,17 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// Whether a package survives the `--since` / `--resume-from` filters.
+    /// Whether a package survives the `--since` / `--resume-from` / `--filter`
+    /// filters.
     /// Applies only to the packages a fan-out *selects*; upstream `^task` work
     /// is reached through [`Self::run_pkg_node`] and is deliberately not
     /// filtered here, since it is needed regardless.
     fn selected(&self, rel: &str) -> bool {
+        if let Some(filter) = self.sel.filter
+            && !filter.contains(rel)
+        {
+            return false;
+        }
         if let Some(affected) = self.sel.affected
             && !affected.contains(rel)
         {
@@ -1271,12 +1280,13 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Default run options, borrowed by every `Selection` the tests build.
-    const OPTS: RunOptions = RunOptions {
+    static OPTS: RunOptions = RunOptions {
         since: None,
         resume_from: None,
         no_bail: false,
         allow_unsafe_env: false,
         dry_run: false,
+        filter: Vec::new(),
         jobs: None,
         reporter: Reporter::Human,
         reporter_file: None,

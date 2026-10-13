@@ -84,6 +84,28 @@ pub fn match_packages(cfg: &Config, patterns: &[String], task: &str) -> Result<V
     Ok(selected)
 }
 
+/// The packages `--filter` selects (SPEC §9.5), as relative paths: every
+/// workspace package matching any pattern, by the same rules as `packages`.
+/// A pattern matching nothing is an error (exit `64`) — it is a typo, and
+/// silently running nothing would hide it.
+pub fn filter_set(cfg: &Config, patterns: &[String]) -> Result<std::collections::HashSet<String>> {
+    let all = packages(cfg);
+    let mut out = std::collections::HashSet::new();
+    for pattern in patterns {
+        let mut matched_any = false;
+        for pkg in all.iter().filter(|p| pattern_matches(pattern, p)) {
+            matched_any = true;
+            out.insert(pkg.rel.clone());
+        }
+        if !matched_any {
+            return Err(TsrError::runtime(format!(
+                "'--filter': '{pattern}' matched no workspace package"
+            )));
+        }
+    }
+    Ok(out)
+}
+
 fn pattern_matches(pattern: &str, pkg: &Package) -> bool {
     if is_glob(pattern) {
         // Path glob against the relative package path.

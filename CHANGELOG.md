@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--filter <pkg>` / `-F`.** Runs every `packages` fan-out only in the
+  matching packages (path glob, path, or manifest name; repeatable), so
+  `tsr build --filter web` builds one package without a `web#build` task.
+  Upstream `^` work still runs. A pattern that matches nothing exits `64`
+  before anything starts. It composes with `--since` and `--resume-from`.
+
 - **`--jobs N` / `-j N`.** Caps how many commands run at once across the whole
   run, nested fan-outs included, so a wide `parallel = true` fan-out can't use
   up CI memory. The default stays unlimited. A command still queued when the

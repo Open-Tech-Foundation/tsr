@@ -252,6 +252,7 @@ args after `--`" error.
 | `--resume-from <pkg>` | Skip every package ordered before `pkg` (§9.4). |
 | `--no-bail` | Run every batch to completion instead of stopping at the first failure (§5.2). |
 | `--dry-run` | Print the plan and run nothing (§12.5). |
+| `-F`, `--filter <pkg>` | Run `packages` fan-outs only in the matching packages; repeatable (§9.5). |
 | `-j`, `--jobs <n>` | Run at most `n` commands at once across the whole run (§5.1). |
 | `--allow-unsafe-env` | Let the config set the guarded environment variables (§12.2). |
 | `--reporter <fmt>` | Terminal format: `human` (default) or `ndjson` (§6.2). |
@@ -489,6 +490,16 @@ Affected = the packages the changed files live in, **plus every package that tra
 - A cyclic package graph is a runner error: resuming is only meaningful along a real build order.
 
 `--since` and `--resume-from` compose; a package must survive **both** filters to be selected.
+
+### 9.5 Selecting packages (`--filter <pkg>`)
+
+`tsr <task> --filter <pkg>` (`-F`, repeatable) runs every `packages` fan-out in the run **only in the matching packages** — an ad-hoc single-package run without a per-package task in the config. `tsr build --filter web` builds just `web`.
+
+- Each pattern is matched the way `packages` entries are (§9.1): a path glob, a relative path, or a manifest name. Several patterns select their union.
+- A pattern matching no workspace package is a runner error (exit `64`), raised before anything runs.
+- Like `--since`, it narrows only what a fan-out **selects**: `^task` upstream work is still done, since the selected package needs it.
+- It composes with `--since` and `--resume-from`; a package must pass all of them. A fan-out left with nothing selected is a clean no-op.
+- Tasks without `packages` are unaffected.
 ---
 
 ## 10. Exit codes

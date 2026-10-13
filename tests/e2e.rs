@@ -2668,3 +2668,82 @@ fn jobs_rejects_a_bad_count() {
     assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
     assert!(stderr(&out).contains("at least 1"), "{}", stderr(&out));
 }
+
+// --- --filter ---
+
+/// `apps/web` → `packages/ui`, plus an unrelated `apps/admin`; `build` runs
+/// `pwd` in each, upstream first.
+fn filter_workspace(upstream: bool) -> PathBuf {
+    let ws = workspace();
+    write(
+        &ws,
+        "apps/web/package.json",
+        &manifest("web", &["@acme/ui"]),
+    );
+    write(&ws, "apps/admin/package.json", &manifest("admin", &[]));
+    write(&ws, "packages/ui/package.json", &manifest("@acme/ui", &[]));
+    let deps = if upstream {
+        "deps = [\"^build\"]\n"
+    } else {
+        ""
+    };
+    write(
+        &ws,
+        "tasks.toml",
+        &format!(
+            "[workspace]\nmembers = [\"apps/*\", \"packages/*\"]\n\
+             [tasks.build]\npackages = [\"apps/*\", \"packages/*\"]\n{deps}run = \"pwd\"\n"
+        ),
+    );
+    ws
+}
+
+#[test]
+fn filter_narrows_a_fan_out_by_name_path_or_glob() {
+    let ws = filter_workspace(false);
+    let out = tsr(&ws, &["build", "--filter", "web"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(ran(&s, "apps/web"), "{s}");
+    assert!(!ran(&s, "apps/admin") && !ran(&s, "packages/ui"), "{s}");
+
+    // Repeatable; a glob, a path and a manifest name all work.
+    let out = tsr(
+        &ws,
+        &[
+            "build",
+            "-F",
+            "packages/*",
+            "--filter=apps/admin",
+            "--filter",
+            "@acme/ui",
+        ],
+    );
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(ran(&s, "packages/ui") && ran(&s, "apps/admin"), "{s}");
+    assert!(!ran(&s, "apps/web"), "{s}");
+}
+
+#[test]
+fn filter_still_builds_what_the_package_needs_upstream() {
+    let ws = filter_workspace(true);
+    let out = tsr(&ws, &["build", "--filter", "web"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(line_of(&s, "packages/ui") < line_of(&s, "apps/web"), "{s}");
+    assert!(!ran(&s, "apps/admin"), "{s}");
+}
+
+#[test]
+fn filter_matching_no_package_is_an_error() {
+    let ws = filter_workspace(false);
+    let out = tsr(&ws, &["build", "--filter", "nope"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("'--filter': 'nope' matched no workspace package"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).is_empty(), "nothing may run: {}", stdout(&out));
+}

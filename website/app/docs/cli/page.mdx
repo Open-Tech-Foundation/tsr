@@ -30,6 +30,7 @@ These options may follow a task name. Each value-taking one accepts
 | [`--resume-from <pkg>`](#tsr-task-resume-from-pkg) | — | Skip packages ordered before `<pkg>`. |
 | [`--no-bail`](#tsr-task-no-bail) | off | Run everything; don't stop at the first failure. |
 | [`--dry-run`](#tsr-task-dry-run) | off | Print what would run, and run nothing. |
+| [`-F`, `--filter <pkg>`](#tsr-task-filter-pkg) | — | Run package fan-outs only in `<pkg>`. Repeatable. |
 | [`-j`, `--jobs <n>`](#tsr-task-jobs-n) | unlimited | Run at most `<n>` commands at once. |
 | [`--allow-unsafe-env`](#tsr-task-allow-unsafe-env) | off | Let the config set guarded env variables. |
 | [`--reporter <fmt>`](#tsr-task-reporter-fmt) | `human` | Terminal format: `human` or `ndjson`. |
@@ -123,6 +124,21 @@ it. A `<pkg>` matching nothing exits `64`, since a typo would otherwise silently
 skip everything or nothing.
 
 `--since` and `--resume-from` compose: a package must survive **both** filters.
+
+## `tsr <task> --filter <pkg>`
+
+Runs every `packages` fan-out only in the matching packages, so you can run one
+package without defining a task for it.
+
+```sh
+tsr build --filter web                       # manifest name
+tsr test -F apps/admin -F 'packages/*'       # path, glob; repeatable
+```
+
+Patterns match the way `packages` entries do. A package's `^upstream` work still
+runs, because the package needs it. A pattern that matches no package exits `64`
+before anything runs. `--filter` composes with `--since` and `--resume-from`: a
+package has to pass all of them.
 
 ## `tsr <task> --no-bail`
 

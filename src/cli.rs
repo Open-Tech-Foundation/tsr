@@ -24,6 +24,7 @@ OPTIONS (after a task name):
     --resume-from <pkg>    skip packages ordered before <pkg>
     --no-bail              keep going after a failure instead of stopping
     --dry-run              print what would run, and run nothing
+    -F, --filter <pkg>     run package fan-outs only in <pkg> (repeatable)
     -j, --jobs <n>         run at most <n> commands at once
     --allow-unsafe-env     let the config set LD_PRELOAD, NODE_OPTIONS, …
     --reporter <fmt>       'human' (default) or 'ndjson' (JSON lines on stderr)
@@ -105,6 +106,10 @@ pub struct RunOptions {
     /// before handing it your shell. Commands print **as written**, before
     /// `$VAR` expansion, so nothing a `.env` holds can reach the output.
     pub dry_run: bool,
+    /// `--filter <pkg>` (repeatable): run every `packages` fan-out only in the
+    /// matching packages — path glob, path, or manifest name, the same matcher
+    /// `packages` uses (SPEC §9.1). Empty means no filter.
+    pub filter: Vec<String>,
     /// `--jobs N` / `-j N`: at most `N` commands running at once across the
     /// whole run, nested fan-outs included. `None` is unlimited — `parallel`
     /// alone decides, as before.
@@ -251,6 +256,15 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
             "--allow-unsafe-env" => {
                 opts.allow_unsafe_env = true;
                 i += 1;
+            }
+            "--filter" | "-F" => {
+                opts.filter.push(value_of(
+                    rest,
+                    &mut i,
+                    arg,
+                    name,
+                    "a package (e.g. `--filter apps/web` or `--filter 'packages/*'`)",
+                )?);
             }
             "--jobs" | "-j" => {
                 let value = value_of(
@@ -505,6 +519,22 @@ mod tests {
                 opts: RunOptions::default(),
             }
         );
+    }
+
+    #[test]
+    fn parses_repeated_filters() {
+        let Cli::Run { opts, .. } = parse_ok(&[
+            "build",
+            "--filter",
+            "web",
+            "-F",
+            "packages/*",
+            "--filter=@acme/ui",
+        ]) else {
+            panic!("expected a run")
+        };
+        assert_eq!(opts.filter, ["web", "packages/*", "@acme/ui"]);
+        assert_eq!(parse_err(&["build", "--filter"]).exit_code(), 64);
     }
 
     #[test]
@@ -787,6 +817,7 @@ mod tests {
                     no_bail: true,
                     allow_unsafe_env: false,
                     dry_run: false,
+                    filter: vec![],
                     jobs: None,
                     reporter: Reporter::Ndjson,
                     reporter_file: None,
