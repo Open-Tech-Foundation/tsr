@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shell completion.** `tsr --completions bash|zsh|fish` prints a script that
   completes flags, option values and task names. Names are fetched at
   completion time from a new `tsr --list-names`, so they follow whichever
-  `tasks.toml` (or configless package) you're in.
+  `tasks.toml` (or configless package) you're in. Load the bash script with
+  `eval "$(tsr --completions bash)"`. The `source <(…)` form loads nothing on
+  the bash 3.2 that macOS ships.
 
 - **Per-task `timeout` and `retries`.** `timeout = "5m"` (or `"1h30m"`,
   `"500ms"`, a number of seconds) kills an attempt's whole process tree when it

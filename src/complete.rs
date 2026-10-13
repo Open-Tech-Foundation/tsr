@@ -43,7 +43,7 @@ const BUILTINS: &str = "--list --config --init --completions --help --version";
 const RUN_OPTIONS: &str = "--since --resume-from --filter --jobs --no-bail --dry-run --expand \
                            --allow-unsafe-env --reporter --reporter-file";
 
-const BASH: &str = r#"# tsr completion for bash — load with:  source <(tsr --completions bash)
+const BASH: &str = r#"# tsr completion for bash — load with:  eval "$(tsr --completions bash)"
 _tsr() {
     local cur prev
     # Task names may contain ':', which bash splits words on by default.

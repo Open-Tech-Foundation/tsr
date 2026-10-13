@@ -252,7 +252,7 @@ so a task named `list` or `init` is never shadowed — `tsr list` runs the user'
 `list` task. This keeps the entire bare-word namespace available for
 tasks/scripts, which is the point of the tool.
 
-**Shell completion.** `tsr --completions bash|zsh|fish` prints a completion script (`source <(tsr --completions bash)`, `source <(tsr --completions zsh)`, `tsr --completions fish | source`). It completes the builtin flags, the options below and their values, and task names — which it fetches at completion time from `tsr --list-names`, a plain one-name-per-line listing of the tasks in `tasks.toml` (broken ones included), or configless, of the package's scripts. `--list-names` exists for the scripts and is not in the usage text.
+**Shell completion.** `tsr --completions bash|zsh|fish` prints a completion script (`eval "$(tsr --completions bash)"` — not `source <(…)`, which the bash 3.2 macOS ships silently ignores — `source <(tsr --completions zsh)`, `tsr --completions fish | source`). It completes the builtin flags, the options below and their values, and task names — which it fetches at completion time from `tsr --list-names`, a plain one-name-per-line listing of the tasks in `tasks.toml` (broken ones included), or configless, of the package's scripts. `--list-names` exists for the scripts and is not in the usage text.
 
 The options below may follow a task name. Every one is a flag, never a bare word,
 so none shadows anything; anything else after a task name is still the "forward

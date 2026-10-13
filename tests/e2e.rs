@@ -3097,8 +3097,12 @@ fn bash_completion_offers_task_names_and_options() {
     );
     let bin_dir = Path::new(BIN).parent().unwrap();
     let complete = |words: &str, cword: usize| {
+        // `eval`, not `source <(…)`: the bash 3.2 macOS ships sources
+        // nothing from a process substitution, silently.
         let script = format!(
-            "source <(tsr --completions bash); COMP_WORDS=({words}); COMP_CWORD={cword}; \
+            "eval \"$(tsr --completions bash)\" || exit 90; \
+             declare -F _tsr >/dev/null || exit 91; \
+             COMP_WORDS=({words}); COMP_CWORD={cword}; \
              _tsr; printf '%s\\n' \"${{COMPREPLY[@]}}\""
         );
         let path = std::env::var("PATH").unwrap_or_default();
@@ -3108,6 +3112,12 @@ fn bash_completion_offers_task_names_and_options() {
             .env("PATH", format!("{}:{path}", bin_dir.display()))
             .output()
             .unwrap();
+        assert!(
+            out.status.success(),
+            "the completion script did not load (exit {:?}): {}",
+            out.status.code(),
+            stderr(&out)
+        );
         let mut got: Vec<String> = stdout(&out).lines().map(str::to_string).collect();
         got.sort();
         got

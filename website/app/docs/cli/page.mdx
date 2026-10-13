@@ -391,8 +391,8 @@ option values, and your task names, which it reads fresh from the current
 directory each time, so new tasks show up without regenerating anything.
 
 ```sh
-# bash — add to ~/.bashrc
-source <(tsr --completions bash)
+# bash — add to ~/.bashrc (eval works on the bash 3.2 macOS ships)
+eval "$(tsr --completions bash)"
 
 # zsh — add to ~/.zshrc (after compinit)
 source <(tsr --completions zsh)
