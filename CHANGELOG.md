@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `tsr --config`: saving an edit to a task rebuilt its table from the form, so
+  any key the form doesn't manage was silently deleted. That included a
+  hand-written annotation, or a key from a newer `tsr`. Those keys now carry
+  over untouched, renames included, as SPEC §1.5 promises.
+
 - A missing `delegate` binary (or any program that can't be spawned) was shown
   as both a task failure and a runner error: a `✗ build failed` table with
   `exit 64` next to `cannot run 'turbo'`. It now reads as a runner error:

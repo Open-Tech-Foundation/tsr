@@ -78,5 +78,6 @@ and `:`.
 ## Unknown keys round-trip
 
 `tsr` parses `tasks.toml` with a format-preserving parser. Comments and keys it
-doesn't recognize survive untouched when the file is rewritten by tooling — so
-the config stays safe to edit by hand.
+doesn't recognize survive untouched when the file is rewritten by tooling,
+including when you edit that task in `tsr --config`. So the config stays safe to
+edit by hand.

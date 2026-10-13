@@ -1062,6 +1062,12 @@ impl FormState {
     }
 }
 
+/// The task keys the form reads and writes. Anything else in a task table is
+/// preserved as-is when the form is saved.
+const FORM_KEYS: &[&str] = &[
+    "desc", "run", "delegate", "dir", "packages", "deps", "args", "parallel", "env", "env_file",
+];
+
 /// Apply a form to `doc`, returning the task name. Validates field consistency;
 /// full config validation is the caller's job.
 fn apply_form(doc: &mut DocumentMut, form: &FormState) -> std::result::Result<String, String> {
@@ -1069,11 +1075,22 @@ fn apply_form(doc: &mut DocumentMut, form: &FormState) -> std::result::Result<St
 
     // The table this one replaces: the edited key, or the old key on a rename.
     let prior_key = form.original.clone().unwrap_or_else(|| name.clone());
-    let prior = doc
+    let prior_table = doc
         .get("tasks")
         .and_then(|t| t.get(&prior_key))
-        .and_then(Item::as_table)
-        .map(|t| (t.decor().clone(), t.position()));
+        .and_then(Item::as_table);
+    let prior = prior_table.map(|t| (t.decor().clone(), t.position()));
+
+    // Keys the form does not manage — a newer field, a tool's own annotation —
+    // carry over untouched (SPEC §1.5). `build_task_table` starts from a bare
+    // table, so without this an edit would silently delete them.
+    if let Some(old) = prior_table {
+        for (key, item) in old.iter() {
+            if !FORM_KEYS.contains(&key) {
+                table.insert(key, item.clone());
+            }
+        }
+    }
 
     match prior {
         // Editing in place: keep where the task sits in the file and the comment
@@ -1588,6 +1605,25 @@ mod tests {
         cleared.set_text(F_DESC, "");
         apply_form(&mut doc, &cleared).unwrap();
         assert!(!doc.to_string().contains("desc"), "{doc}");
+    }
+
+    #[test]
+    fn editing_a_task_keeps_keys_the_form_does_not_know() {
+        let src = "[tasks.b]\nrun = \"b\"\nowner = \"team-web\"\ntimeout = 30\n";
+        let mut doc = src.parse::<DocumentMut>().unwrap();
+        let mut f = FormState::from_doc(&doc, "b");
+        f.set_text(F_RUN, "b-edited");
+        apply_form(&mut doc, &f).unwrap();
+        let s = doc.to_string();
+        assert!(s.contains("run = \"b-edited\""), "{s}");
+        assert!(s.contains("owner = \"team-web\""), "{s}");
+        assert!(s.contains("timeout = 30"), "{s}");
+        // A rename carries them to the new key too.
+        let mut f = FormState::from_doc(&doc, "b");
+        f.set_text(F_NAME, "renamed");
+        apply_form(&mut doc, &f).unwrap();
+        let s = doc.to_string();
+        assert!(s.contains("[tasks.renamed]") && s.contains("owner"), "{s}");
     }
 
     #[test]
