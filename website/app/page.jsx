@@ -99,6 +99,67 @@ const COMPARE_ROWS = [
   },
 ];
 
+// Every ecosystem a bare task auto-detects (SPEC §9), grouped for scanning.
+// `cmd` is what `tsr <task>` runs there. Keep in step with the detection table
+// in docs/task-forms and src/detect.rs.
+const ECOSYSTEM_GROUPS = [
+  {
+    label: "JavaScript & TypeScript",
+    rows: [
+      { name: "npm", marker: "package.json", cmd: "npm run <task>" },
+      { name: "pnpm", marker: "pnpm-lock.yaml", cmd: "pnpm run <task>" },
+      { name: "Yarn", marker: "yarn.lock", cmd: "yarn run <task>" },
+      { name: "Bun", marker: "bun.lock", cmd: "bun run <task>" },
+      { name: "Deno", marker: "deno.json", cmd: "deno task <task>" },
+    ],
+  },
+  {
+    label: "Systems",
+    rows: [
+      { name: "Rust", marker: "Cargo.toml", cmd: "cargo <task>" },
+      { name: "Go", marker: "go.mod", cmd: "go <task>" },
+      { name: "Zig", marker: "build.zig", cmd: "zig build <task>" },
+      { name: "Swift", marker: "Package.swift", cmd: "swift <task>" },
+      { name: "Make", marker: "Makefile", cmd: "make <task>" },
+    ],
+  },
+  {
+    label: "JVM",
+    rows: [
+      { name: "Gradle", marker: "build.gradle(.kts)", cmd: "./gradlew <task>" },
+      { name: "Maven", marker: "pom.xml", cmd: "./mvnw <task>" },
+      { name: "Scala", marker: "build.sbt", cmd: "sbt <task>" },
+    ],
+  },
+  {
+    label: "Scripting & web",
+    rows: [
+      { name: "Python", marker: "pyproject.toml", cmd: "uv run <script>" },
+      { name: "Ruby", marker: "Rakefile / Gemfile", cmd: "bundle exec rake <task>" },
+      { name: "PHP", marker: "composer.json", cmd: "composer run <task>" },
+      { name: "Elixir", marker: "mix.exs", cmd: "mix <task>" },
+    ],
+  },
+  {
+    label: ".NET, mobile & Haskell",
+    rows: [
+      { name: ".NET", marker: "*.sln / *.csproj", cmd: "dotnet <task>" },
+      { name: "Dart", marker: "pubspec.yaml", cmd: "dart <task>" },
+      { name: "Flutter", marker: "pubspec.yaml", cmd: "flutter <task>" },
+      { name: "Stack", marker: "stack.yaml", cmd: "stack <task>" },
+      { name: "Cabal", marker: "*.cabal", cmd: "cabal <task>" },
+    ],
+  },
+  {
+    label: "Infrastructure",
+    rows: [
+      { name: "Terraform", marker: "*.tf", cmd: "terraform <task>" },
+      { name: "Compose", marker: "compose.yaml", cmd: "docker compose <task>" },
+    ],
+  },
+];
+const ECOSYSTEM_COUNT = ECOSYSTEM_GROUPS.reduce((n, g) => n + g.rows.length, 0);
+
 const COMPARE_MARK = {
   y: { sym: "✅", cls: "cmp-y", label: "yes" },
   p: { sym: "🟡", cls: "cmp-p", label: "partial" },
@@ -254,6 +315,44 @@ export default function Home() {
                 reimplemented. tsr stays a lightweight command runner.
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* --- ecosystems --- */}
+      <section class="section" id="ecosystems">
+        <div class="container">
+          <h2>Works with your stack</h2>
+          <p class="sub">
+            {ECOSYSTEM_COUNT} ecosystems, detected from the files already in your repo. A bare{" "}
+            <code>tsr &lt;task&gt;</code> runs the native tool — no <code>tasks.toml</code>{" "}
+            required.
+          </p>
+          <div class="eco-grid">
+            {ECOSYSTEM_GROUPS.map((g) => (
+              <div class="eco-card">
+                <h3>{g.label}</h3>
+                <ul>
+                  {g.rows.map((r) => (
+                    <li>
+                      <span class="eco-name">{r.name}</span>
+                      <code class="eco-marker">{r.marker}</code>
+                      <code class="eco-cmd">{r.cmd}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+          <div class="cmp-legend-row">
+            <p class="eco-note">
+              Also recognised: CMake, Meson, Bazel, Dockerfile, R, Julia and Perl. They have
+              no task-name convention, so tsr names the tool and suggests a{" "}
+              <code>run</code> line for your <code>tasks.toml</code>.
+            </p>
+            <Link class="cmp-bench-link" href="/docs/task-forms#form-3-auto-detect">
+              Full detection order <ArrowRightIcon />
+            </Link>
           </div>
         </div>
       </section>

@@ -459,6 +459,101 @@ h1.title .grad {
   font-size: 14.5px;
 }
 
+/* --- ecosystem grid --- */
+.eco-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+@media (max-width: 980px) {
+  .eco-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .eco-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.eco-card {
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  border-radius: var(--radius);
+  padding: 18px 20px 14px;
+  transition: border-color 0.15s ease;
+}
+.eco-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.eco-card h3 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.eco-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Name and marker on the first line, the command under them. */
+.eco-card li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.eco-card li:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+.eco-name {
+  font-weight: 600;
+  font-size: 14.5px;
+  color: var(--text);
+}
+/* Scoped under .eco-card to outrank the site-wide `.section code` chip style:
+   here the markers and commands read as plain terminal text, not as boxes. */
+.eco-card .eco-marker,
+.eco-card .eco-cmd {
+  font-family: var(--mono);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.eco-card .eco-marker {
+  justify-self: end;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.eco-card .eco-cmd {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  color: var(--accent-soft);
+}
+.eco-card .eco-cmd::before {
+  content: "$ ";
+  color: var(--text-faint);
+}
+.eco-note {
+  margin: 0;
+  max-width: 70ch;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
 /* --- code sample block --- */
 .codeblock {
   background: var(--bg-elev);

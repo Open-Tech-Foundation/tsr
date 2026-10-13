@@ -133,6 +133,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed: the npm-migration guide said globs are rejected; they are
     supported.
   - Fixed: four in-page links pointed at heading anchors that don't exist.
+  - A new "Works with your stack" section on the landing page lists all 24
+    auto-detected ecosystems, grouped (JavaScript, systems, JVM, scripting,
+    .NET/mobile/Haskell, infrastructure), each with its marker file and the
+    command `tsr <task>` runs. It also names the recognised-but-unmapped build
+    systems and links to the full detection order.
   - The hero's "A command runner, not a build system" chip now uses the
     theme's green (tinted background, hairline border, pulsing status dot)
     instead of hard-coded orange on black, so it also fits the light theme.
