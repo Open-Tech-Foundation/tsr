@@ -753,19 +753,23 @@ fn reject_unsupported(c: char) -> Result<()> {
         '|' => Err(unsupported_msg(
             '|',
             "pipe",
-            "use `delegate` or a script file",
+            "set `shell = true` on the task, or use a script file",
         )),
-        '>' | '<' => Err(unsupported_msg(c, "redirection", "use a script file")),
+        '>' | '<' => Err(unsupported_msg(
+            c,
+            "redirection",
+            "set `shell = true` on the task, or use a script file",
+        )),
         '`' => Err(unsupported_substitution()),
         '&' => Err(unsupported_msg(
             '&',
             "background/control operator",
-            "use `&&`, or `delegate` for real shell control",
+            "use `&&`, or set `shell = true` for real shell control",
         )),
         '(' | ')' => Err(unsupported_msg(
             c,
             "subshell",
-            "use `delegate` or a script file",
+            "set `shell = true` on the task, or use a script file",
         )),
         _ => Ok(()),
     }
@@ -774,7 +778,7 @@ fn reject_unsupported(c: char) -> Result<()> {
 fn unsupported_substitution() -> TsrError {
     TsrError::config(
         "'run' string uses command substitution ('$(...)' or backticks), \
-         which is unsupported — use a script file",
+         which is unsupported — set `shell = true` on the task, or use a script file",
     )
 }
 

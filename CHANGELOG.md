@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full `delegate = { bin = "sh", args = ["-c", …] }` table. The shell expands
   variables itself, with the task's env. Task `args` and passthrough arrive as
   arguments through `"$@"`, never as shell syntax. The task gives up
-  portability, and the docs say so.
+  portability, and the docs say so. The mini-shell's errors for pipes,
+  redirects, substitution and subshells now point at it.
 
 - **`--dry-run --expand`.** A debugging view of the plan. Each leaf gains a
   `run:` line with the command after `$VAR` and glob expansion, and an `env:`

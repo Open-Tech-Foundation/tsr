@@ -143,10 +143,10 @@ These require OS-level plumbing outside the tool's scope, so they are rejected a
 
 | Construct | Instead |
 |-----------|---------|
-| `\|` pipes | use `delegate` or a script file |
-| `>` `>>` `2>&1` redirection | use a script file |
-| `$(...)` / backtick substitution | use a script file |
-| `&` background, `( )` subshells | use `delegate` for real shell control |
+| `\|` pipes | set `shell = true`, or use a script file |
+| `>` `>>` `2>&1` redirection | set `shell = true`, or use a script file |
+| `$(...)` / backtick substitution | set `shell = true`, or use a script file |
+| `&` background, `( )` subshells | set `shell = true` for real shell control |
 | `{a,b}` brace expansion | list the paths explicitly, or quote the braces |
 
 <Callout type="warning" title="Rejection happens up front">

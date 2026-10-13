@@ -305,7 +305,7 @@ Tasks that can't reach it run normally.
 
 ```text
 Available tasks:
-  bad  ✗ 'run' string uses '|' (pipe), which is unsupported — use `delegate` or a script file
+  bad  ✗ 'run' string uses '|' (pipe), which is unsupported — set `shell = true` on the task, or use a script file
   ok   run: echo fine
 ```
 

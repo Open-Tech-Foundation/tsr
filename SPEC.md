@@ -389,10 +389,10 @@ These are rejected at **load time** with a clear, specific error (exit `64`), be
 
 | Construct | Message points to |
 |-----------|-------------------|
-| `\|` pipes | use `delegate` or a script file |
-| `>` `>>` `2>&1` redirection | use a script file |
-| `$(...)` / backtick substitution | use a script file |
-| `&` background, `( )` subshells | use `delegate` for real shell control |
+| `\|` pipes | set `shell = true`, or use a script file |
+| `>` `>>` `2>&1` redirection | set `shell = true`, or use a script file |
+| `$(...)` / backtick substitution | set `shell = true`, or use a script file |
+| `&` background, `( )` subshells | set `shell = true` for real shell control |
 | `{a,b}` brace expansion | list the paths explicitly, or quote the braces |
 
 ### 8.3 Escape hatch
