@@ -94,7 +94,10 @@ impl Task {
 }
 
 impl Config {
-    /// Load and validate a specific `tasks.toml` file.
+    /// Load a `tasks.toml`, failing on any invalid task. Runs and `--list` use
+    /// [`Config::load_lenient`] and decide for themselves which broken tasks
+    /// matter; this all-or-nothing form is what the tests build configs with.
+    #[cfg(test)]
     pub fn load(path: &Path) -> Result<Config> {
         check_writability(path)?;
         let text = fs::read_to_string(path)
@@ -108,13 +111,15 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Load a `tasks.toml` for **listing** (`tsr --list`): a task that fails
+    /// Load a `tasks.toml` for a run or `tsr --list`: a task that fails
     /// to parse or validate is set aside with its error instead of failing the
     /// whole load, so one broken task does not hide every other one.
     ///
-    /// Runs keep the strict [`Config::load`] (SPEC §3.3): a config with a broken
-    /// task should not start a build at all. Errors that are not about one task
-    /// (invalid TOML, a bad `[workspace]` / `[env]` / `[security]`) still fail.
+    /// A run uses it too, then refuses to start if any broken task is among
+    /// those it can reach (SPEC §8.2) — so a broken task still never surfaces
+    /// half-way through a build, while an unrelated one blocks nothing. Errors
+    /// that are not about one task (invalid TOML, a bad `[workspace]` / `[env]`
+    /// / `[security]`) always fail the load.
     ///
     /// Returns the config holding only the valid tasks, and each broken task's
     /// key mapped to its error message.

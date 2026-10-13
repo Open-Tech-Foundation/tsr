@@ -50,12 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`tsr --list` survives a broken task.** One invalid task, such as a `run`
-  with a pipe, made `--list` fail with exit `64` and show nothing. The list now
-  shows every task, marks a broken one `✗` with its error, counts the broken
-  tasks on stderr, and exits `0`. Runs stay strict: a config with a broken task
-  still refuses to start any task. Document-level errors (invalid TOML, a bad
-  `[workspace]`) still fail the listing.
+- **One broken task no longer blocks unrelated ones.** One invalid task, such
+  as a `run` with a pipe, used to fail every command with exit `64`, including
+  `--list` and tasks that had nothing to do with it.
+  - `--list` now shows every task, marks a broken one `✗` with its error,
+    counts the broken tasks on stderr, and exits `0`.
+  - A run now checks the task you asked for and everything it can reach
+    (`deps`, transitively, plus the task behind each `^upstream` dep). It
+    refuses to start if any of them is broken, so a broken task still never
+    shows up half-way through a build. Tasks that can't reach it run normally.
+  - Document-level errors (invalid TOML, a bad `[workspace]`) still fail
+    everything.
 
 - **Bare Python task names no longer guess.** A bare task in a Python project
   mapped to `uv run <task>`, so `tsr test` looked for an executable called
@@ -65,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (exit `64`) that says to write a `run` command such as `uv run pytest`.
 
 ### Fixed
+
+- The up-front checks for undefined `$VAR`s, guarded env (`LD_PRELOAD`, a
+  replaced `PATH`, …) and env-file permissions skipped tasks reached only
+  through a `^upstream` dep. Those tasks are now checked before the run starts,
+  like every other task in the run.
 
 - `tsr --config`: saving an edit to a task rebuilt its table from the form, so
   any key the form doesn't manage was silently deleted. That included a

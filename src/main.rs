@@ -90,17 +90,27 @@ fn run_task(
     let cwd = cwd()?;
     let (cfg, task) = match (config::locate(&cwd), task) {
         (Some(path), task) => {
-            let cfg = Config::load(&path)?;
+            // Broken tasks are set aside rather than failing the load: only
+            // the ones this run can reach are an error, checked below once
+            // the task is known — still before anything runs.
+            let (cfg, broken) = Config::load_lenient(&path)?;
             let task = match task.or_else(|| cfg.default_task.clone()) {
                 Some(t) => t,
                 None => {
                     return Err(TsrError::runtime(
                         "no task specified, and tasks.toml sets no default — name one \
-                                 (`tsr --list` shows them), or set `default = \"<task>\"` \
-                                 under [workspace]",
+                         (`tsr --list` shows them), or set `default = \"<task>\"` under \
+                         [workspace]",
                     ));
                 }
             };
+            // The root and everything it can reach, `^upstream` included: one
+            // broken task among them stops the run here.
+            for key in graph::reachable(&cfg, &task) {
+                if let Some(msg) = broken.get(&key) {
+                    return Err(TsrError::config(format!("task '{key}': {msg}")));
+                }
+            }
             (cfg, task)
         }
         (None, Some(task)) => (implicit_config(&cwd, &task)?, task),

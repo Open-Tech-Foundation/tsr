@@ -379,7 +379,7 @@ Variables, by contrast, resolve **before** the sequence starts, so an undefined 
 
 ### 8.2 Mini-shell — rejected (never attempted)
 
-These are rejected at **load time** with a clear, specific error (exit `64`), because they require OS-level plumbing outside the tool's scope. A run refuses to start while any task is broken; `tsr --list` is the exception and lists every task, marking a broken one `✗` with its error:
+These are rejected at **load time** with a clear, specific error (exit `64`), because they require OS-level plumbing outside the tool's scope. A run checks the task it was asked for and everything it can reach — plain `deps`, transitively, and the task each `^upstream` dep names — and refuses to start if any of them is broken, so a broken task never surfaces half-way through a build. A broken task the run cannot reach blocks nothing. `tsr --list` lists every task, marking a broken one `✗` with its error:
 
 | Construct | Message points to |
 |-----------|-------------------|

@@ -308,7 +308,8 @@ pub fn init(dir: &std::path::Path) -> Result<()> {
 ///
 /// `broken` holds the tasks [`Config::load_lenient`] set aside, keyed to their
 /// error. They are listed in place with a `✗`, so one bad task neither hides
-/// the rest nor goes unnoticed; running one still fails with exit `64`.
+/// the rest nor goes unnoticed; running one, or anything that reaches one,
+/// still fails with exit `64`.
 pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
     if cfg.tasks.is_empty() && broken.is_empty() {
         println!("No tasks defined in tasks.toml.");
@@ -351,7 +352,8 @@ pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
         let n = broken.len();
         let s = if n == 1 { "" } else { "s" };
         eprintln!(
-            "\n✗ {n} task{s} with config errors (marked ✗). Every run fails until they are fixed."
+            "\n✗ {n} task{s} with config errors (marked ✗). Running one, or a task that \
+             depends on one, fails with exit 64."
         );
     }
 }

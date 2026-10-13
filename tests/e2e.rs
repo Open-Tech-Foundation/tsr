@@ -428,10 +428,37 @@ fn list_shows_broken_tasks_instead_of_failing() {
         stderr(&out)
     );
 
-    // Runs stay strict: the broken config still refuses to start.
+    // A task that cannot reach the broken one runs normally.
     let out = tsr(&ws, &["ok"]);
-    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
-    assert!(stderr(&out).contains("task 'bad'"), "{}", stderr(&out));
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("fine"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_broken_task_in_reach_stops_the_run_before_anything_starts() {
+    // Plain deps, the root itself, and `^upstream` deps all count as reach.
+    let ws = workspace();
+    write(&ws, "pkgs/a/package.json", "{\"name\":\"a\"}");
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"pkgs/*\"]\n\
+         [tasks.first]\nrun = \"touch first-ran.txt\"\n\
+         [tasks.bad]\nrun = \"cat a | grep b\"\n\
+         [tasks.ci]\ndeps = [\"first\", \"bad\"]\n\
+         [tasks.build]\npackages = [\"pkgs/*\"]\ndeps = [\"^bad\"]\nrun = \"true\"\n",
+    );
+    for task in ["ci", "bad", "build"] {
+        let out = tsr(&ws, &[task]);
+        assert_eq!(code(&out), 64, "{task}: stderr {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("task 'bad': 'run' string uses '|'"),
+            "{task}: {}",
+            stderr(&out)
+        );
+    }
+    // Checked up front: `first` sits before `bad` in `ci`, and never ran.
+    assert!(!ws.join("first-ran.txt").exists());
 }
 
 #[test]
@@ -2532,6 +2559,28 @@ fn desc_must_be_a_string() {
     assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
     assert!(
         stderr(&out).contains("'desc' must be a string"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn upstream_tasks_get_the_same_load_time_env_checks() {
+    // A task reached only through `^codegen` used to skip the up-front guards.
+    let ws = workspace();
+    write(&ws, "pkgs/a/package.json", "{\"name\":\"a\"}");
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"pkgs/*\"]\n\
+         [tasks.build]\npackages = [\"pkgs/*\"]\ndeps = [\"^codegen\"]\nrun = \"true\"\n\
+         [tasks.codegen]\npackages = [\"pkgs/*\"]\nrun = \"true\"\n\
+         env = { LD_PRELOAD = \"./evil.so\" }\n",
+    );
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("task 'codegen' env sets 'LD_PRELOAD'"),
         "{}",
         stderr(&out)
     );

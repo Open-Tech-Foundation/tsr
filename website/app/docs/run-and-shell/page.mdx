@@ -150,8 +150,10 @@ These require OS-level plumbing outside the tool's scope, so they are rejected a
 | `{a,b}` brace expansion | list the paths explicitly, or quote the braces |
 
 <Callout type="warning" title="Rejection happens up front">
-  Unsupported constructs are caught when the config loads — before any task
-  runs — so a broken <code>run</code> string never executes half-way.
+  Unsupported constructs are caught before any task runs: a run checks the
+  task and everything it depends on up front, so a broken <code>run</code>
+  string never executes half-way. A broken task the run can't reach doesn't
+  block it.
 </Callout>
 
 ## Detection order

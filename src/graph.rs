@@ -32,8 +32,13 @@ pub fn validate(cfg: &Config, root: &str) -> Result<()> {
     dfs(cfg, root, &mut on_stack, &mut visited)
 }
 
-/// All task keys reachable from `root` through `deps`, including `root` itself.
-/// Assumes the subgraph has already been [`validate`]d (defined, acyclic).
+/// Every task key a run of `root` may execute, `root` first: its `deps`,
+/// transitively, **including** the task each `^name` dep runs in upstream
+/// packages. This is the set the load-time checks (broken tasks, `$VAR`s,
+/// guarded env) cover, so it must not miss anything the executor can reach.
+///
+/// Keys that name no task are still listed — the caller decides whether that
+/// is an error ([`validate`]) or a task set aside as broken.
 pub fn reachable(cfg: &Config, root: &str) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut order: Vec<String> = Vec::new();
@@ -44,8 +49,9 @@ pub fn reachable(cfg: &Config, root: &str) -> Vec<String> {
         }
         order.push(key.clone());
         if let Some(task) = cfg.task(&key) {
-            for dep in plain_deps(task) {
-                stack.push(dep.clone());
+            // Reversed so the stack pops deps in declaration order.
+            for dep in task.deps.iter().rev() {
+                stack.push(upstream_dep(dep).unwrap_or(dep).to_string());
             }
         }
     }
@@ -215,6 +221,19 @@ mod tests {
         // Short names need a near-exact match, not any two-letter task.
         let msg = validate(&c, "xy").unwrap_err().to_string();
         assert!(!msg.contains("did you mean"), "{msg}");
+    }
+
+    #[test]
+    fn reachable_follows_plain_and_upstream_deps() {
+        let c = cfg("[workspace]\nmembers=[\"p/*\"]\n\
+             [tasks.ci]\ndeps=[\"build\", \"lint\"]\n\
+             [tasks.build]\npackages=[\"p/*\"]\ndeps=[\"^codegen\"]\nrun=\"x\"\n\
+             [tasks.codegen]\npackages=[\"p/*\"]\nrun=\"x\"\n\
+             [tasks.lint]\nrun=\"x\"\n[tasks.unrelated]\nrun=\"x\"\n");
+        assert_eq!(reachable(&c, "ci"), ["ci", "build", "codegen", "lint"]);
+        // A dep that names no task is still listed, for the caller to judge.
+        let c = cfg("[tasks.a]\ndeps=[\"ghost\"]\n");
+        assert_eq!(reachable(&c, "a"), ["a", "ghost"]);
     }
 
     #[test]
