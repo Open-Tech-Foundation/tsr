@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--dry-run --expand`.** A debugging view of the plan. Each leaf gains a
+  `run:` line with the command after `$VAR` and glob expansion, and an `env:`
+  line for every variable `tsr` sets or changes for it. It prints values, so it
+  is opt-in and warns on stderr. Plain `--dry-run` stays safe to paste.
+
 - **`--filter <pkg>` / `-F`.** Runs every `packages` fan-out only in the
   matching packages (path glob, path, or manifest name; repeatable), so
   `tsr build --filter web` builds one package without a `web#build` task.

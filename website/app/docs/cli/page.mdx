@@ -30,6 +30,7 @@ These options may follow a task name. Each value-taking one accepts
 | [`--resume-from <pkg>`](#tsr-task-resume-from-pkg) | — | Skip packages ordered before `<pkg>`. |
 | [`--no-bail`](#tsr-task-no-bail) | off | Run everything; don't stop at the first failure. |
 | [`--dry-run`](#tsr-task-dry-run) | off | Print what would run, and run nothing. |
+| [`--expand`](#debugging-with---expand) | off | With `--dry-run`: show expanded commands and env. |
 | [`-F`, `--filter <pkg>`](#tsr-task-filter-pkg) | — | Run package fan-outs only in `<pkg>`. Repeatable. |
 | [`-j`, `--jobs <n>`](#tsr-task-jobs-n) | unlimited | Run at most `<n>` commands at once. |
 | [`--allow-unsafe-env`](#tsr-task-allow-unsafe-env) | off | Let the config set guarded env variables. |
@@ -193,6 +194,25 @@ tsr build -j 4          # a 200-package parallel fan-out, four at a time
 `--jobs` never adds parallelism: a task without `parallel = true` still runs its
 batch one at a time. A command still waiting for a slot when the run fails fast
 never starts, and shows as skipped.
+
+### Debugging with `--expand`
+
+Plain `--dry-run` never shows variable values. When you need to see exactly what
+will run, add `--expand`:
+
+```text
+$ tsr deploy --dry-run --expand
+⚠ --expand prints variable values, including any from .env — don't paste this output anywhere public
+· deploy
+    dir: .
+    cmd: deploy --to $TARGET src/*.js
+    run: deploy --to prod src/a.js src/b.js
+    env: TARGET=prod
+```
+
+`run:` is the command after `$VAR` and glob expansion. Each `env:` line is a
+variable that `tsr` sets or changes for the task. `--expand` works only together
+with `--dry-run`.
 
 ## `tsr <task> --allow-unsafe-env`
 

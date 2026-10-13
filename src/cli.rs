@@ -24,6 +24,7 @@ OPTIONS (after a task name):
     --resume-from <pkg>    skip packages ordered before <pkg>
     --no-bail              keep going after a failure instead of stopping
     --dry-run              print what would run, and run nothing
+    --expand               with --dry-run: show expanded commands and env (prints values)
     -F, --filter <pkg>     run package fan-outs only in <pkg> (repeatable)
     -j, --jobs <n>         run at most <n> commands at once
     --allow-unsafe-env     let the config set LD_PRELOAD, NODE_OPTIONS, …
@@ -106,6 +107,11 @@ pub struct RunOptions {
     /// before handing it your shell. Commands print **as written**, before
     /// `$VAR` expansion, so nothing a `.env` holds can reach the output.
     pub dry_run: bool,
+    /// `--expand` (with `--dry-run` only): print each command after `$VAR` and
+    /// glob expansion, plus the environment `tsr` sets for it. For debugging a
+    /// config — it **does** print variable values, so it is opt-in and never
+    /// what a bare `--dry-run` shows.
+    pub expand: bool,
     /// `--filter <pkg>` (repeatable): run every `packages` fan-out only in the
     /// matching packages — path glob, path, or manifest name, the same matcher
     /// `packages` uses (SPEC §9.1). Empty means no filter.
@@ -253,6 +259,10 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
                 opts.dry_run = true;
                 i += 1;
             }
+            "--expand" => {
+                opts.expand = true;
+                i += 1;
+            }
             "--allow-unsafe-env" => {
                 opts.allow_unsafe_env = true;
                 i += 1;
@@ -319,6 +329,11 @@ fn parse_run_options(task: &str, rest: &[String]) -> Result<RunOptions> {
                 )));
             }
         }
+    }
+    if opts.expand && !opts.dry_run {
+        return Err(TsrError::runtime(
+            "'--expand' only works with '--dry-run' (e.g. `tsr build --dry-run --expand`)",
+        ));
     }
     Ok(opts)
 }
@@ -519,6 +534,17 @@ mod tests {
                 opts: RunOptions::default(),
             }
         );
+    }
+
+    #[test]
+    fn expand_requires_dry_run() {
+        let Cli::Run { opts, .. } = parse_ok(&["b", "--dry-run", "--expand"]) else {
+            panic!("expected a run")
+        };
+        assert!(opts.dry_run && opts.expand);
+        let err = parse_err(&["b", "--expand"]);
+        assert_eq!(err.exit_code(), 64);
+        assert!(err.to_string().contains("--dry-run"), "{err}");
     }
 
     #[test]
@@ -817,6 +843,7 @@ mod tests {
                     no_bail: true,
                     allow_unsafe_env: false,
                     dry_run: false,
+                    expand: false,
                     filter: vec![],
                     jobs: None,
                     reporter: Reporter::Ndjson,

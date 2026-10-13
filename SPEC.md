@@ -252,6 +252,7 @@ args after `--`" error.
 | `--resume-from <pkg>` | Skip every package ordered before `pkg` (§9.4). |
 | `--no-bail` | Run every batch to completion instead of stopping at the first failure (§5.2). |
 | `--dry-run` | Print the plan and run nothing (§12.5). |
+| `--expand` | With `--dry-run`: also print each command after expansion and the env `tsr` sets for it — values included (§12.5). |
 | `-F`, `--filter <pkg>` | Run `packages` fan-outs only in the matching packages; repeatable (§9.5). |
 | `-j`, `--jobs <n>` | Run at most `n` commands at once across the whole run (§5.1). |
 | `--allow-unsafe-env` | Let the config set the guarded environment variables (§12.2). |
@@ -645,6 +646,8 @@ A lone interactive `tsr dev` therefore keeps the inherited group; everything els
 `tsr <task> --dry-run` walks the dependency graph and prints each leaf's label, directory and command without running anything — the way to read an unfamiliar `tasks.toml` before handing it a shell.
 
 Commands print **as written**, before `$VAR` expansion, so a plan pasted into an issue or a CI log cannot carry what `.env` supplied. The walk is always sequential, even for `parallel = true` batches, so the output is readable. A config that cannot be resolved still fails: a dry run reports the same errors a real one would.
+
+**`--dry-run --expand`** is the debugging view, and the one deliberate exception. Under each leaf it adds a `run:` line — the command after `$VAR` expansion, globs resolved against the current filesystem, `NAME=value` prefixes in place — and an `env:` line for every variable `tsr` sets or changes relative to its own environment (`[env]`, `.env`, `env_file`, task `env`, the `node_modules/.bin` `PATH`). Values are printed, so it warns on stderr that the output is not safe to paste. `--expand` without `--dry-run` is a runner error (exit `64`).
 
 ### 12.6 Not guarded
 

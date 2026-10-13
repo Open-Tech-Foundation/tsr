@@ -403,6 +403,15 @@ fn glob_matches(dir: &Path, pattern: &str) -> Option<Vec<String>> {
 }
 
 impl Sep {
+    /// The operator as written.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sep::And => "&&",
+            Sep::Or => "||",
+            Sep::Semi => ";",
+        }
+    }
+
     /// Whether the command after this separator runs, given the previous
     /// command's exit code (SPEC §8.1). This is the single definition of the
     /// sequencing rule; [`exec`](crate::exec) drives it from its own

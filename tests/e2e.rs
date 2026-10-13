@@ -2747,3 +2747,63 @@ fn filter_matching_no_package_is_an_error() {
     );
     assert!(stdout(&out).is_empty(), "nothing may run: {}", stdout(&out));
 }
+
+// --- --dry-run --expand ---
+
+#[test]
+fn dry_run_expand_shows_the_real_command_and_env() {
+    let ws = workspace();
+    write(&ws, ".env", "TOKEN=from-dotenv\n");
+    write(&ws, "src/a.js", "");
+    write(&ws, "src/b.js", "");
+    write(
+        &ws,
+        "tasks.toml",
+        "[env]\nTARGET = \"prod\"\n\
+         [tasks.deploy]\nrun = \"MODE=fast deploy --to $TARGET src/*.js && echo 'a b'\"\n",
+    );
+    let out = tsr(&ws, &["deploy", "--dry-run", "--expand"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    // The plain plan line is still there, as written.
+    assert!(
+        s.contains("cmd: MODE=fast deploy --to $TARGET src/*.js"),
+        "{s}"
+    );
+    assert!(
+        s.contains("run: MODE=fast deploy --to prod src/a.js src/b.js && echo 'a b'"),
+        "{s}"
+    );
+    assert!(s.contains("env: TARGET=prod"), "{s}");
+    assert!(s.contains("env: TOKEN=from-dotenv"), "{s}");
+    assert!(
+        stderr(&out).contains("--expand prints variable values"),
+        "{}",
+        stderr(&out)
+    );
+    // Still a dry run: `echo` printed nothing of its own.
+    assert!(!s.lines().any(|l| l == "a b"), "{s}");
+}
+
+#[test]
+fn expand_without_dry_run_is_an_error() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.a]\nrun = \"touch ran.txt\"\n");
+    let out = tsr(&ws, &["a", "--expand"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(!ws.join("ran.txt").exists());
+}
+
+#[test]
+fn plain_dry_run_still_hides_values() {
+    let ws = workspace();
+    write(&ws, ".env", "TOKEN=from-dotenv\n");
+    write(&ws, "tasks.toml", "[tasks.d]\nrun = \"echo $TOKEN\"\n");
+    let out = tsr(&ws, &["d", "--dry-run"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let all = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        !all.contains("from-dotenv") && !all.contains("env:"),
+        "{all}"
+    );
+}

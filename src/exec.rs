@@ -43,6 +43,13 @@ const POLL_MAX: Duration = Duration::from_millis(20);
 pub fn run(cfg: &Config, root: &str, passthrough: &[String], sel: Selection<'_>) -> i32 {
     // From here on children exist, so an interrupt has something to tear down.
     proc::install_interrupt_handler();
+    if sel.opts.expand {
+        // The one output mode that is not safe to paste: say so up front.
+        eprintln!(
+            "⚠ --expand prints variable values, including any from .env — \
+             don't paste this output anywhere public"
+        );
+    }
     let ctx = Ctx::new(cfg, root, sel);
     let started = Instant::now();
     let _ = ctx.run_task(root, passthrough, true);
@@ -1046,12 +1053,29 @@ impl<'a> Ctx<'a> {
     /// `$VAR`s and its globs unexpanded. That is the point — the plan is meant to
     /// be safe to paste into an issue or a CI log, and an expanded one would
     /// carry whatever `.env` supplied (SPEC §12).
+    ///
+    /// `--expand` is the deliberate exception, for debugging: it adds the
+    /// command as it will really run and every variable `tsr` sets or changes
+    /// relative to its own environment — values included.
     fn print_plan(&self, job: &Job) {
         let dir = crate::path::rel_to_slash(&self.cfg.root, &job.dir);
         let dir = if dir.is_empty() { ".".to_string() } else { dir };
         println!("· {}", job.label);
         println!("    dir: {dir}");
         println!("    cmd: {}", job.preview);
+        if self.sel.opts.expand {
+            println!("    run: {}", expanded_command(job));
+            let inherited: HashMap<String, String> = std::env::vars().collect();
+            let mut set: Vec<(&String, &String)> = job
+                .env
+                .iter()
+                .filter(|(k, v)| inherited.get(*k) != Some(*v))
+                .collect();
+            set.sort();
+            for (k, v) in set {
+                println!("    env: {k}={v}");
+            }
+        }
     }
 
     // --- reporting ---
@@ -1097,6 +1121,41 @@ impl<'a> Ctx<'a> {
             eprintln!();
         }
         eprintln!("exit code: {code}");
+    }
+}
+
+/// A job's command after expansion, for `--dry-run --expand`: globs resolved
+/// against the job's directory as it stands now, `NAME=value` prefixes shown
+/// in place, and arguments quoted where a space would misread them.
+fn expanded_command(job: &Job) -> String {
+    let quote = |a: &String| {
+        if a.is_empty() || a.contains(char::is_whitespace) {
+            format!("'{a}'")
+        } else {
+            a.clone()
+        }
+    };
+    let render = |cmd: &ExpandedCommand| {
+        cmd.env
+            .iter()
+            .map(|(k, v)| format!("{k}={}", quote(v)))
+            .chain(cmd.argv(&job.dir).iter().map(quote))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    match &job.action {
+        Action::Spawn { program, args } => std::iter::once(program)
+            .chain(args)
+            .map(quote)
+            .collect::<Vec<_>>()
+            .join(" "),
+        Action::Shell(plan) => {
+            let mut out = render(&plan.first);
+            for (sep, cmd) in &plan.rest {
+                out.push_str(&format!(" {} {}", sep.as_str(), render(cmd)));
+            }
+            out
+        }
     }
 }
 
@@ -1286,6 +1345,7 @@ mod tests {
         no_bail: false,
         allow_unsafe_env: false,
         dry_run: false,
+        expand: false,
         filter: Vec::new(),
         jobs: None,
         reporter: Reporter::Human,
