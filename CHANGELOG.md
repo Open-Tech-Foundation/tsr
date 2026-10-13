@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Task descriptions.** A task can carry `desc = "…"`, and `tsr --list` shows
+  it before the task's form. `tsr --config` has a field for it. Until now, a
+  `desc` key was ignored, and an unknown key was the only way to annotate a
+  task.
+
+- **A default task.** `[workspace] default = "dev"` makes a bare `tsr` (or
+  `tsr -- <args>`) run `dev`. `tsr --list` marks it `(default)`. A default that
+  names no task gets the usual "did you mean". Without one, a bare `tsr` exits
+  `64` with a message saying how to set it.
+
 - **Configless `tsr --list` lists what you can run.** Without a `tasks.toml`,
   it used to print a hint and nothing else. It now lists the `package.json`
   scripts, or a Python project's `[project.scripts]`, along with what each one

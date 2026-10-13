@@ -9,6 +9,7 @@ import { Callout } from "@opentf/web-docs";
 
 ```text
 tsr <task> [options] [-- <args>...]   run a task; args after -- are forwarded
+tsr [-- <args>...]                    run the [workspace] default task
 tsr --list                            list the tasks defined in tasks.toml
 tsr --config                          edit tasks.toml in an interactive TUI
 tsr --init                            create a starter tasks.toml here
@@ -235,13 +236,15 @@ finding out the sink is unwritable after a long build would be useless.
 ## `tsr --list`
 
 Prints the tasks defined in `tasks.toml`, each with a one-line form descriptor.
+A task's `desc` comes first when it has one, and the `[workspace] default` task
+is marked.
 
 ```text
 Available tasks:
-  build  delegate: turbo
-  ci     deps: lint, test, build  ·  parallel
-  dev    run: vite  ·  dir: apps/web
-  test   packages: apps/*
+  build          delegate: turbo
+  ci             deps: lint, test, build  ·  parallel
+  dev (default)  Start the dev server  (run: vite  ·  dir: apps/web)
+  test           packages: apps/*
 ```
 
 A task with a config error doesn't stop the listing. It shows in place, marked

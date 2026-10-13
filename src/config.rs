@@ -23,6 +23,8 @@ pub struct Config {
     pub root: PathBuf,
     /// `[workspace] members` globs (empty for a single-package repo).
     pub members: Vec<String>,
+    /// `[workspace] default` — the task a bare `tsr` runs.
+    pub default_task: Option<String>,
     /// Workspace-wide `[env]`, preserved in declaration order so later keys may
     /// reference earlier ones (SPEC §7.3).
     pub env: Vec<(String, String)>,
@@ -64,6 +66,8 @@ pub enum Delegate {
 pub struct Task {
     /// The full table key as written (e.g. `test` or `web#build`).
     pub key: String,
+    /// One-line human description, shown by `tsr --list`. Never executed.
+    pub desc: Option<String>,
     pub run: Option<String>,
     pub delegate: Option<Delegate>,
     pub dir: Option<String>,
@@ -314,6 +318,7 @@ pub fn implicit(root: PathBuf, task: &str) -> Config {
     Config {
         root,
         members: Vec::new(),
+        default_task: None,
         env: Vec::new(),
         tasks,
         security: Security::default(),
@@ -365,10 +370,17 @@ fn parse_with(
         .map_err(|e| TsrError::config(format!("invalid TOML in '{CONFIG_FILE}': {e}")))?;
 
     let mut members = Vec::new();
-    if let Some(ws) = doc.get("workspace").and_then(Item::as_table_like)
-        && let Some(m) = ws.get("members")
-    {
-        members = parse_string_array(m, "workspace.members")?;
+    let mut default_task = None;
+    if let Some(ws) = doc.get("workspace").and_then(Item::as_table_like) {
+        if let Some(m) = ws.get("members") {
+            members = parse_string_array(m, "workspace.members")?;
+        }
+        if let Some(d) = ws.get("default") {
+            let name = d.as_str().ok_or_else(|| {
+                TsrError::config("'workspace.default' must be a task name string")
+            })?;
+            default_task = Some(name.to_string());
+        }
     }
 
     let env = match doc.get("env") {
@@ -401,6 +413,7 @@ fn parse_with(
     Ok(Config {
         root,
         members,
+        default_task,
         env,
         tasks,
         security,
@@ -420,6 +433,7 @@ fn parse_task(key: &str, item: &Item) -> Result<Task> {
 
     for (field, value) in tbl.iter() {
         match field {
+            "desc" => task.desc = Some(expect_string(value, key, "desc")?),
             "run" => task.run = Some(expect_string(value, key, "run")?),
             "dir" => task.dir = Some(expect_string(value, key, "dir")?),
             "delegate" => task.delegate = Some(parse_delegate(value, key)?),
@@ -559,6 +573,14 @@ impl Config {
             // A glob's literal prefix is what matters — `apps/*` cannot escape,
             // `../*` escapes before the wildcard is reached.
             bounds.check("workspace.members", &self.root, glob_prefix(member))?;
+        }
+        // Only the grammar is checked here. Whether the task exists is checked
+        // when a bare `tsr` reaches for it, where an unknown name gets the same
+        // "did you mean" as any other — and `--list` stays usable meanwhile.
+        if let Some(d) = &self.default_task {
+            validate_task_key(d).map_err(|e| {
+                TsrError::config(format!("workspace.default: {}", strip_prefix(&e)))
+            })?;
         }
         Ok(())
     }
@@ -716,6 +738,28 @@ mod tests {
 
     fn load(text: &str) -> Result<Config> {
         Config::load(&write_config(text))
+    }
+
+    #[test]
+    fn parses_desc_and_workspace_default() {
+        let cfg = load(
+            "[workspace]\ndefault = \"dev\"\n[tasks.dev]\ndesc = \"Dev server\"\nrun = \"vite\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.default_task.as_deref(), Some("dev"));
+        assert_eq!(cfg.tasks["dev"].desc.as_deref(), Some("Dev server"));
+    }
+
+    #[test]
+    fn workspace_default_must_be_a_valid_task_name() {
+        let err = load("[workspace]\ndefault = 3\n").unwrap_err().to_string();
+        assert!(err.contains("workspace.default"), "{err}");
+        let err = load("[workspace]\ndefault = \"bad name\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("workspace.default"), "{err}");
+        // Existence is checked when a bare `tsr` uses it, not at load.
+        assert!(load("[workspace]\ndefault = \"nope\"\n").is_ok());
     }
 
     #[test]

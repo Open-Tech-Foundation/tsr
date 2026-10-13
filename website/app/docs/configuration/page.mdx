@@ -19,6 +19,7 @@ members = ["apps/*", "packages/*"]   # monorepo globs; omit for a single package
 NODE_ENV = "development"
 
 [tasks.dev]
+desc = "Start the dev server"
 run = "vite"
 ```
 
@@ -27,6 +28,7 @@ run = "vite"
 | Field | Type | Meaning |
 |-------|------|---------|
 | `members` | array | Glob patterns identifying the packages in a monorepo. Omit entirely for a single-package repo. |
+| `default` | string | The task a bare `tsr` runs (also `tsr -- <args>`). Without it, a bare `tsr` is an error that says how to set one. |
 
 ## `[env]`
 
@@ -40,6 +42,7 @@ Each task is a `[tasks.<name>]` table. The full field list:
 
 | Field | Type | Meaning |
 |-------|------|---------|
+| `desc` | string | One-line description shown by `tsr --list`. |
 | `run` | string | Command to spawn directly (form 2). |
 | `delegate` | string \| table | Backend to hand off to (form 1). |
 | `dir` | string | Directory to run in. Defaults to the workspace root. **Mutually exclusive with `packages`.** |

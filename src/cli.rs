@@ -13,6 +13,7 @@ tsr — a lightweight, polyglot, repo-aware task runner
 
 USAGE:
     tsr <task> [options] [-- <args>...]   run a task; args after -- are forwarded
+    tsr [-- <args>...]          run the [workspace] default task
     tsr --list                  list the tasks defined in tasks.toml
     tsr --config                edit tasks.toml in an interactive TUI
     tsr --init                  create a starter tasks.toml here
@@ -122,6 +123,10 @@ pub enum Cli {
         passthrough: Vec<String>,
         opts: RunOptions,
     },
+    /// A bare `tsr` (optionally `tsr -- <args>`): run `[workspace] default`.
+    Default {
+        passthrough: Vec<String>,
+    },
     List,
     Init,
     Config,
@@ -141,7 +146,9 @@ pub fn parse(args: &[String]) -> Result<Cli> {
     // Builtins are flags, never bare subcommands: the first positional argument
     // is always a task name, so a task called `list` or `init` is never shadowed.
     match head.first().map(String::as_str) {
-        None => Err(TsrError::runtime(format!("no task specified\n\n{USAGE}"))),
+        None => Ok(Cli::Default {
+            passthrough: tail.to_vec(),
+        }),
         Some("--list") => {
             if head.len() > 1 {
                 return Err(TsrError::runtime("'--list' takes no arguments"));
@@ -307,23 +314,38 @@ pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
         println!("No tasks defined in tasks.toml.");
         return;
     }
-    let width = cfg
-        .tasks
-        .keys()
-        .chain(broken.keys())
-        .map(String::len)
-        .max()
-        .unwrap_or(0);
-    let mut rows: Vec<(&String, String)> = cfg
+    // A task's `desc` leads when it has one, with the form after it in
+    // parentheses; without one, the form alone, as before.
+    let mut rows: Vec<(String, String)> = cfg
         .tasks
         .iter()
-        .map(|(key, task)| (key, describe(task)))
-        .chain(broken.iter().map(|(key, err)| (key, format!("✗ {err}"))))
+        .map(|(key, task)| {
+            let text = match &task.desc {
+                Some(desc) => format!("{desc}  ({})", describe(task)),
+                None => describe(task),
+            };
+            (key.clone(), text)
+        })
+        .chain(
+            broken
+                .iter()
+                .map(|(key, err)| (key.clone(), format!("✗ {err}"))),
+        )
         .collect();
-    rows.sort_by(|a, b| a.0.cmp(b.0));
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    for (key, _) in &mut rows {
+        if cfg.default_task.as_deref() == Some(key.as_str()) {
+            key.push_str(" (default)");
+        }
+    }
+    let width = rows
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0);
     println!("Available tasks:");
-    for (key, desc) in rows {
-        println!("  {key:width$}  {desc}");
+    for (key, text) in rows {
+        println!("  {key:width$}  {text}");
     }
     if !broken.is_empty() {
         let n = broken.len();
@@ -448,6 +470,22 @@ mod tests {
                 task: "test".into(),
                 passthrough: vec!["--watch".into(), "-x".into()],
                 opts: RunOptions::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn bare_invocation_is_the_default_task() {
+        assert_eq!(
+            parse_ok(&[]),
+            Cli::Default {
+                passthrough: vec![]
+            }
+        );
+        assert_eq!(
+            parse_ok(&["--", "--watch"]),
+            Cli::Default {
+                passthrough: vec!["--watch".into()]
             }
         );
     }
@@ -579,12 +617,6 @@ mod tests {
             .join("\n");
         crate::config::validate_str(&body)
             .unwrap_or_else(|e| panic!("uncommented scaffold is invalid: {e}\n---\n{body}"));
-    }
-
-    #[test]
-    fn no_task_is_error() {
-        assert_eq!(parse_err(&[]).exit_code(), 64);
-        assert_eq!(parse_err(&["--"]).exit_code(), 64);
     }
 
     #[test]

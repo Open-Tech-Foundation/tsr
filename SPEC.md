@@ -38,6 +38,7 @@ NODE_ENV = "development"
 ```
 
 - `members` — glob patterns identifying the packages in a monorepo. Omit for a single-package repo.
+- `default` — the task a bare `tsr` (or `tsr -- <args>`) runs. Its name is checked against the task-name grammar at load; whether it names a defined task is checked when a bare `tsr` uses it, as any unknown task is (exit `64`, with a "did you mean"). With no `default`, a bare `tsr` is a runner error that says how to set one.
 - `[env]` — workspace-wide environment variables inherited by every task (see §7).
 
 ### 2.1 Configless mode
@@ -103,6 +104,7 @@ deps = ["ui#build"]
 
 | Field | Type | Meaning |
 |-------|------|---------|
+| `desc` | string | One-line description shown by `tsr --list`. Never executed. |
 | `run` | string | Command to spawn directly (form 2). |
 | `delegate` | string \| table | Backend to hand off to (form 1). String → `<bin> run <task>`. Table → `{ bin = "...", args = [...] }`. |
 | `dir` | string | Directory to run in. Defaults to workspace root. Mutually exclusive with `packages`. |
@@ -224,6 +226,7 @@ args = ["--color"]
 
 ```
 tsr <task> [-- <args>...]   run a task; args after -- are forwarded
+tsr [-- <args>...]          run the [workspace] default task
 tsr <task> --since <ref>    run only in packages affected since a git ref
 tsr --list                  list the tasks defined in tasks.toml
 tsr --config                edit tasks.toml in an interactive TUI

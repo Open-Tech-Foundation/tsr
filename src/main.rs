@@ -69,77 +69,104 @@ fn run() -> error::Result<i32> {
             }
             Ok(0)
         }
+        Cli::Default { passthrough } => run_task(None, passthrough, cli::RunOptions::default()),
         Cli::Run {
             task,
             passthrough,
             opts,
-        } => {
-            // A `tasks.toml` is optional: with one, load it; without one, run the
-            // task repo-aware via auto-detection (configless mode) so `tsr dev`
-            // maps to `npm run dev` / `cargo dev` / … (SPEC §3.1 form 3).
-            let cwd = cwd()?;
-            let cfg = match config::locate(&cwd) {
-                Some(path) => Config::load(&path)?,
-                None => implicit_config(&cwd, &task)?,
-            };
-            // Unknown-task and dependency-cycle checks (SPEC §5) → exit 64.
-            graph::validate(&cfg, &task)?;
-            // Load-time undefined-$VAR check over the tasks that will run,
-            // i.e. the invoked task and its dependency closure (SPEC §7.3).
-            let reachable = graph::reachable(&cfg, &task);
-            env::validate_run_vars(&cfg, &reachable)?;
-            // Reject config-set variables that decide what code some *other*
-            // program loads (SPEC §12.2) — before anything is spawned.
-            env::validate_guarded_vars(&cfg, &reachable, opts.allow_unsafe_env)?;
-            // The files that env comes from decide it too (SPEC §12.3).
-            env::validate_env_file_permissions(&cfg, &reachable)?;
-            // Both package filters need the graph, so build it once and only
-            // when one of them was actually asked for — an ordinary run must not
-            // pay for scanning the workspace.
-            let graph = (opts.since.is_some() || opts.resume_from.is_some())
-                .then(|| pkggraph::PackageGraph::build(&cfg));
-
-            // `--since` narrows every `packages` fan-out to the affected set
-            // (SPEC §9.3). `None` means "no filtering", which is also what a
-            // change outside every package resolves to.
-            let affected = match (&opts.since, &graph) {
-                (Some(git_ref), Some(g)) => {
-                    let files = changed::changed_files(&cfg.root, git_ref)?;
-                    changed::affected(g, &files)
-                }
-                _ => None,
-            };
-            // `--resume-from` drops every package ordered before the named one
-            // (SPEC §9.4).
-            let skip = match (&opts.resume_from, &graph) {
-                (Some(pkg), Some(g)) => Some(changed::before_in_order(g, pkg)?),
-                _ => None,
-            };
-
-            // Create the reporter file up front: discovering it is unwritable
-            // after a long build has already run would be useless.
-            let events = match &opts.reporter_file {
-                Some(path) => Some(std::sync::Mutex::new(std::fs::File::create(path).map_err(
-                    |e| {
-                        TsrError::runtime(format!(
-                            "cannot create reporter file '{}': {e}",
-                            path.display()
-                        ))
-                    },
-                )?)),
-                None => None,
-            };
-
-            // exec::run owns its own failure reporting and returns the exit code.
-            let selection = exec::Selection {
-                affected: affected.as_ref(),
-                skip: skip.as_ref(),
-                opts: &opts,
-                events: events.as_ref(),
-            };
-            Ok(exec::run(&cfg, &task, &passthrough, selection))
-        }
+        } => run_task(Some(task), passthrough, opts),
     }
+}
+
+/// Run `task`, or the config's `[workspace] default` when none was named.
+fn run_task(
+    task: Option<String>,
+    passthrough: Vec<String>,
+    opts: cli::RunOptions,
+) -> error::Result<i32> {
+    // A `tasks.toml` is optional: with one, load it; without one, run the
+    // task repo-aware via auto-detection (configless mode) so `tsr dev`
+    // maps to `npm run dev` / `cargo dev` / … (SPEC §3.1 form 3).
+    let cwd = cwd()?;
+    let (cfg, task) = match (config::locate(&cwd), task) {
+        (Some(path), task) => {
+            let cfg = Config::load(&path)?;
+            let task = match task.or_else(|| cfg.default_task.clone()) {
+                Some(t) => t,
+                None => {
+                    return Err(TsrError::runtime(
+                        "no task specified, and tasks.toml sets no default — name one \
+                                 (`tsr --list` shows them), or set `default = \"<task>\"` \
+                                 under [workspace]",
+                    ));
+                }
+            };
+            (cfg, task)
+        }
+        (None, Some(task)) => (implicit_config(&cwd, &task)?, task),
+        (None, None) => {
+            return Err(TsrError::runtime(format!(
+                "no task specified\n\n{}",
+                cli::USAGE
+            )));
+        }
+    };
+    // Unknown-task and dependency-cycle checks (SPEC §5) → exit 64.
+    graph::validate(&cfg, &task)?;
+    // Load-time undefined-$VAR check over the tasks that will run,
+    // i.e. the invoked task and its dependency closure (SPEC §7.3).
+    let reachable = graph::reachable(&cfg, &task);
+    env::validate_run_vars(&cfg, &reachable)?;
+    // Reject config-set variables that decide what code some *other*
+    // program loads (SPEC §12.2) — before anything is spawned.
+    env::validate_guarded_vars(&cfg, &reachable, opts.allow_unsafe_env)?;
+    // The files that env comes from decide it too (SPEC §12.3).
+    env::validate_env_file_permissions(&cfg, &reachable)?;
+    // Both package filters need the graph, so build it once and only
+    // when one of them was actually asked for — an ordinary run must not
+    // pay for scanning the workspace.
+    let graph = (opts.since.is_some() || opts.resume_from.is_some())
+        .then(|| pkggraph::PackageGraph::build(&cfg));
+
+    // `--since` narrows every `packages` fan-out to the affected set
+    // (SPEC §9.3). `None` means "no filtering", which is also what a
+    // change outside every package resolves to.
+    let affected = match (&opts.since, &graph) {
+        (Some(git_ref), Some(g)) => {
+            let files = changed::changed_files(&cfg.root, git_ref)?;
+            changed::affected(g, &files)
+        }
+        _ => None,
+    };
+    // `--resume-from` drops every package ordered before the named one
+    // (SPEC §9.4).
+    let skip = match (&opts.resume_from, &graph) {
+        (Some(pkg), Some(g)) => Some(changed::before_in_order(g, pkg)?),
+        _ => None,
+    };
+
+    // Create the reporter file up front: discovering it is unwritable
+    // after a long build has already run would be useless.
+    let events = match &opts.reporter_file {
+        Some(path) => Some(std::sync::Mutex::new(std::fs::File::create(path).map_err(
+            |e| {
+                TsrError::runtime(format!(
+                    "cannot create reporter file '{}': {e}",
+                    path.display()
+                ))
+            },
+        )?)),
+        None => None,
+    };
+
+    // exec::run owns its own failure reporting and returns the exit code.
+    let selection = exec::Selection {
+        affected: affected.as_ref(),
+        skip: skip.as_ref(),
+        opts: &opts,
+        events: events.as_ref(),
+    };
+    Ok(exec::run(&cfg, &task, &passthrough, selection))
 }
 
 fn cwd() -> error::Result<std::path::PathBuf> {

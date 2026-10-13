@@ -2439,3 +2439,100 @@ fn bare_assignment_is_a_config_error() {
         stderr(&out)
     );
 }
+
+// --- desc and [workspace] default ---
+
+#[test]
+fn list_shows_descriptions_and_the_default() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\ndefault = \"dev\"\n\
+         [tasks.dev]\ndesc = \"Start the dev server\"\nrun = \"vite\"\n\
+         [tasks.build]\nrun = \"vite build\"\n",
+    );
+    let out = tsr(&ws, &["--list"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    let dev = s.lines().find(|l| l.contains("dev (default)")).expect(&s);
+    assert!(dev.contains("Start the dev server  (run: vite)"), "{s}");
+    let build = s.lines().find(|l| l.contains("build")).expect(&s);
+    assert!(
+        build.contains("run: vite build") && !build.contains("default"),
+        "{s}"
+    );
+}
+
+#[test]
+fn bare_tsr_runs_the_default_task_with_passthrough() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\ndefault = \"hello\"\n[tasks.hello]\nrun = \"echo hi\"\n",
+    );
+    let out = tsr(&ws, &[]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "hi");
+
+    let out = tsr(&ws, &["--", "there"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "hi there");
+}
+
+#[test]
+fn bare_tsr_without_a_default_says_how_to_set_one() {
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.hello]\nrun = \"echo hi\"\n");
+    let out = tsr(&ws, &[]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(stderr(&out).contains("[workspace]"), "{}", stderr(&out));
+
+    // Configless, there is nowhere to set one: the usage text instead.
+    let ws = workspace();
+    write(&ws, "package.json", "{}");
+    let out = tsr(&ws, &[]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no task specified"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_default_naming_no_task_suggests_one() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\ndefault = \"hellp\"\n[tasks.hello]\nrun = \"echo hi\"\n",
+    );
+    let out = tsr(&ws, &[]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("did you mean 'hello'?"),
+        "{}",
+        stderr(&out)
+    );
+    // The rest of the config stays usable.
+    assert_eq!(code(&tsr(&ws, &["hello"])), 0);
+}
+
+#[test]
+fn desc_must_be_a_string() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.a]\ndesc = 3\nrun = \"echo hi\"\n",
+    );
+    let out = tsr(&ws, &["a"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("'desc' must be a string"),
+        "{}",
+        stderr(&out)
+    );
+}

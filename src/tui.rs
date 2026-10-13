@@ -29,18 +29,19 @@ use crate::resolve::{self, Invocation};
 
 // Form field indices (fixed order).
 const F_NAME: usize = 0;
-const F_TYPE: usize = 1;
-const F_RUN: usize = 2;
-const F_DBIN: usize = 3;
-const F_DARGS: usize = 4;
-const F_LOC: usize = 5;
-const F_DIR: usize = 6;
-const F_PKGS: usize = 7;
-const F_DEPS: usize = 8;
-const F_ARGS: usize = 9;
-const F_PARALLEL: usize = 10;
-const F_ENV: usize = 11;
-const F_ENV_FILE: usize = 12;
+const F_DESC: usize = 1;
+const F_TYPE: usize = 2;
+const F_RUN: usize = 3;
+const F_DBIN: usize = 4;
+const F_DARGS: usize = 5;
+const F_LOC: usize = 6;
+const F_DIR: usize = 7;
+const F_PKGS: usize = 8;
+const F_DEPS: usize = 9;
+const F_ARGS: usize = 10;
+const F_PARALLEL: usize = 11;
+const F_ENV: usize = 12;
+const F_ENV_FILE: usize = 13;
 
 const ACCENT: Color = Color::Green;
 
@@ -820,6 +821,7 @@ fn value_style(active: bool, focused: bool) -> Style {
 /// A per-field hint shown only when it clarifies the format.
 fn field_hint(i: usize) -> Option<&'static str> {
     match i {
+        F_DESC => Some("one line, shown by tsr --list"),
         F_DARGS | F_ARGS => Some("space-separated"),
         F_PKGS | F_DEPS => Some("comma-separated"),
         F_ENV => Some("KEY=VALUE, comma-separated"),
@@ -860,6 +862,7 @@ impl FormState {
         };
         vec![
             t("name"),
+            t("description"),
             Field {
                 label: "type",
                 kind: FieldKind::Choice {
@@ -921,6 +924,9 @@ impl FormState {
             return form;
         };
 
+        if let Some(desc) = t.get("desc").and_then(Item::as_str) {
+            form.set_text(F_DESC, desc);
+        }
         if let Some(run) = t.get("run").and_then(Item::as_str) {
             form.set_choice(F_TYPE, 0);
             form.set_text(F_RUN, run);
@@ -1186,6 +1192,10 @@ fn build_task_table(form: &FormState) -> std::result::Result<(String, Table), St
     config::validate_task_name(&name).map_err(|e| strip_banner(&e))?;
 
     let mut t = Table::new();
+    let desc = form.text(F_DESC).trim();
+    if !desc.is_empty() {
+        t.insert("desc", str_item(desc));
+    }
     match form.choice(F_TYPE) {
         0 => {
             let run = form.text(F_RUN).trim();
@@ -1555,6 +1565,29 @@ mod tests {
         assert!(a < b && b < c, "editing must not move the task:\n{s}");
         assert!(s.contains("run = \"b-edited\""), "{s}");
         assert!(s.contains("# keep me"), "the task's comment was lost:\n{s}");
+    }
+
+    #[test]
+    fn description_round_trips_through_the_form() {
+        let mut doc = DocumentMut::new();
+        let f = form_with(
+            &[
+                (F_NAME, "dev"),
+                (F_DESC, "Start the dev server"),
+                (F_RUN, "vite"),
+            ],
+            &[(F_TYPE, 0)],
+        );
+        apply_form(&mut doc, &f).unwrap();
+        let s = doc.to_string();
+        assert!(s.contains("desc = \"Start the dev server\""), "{s}");
+        let back = FormState::from_doc(&doc, "dev");
+        assert_eq!(back.text(F_DESC), "Start the dev server");
+        // Clearing the field removes the key.
+        let mut cleared = back;
+        cleared.set_text(F_DESC, "");
+        apply_form(&mut doc, &cleared).unwrap();
+        assert!(!doc.to_string().contains("desc"), "{doc}");
     }
 
     #[test]
