@@ -658,7 +658,8 @@ impl<'a> Ctx<'a> {
             v
         };
 
-        let invocation = resolve::resolve(task, dir).map_err(|e| strip_error(&e))?;
+        let invocation =
+            resolve::resolve(task, dir, &self.cfg.root).map_err(|e| strip_error(&e))?;
         // Built before expansion, from the same values the action is built from,
         // so the preview can never drift from what will actually run.
         let preview = match &invocation {

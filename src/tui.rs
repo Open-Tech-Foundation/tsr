@@ -725,7 +725,7 @@ fn dry_run(cfg: &config::Config, task: &config::Task) -> String {
         Some(d) => cfg.root.join(d),
         None => cfg.root.clone(),
     };
-    let base = match resolve::resolve(task, &dir) {
+    let base = match resolve::resolve(task, &dir, &cfg.root) {
         Ok(Invocation::Direct { program, args }) => std::iter::once(program)
             .chain(args)
             .collect::<Vec<_>>()

@@ -337,6 +337,8 @@ fn ecosystem_label(eco: crate::detect::Ecosystem) -> &'static str {
     match eco {
         Npm => "an npm package (package.json)",
         Bun => "a bun package (package.json + bun lockfile)",
+        Pnpm => "a pnpm package (package.json + pnpm-lock.yaml)",
+        Yarn => "a yarn package (package.json + yarn.lock)",
         Cargo => "a Cargo crate (Cargo.toml)",
         Go => "a Go module (go.mod)",
         Python => "a Python project (pyproject.toml)",

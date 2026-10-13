@@ -16,7 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transpositions count as one, case is ignored), so an unrelated name gets no
   suggestion.
 
+- **pnpm and yarn auto-detection.** A `package.json` next to `pnpm-lock.yaml`
+  or `yarn.lock` now runs `pnpm run <task>` / `yarn run <task>`. Before, it ran
+  `npm run <task>`, which can behave differently in a real workspace.
+
 ### Fixed
+
+- Auto-detect (Node monorepos): a workspace member was matched to its runner
+  using only the lockfiles in its own directory. A bun monorepo keeps its
+  lockfile at the root, so its members ran under npm. The lookup now walks from
+  the package up to the workspace root, never past it, and the nearest lockfile
+  wins.
 
 - Auto-detect (Go): `tsr run` mapped to a bare `go run`, which lists no files
   and always fails. It now runs `go run .`, with passthrough after the package

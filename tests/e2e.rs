@@ -629,6 +629,53 @@ fn configless_walks_up_to_the_nearest_package() {
 }
 
 #[test]
+fn configless_pnpm_and_yarn_run_their_own_runner() {
+    // A pnpm or yarn lockfile picks that runner, not npm.
+    for (lock, runner) in [("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn")] {
+        let ws = workspace();
+        let bin = ws.join("shims");
+        fs::create_dir_all(&bin).unwrap();
+        shim(&bin, runner);
+        shim(&bin, "npm");
+        write(&ws, "package.json", "{}");
+        write(&ws, lock, "");
+        let out = tsr_with_path(&ws, &["hello"], &bin);
+        assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("INVOKED {runner} run hello")),
+            "{lock}: {}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
+fn pnpm_workspace_members_use_the_root_lockfile() {
+    // Members of a pnpm monorepo carry no lockfile of their own; the one at the
+    // workspace root decides their runner.
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "pnpm");
+    shim(&bin, "npm");
+    write(&ws, "pnpm-lock.yaml", "");
+    write(&ws, "apps/web/package.json", "{\"name\":\"web\"}");
+    write(
+        &ws,
+        "tasks.toml",
+        "[workspace]\nmembers = [\"apps/*\"]\n[tasks.build]\npackages = [\"apps/*\"]\n",
+    );
+    let out = tsr_with_path(&ws, &["build"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED pnpm run build"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!stdout(&out).contains("INVOKED npm"), "{}", stdout(&out));
+}
+
+#[test]
 fn configless_go_run_names_the_current_package() {
     // A bare `go run` lists no files and always fails, so the Go `run` task maps
     // to `go run .`; passthrough lands after the package, as program args.

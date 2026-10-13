@@ -417,14 +417,14 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 
 ## 9. Detection layer
 
-- **v1** — detect each package's **ecosystem** (via marker files: `package.json` → npm/bun, `Cargo.toml` → cargo, `go.mod` → go, `pyproject.toml` → uv/poetry) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
+- **v1** — detect each package's **ecosystem** (via marker files: `package.json` → npm/bun/pnpm/yarn, chosen by the nearest lockfile — `bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json` — between the package and the workspace root, defaulting to npm; `Cargo.toml` → cargo, `go.mod` → go, `pyproject.toml` → uv/poetry) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
 - **v1.1** — additionally read **dependency edges** from each manifest to build the package dependency graph that `^task`, affected-detection, and cross-package ordering require.
 
 One rule spans every ecosystem: an edge exists exactly when a **declared dependency name matches another workspace package's manifest name**. Version specifiers and protocols are never inspected, so `workspace:*`, `path = "../ui"`, `replace` directives and plain ranges all resolve identically, and external registry dependencies drop out because nothing matches them.
 
 | Ecosystem | Dependency fields read |
 |-----------|------------------------|
-| npm / bun | `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
+| npm / bun / pnpm / yarn | `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
 | cargo | `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, the same three under any `[target.<cfg>]`, following `package = "…"` renames and resolving `{ workspace = true }` against the workspace root |
 | go | `require` and `replace`, single-line and block form |
 | python | PEP 621 `[project]` + optional groups, PEP 735 `[dependency-groups]`, Poetry's tables |

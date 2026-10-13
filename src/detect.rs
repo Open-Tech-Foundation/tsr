@@ -8,10 +8,14 @@ use std::path::Path;
 /// A package ecosystem, identified by its marker manifest file (SPEC §9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ecosystem {
-    /// `package.json` present, no bun lockfile.
+    /// `package.json` present, no other package manager's lockfile.
     Npm,
-    /// `package.json` present alongside a bun lockfile.
+    /// `package.json` governed by a bun lockfile (`bun.lock` / `bun.lockb`).
     Bun,
+    /// `package.json` governed by `pnpm-lock.yaml`.
+    Pnpm,
+    /// `package.json` governed by `yarn.lock`.
+    Yarn,
     /// `Cargo.toml` present.
     Cargo,
     /// `go.mod` present.
@@ -24,7 +28,7 @@ impl Ecosystem {
     /// Map a bare task name to `(program, args)` for this ecosystem's native
     /// runner, convention-based (SPEC §3.1):
     ///
-    /// - npm/bun → `npm run <task>` / `bun run <task>`
+    /// - npm/bun/pnpm/yarn → `<runner> run <task>`
     /// - cargo   → `cargo <task>`   (`test`/`build`/`run` are native subcommands)
     /// - go      → `go <task>`, except `run` → `go run .` (a bare `go run`
     ///   names no package and always fails; `build`/`test` default to `.`)
@@ -33,6 +37,8 @@ impl Ecosystem {
         match self {
             Ecosystem::Npm => ("npm".into(), vec!["run".into(), task.into()]),
             Ecosystem::Bun => ("bun".into(), vec!["run".into(), task.into()]),
+            Ecosystem::Pnpm => ("pnpm".into(), vec!["run".into(), task.into()]),
+            Ecosystem::Yarn => ("yarn".into(), vec!["run".into(), task.into()]),
             Ecosystem::Cargo => ("cargo".into(), vec![task.into()]),
             Ecosystem::Go if task == "run" => ("go".into(), vec!["run".into(), ".".into()]),
             Ecosystem::Go => ("go".into(), vec![task.into()]),
@@ -42,15 +48,23 @@ impl Ecosystem {
 }
 
 /// Detect the ecosystem of the package rooted at `dir` by probing for marker
-/// files. Node is checked first, disambiguating npm vs bun by lockfile.
+/// files, looking for a Node lockfile in `dir` alone. Use [`detect_within`]
+/// when the package sits inside a workspace whose lockfile is at the root.
 ///
 /// Returns `None` when no recognised marker is present.
 pub fn detect(dir: &Path) -> Option<Ecosystem> {
+    detect_within(dir, dir)
+}
+
+/// Detect the ecosystem of the package rooted at `dir`, a directory at or
+/// below the workspace `root`. Node is checked first; which Node runner owns it
+/// is decided by the nearest lockfile between `dir` and `root` inclusive, since
+/// a pnpm/yarn/bun monorepo keeps one lockfile at the root, not one per member.
+///
+/// Returns `None` when no recognised marker is present.
+pub fn detect_within(dir: &Path, root: &Path) -> Option<Ecosystem> {
     if dir.join("package.json").is_file() {
-        if dir.join("bun.lockb").is_file() || dir.join("bun.lock").is_file() {
-            return Some(Ecosystem::Bun);
-        }
-        return Some(Ecosystem::Npm);
+        return Some(node_runner(dir, root));
     }
     if dir.join("Cargo.toml").is_file() {
         return Some(Ecosystem::Cargo);
@@ -64,12 +78,43 @@ pub fn detect(dir: &Path) -> Option<Ecosystem> {
     None
 }
 
+/// The Node runner for a package at `dir`: the owner of the nearest lockfile
+/// walking up to `root`, or npm when there is none.
+///
+/// The walk never leaves `root` (SPEC §12.3) — a stray `yarn.lock` in a home
+/// directory must not switch the runner for every project beneath it. A `dir`
+/// outside `root` is probed on its own. A `package-lock.json` is a lockfile
+/// too: a member that keeps its own stays npm even in a pnpm workspace.
+fn node_runner(dir: &Path, root: &Path) -> Ecosystem {
+    const LOCKFILES: [(&str, Ecosystem); 5] = [
+        ("bun.lock", Ecosystem::Bun),
+        ("bun.lockb", Ecosystem::Bun),
+        ("pnpm-lock.yaml", Ecosystem::Pnpm),
+        ("yarn.lock", Ecosystem::Yarn),
+        ("package-lock.json", Ecosystem::Npm),
+    ];
+    let bound = if dir.starts_with(root) { root } else { dir };
+    for d in dir.ancestors() {
+        for (file, eco) in LOCKFILES {
+            if d.join(file).is_file() {
+                return eco;
+            }
+        }
+        if d == bound {
+            break;
+        }
+    }
+    Ecosystem::Npm
+}
+
 /// Read the package's manifest name, so `packages` can match against declared
 /// names (e.g. `@scope/pkg`), not only path globs (SPEC §9.1). Returns `None`
 /// when the manifest is unreadable or declares no name.
 pub fn manifest_name(dir: &Path, eco: Ecosystem) -> Option<String> {
     match eco {
-        Ecosystem::Npm | Ecosystem::Bun => json_name(&dir.join("package.json")),
+        Ecosystem::Npm | Ecosystem::Bun | Ecosystem::Pnpm | Ecosystem::Yarn => {
+            json_name(&dir.join("package.json"))
+        }
         Ecosystem::Cargo => toml_name(&dir.join("Cargo.toml"), &["package"]),
         Ecosystem::Python => toml_name(&dir.join("pyproject.toml"), &["project"])
             .or_else(|| toml_name(&dir.join("pyproject.toml"), &["tool", "poetry"])),
@@ -94,7 +139,9 @@ pub fn manifest_name(dir: &Path, eco: Ecosystem) -> Option<String> {
 /// needs; reformatting a manifest never reorders a fan-out.
 pub fn manifest_deps(dir: &Path, eco: Ecosystem) -> Vec<String> {
     match eco {
-        Ecosystem::Npm | Ecosystem::Bun => json_deps(&dir.join("package.json")),
+        Ecosystem::Npm | Ecosystem::Bun | Ecosystem::Pnpm | Ecosystem::Yarn => {
+            json_deps(&dir.join("package.json"))
+        }
         Ecosystem::Cargo => cargo_deps(&dir.join("Cargo.toml")),
         Ecosystem::Python => python_deps(&dir.join("pyproject.toml")),
         Ecosystem::Go => go_deps(&dir.join("go.mod")),
@@ -399,6 +446,57 @@ mod tests {
     }
 
     #[test]
+    fn detects_pnpm_and_yarn_by_lockfile() {
+        let d = scratch();
+        fs::write(d.join("package.json"), "{}").unwrap();
+        fs::write(d.join("pnpm-lock.yaml"), "").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Pnpm));
+
+        let d = scratch();
+        fs::write(d.join("package.json"), "{}").unwrap();
+        fs::write(d.join("yarn.lock"), "").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Yarn));
+
+        let d = scratch();
+        fs::write(d.join("package.json"), "{}").unwrap();
+        fs::write(d.join("package-lock.json"), "{}").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Npm));
+    }
+
+    #[test]
+    fn member_inherits_the_workspace_root_lockfile() {
+        let root = scratch();
+        fs::write(root.join("pnpm-lock.yaml"), "").unwrap();
+        let web = root.join("apps/web");
+        fs::create_dir_all(&web).unwrap();
+        fs::write(web.join("package.json"), "{}").unwrap();
+        assert_eq!(detect_within(&web, &root), Some(Ecosystem::Pnpm));
+        // Probed alone, the member has no lockfile of its own.
+        assert_eq!(detect(&web), Some(Ecosystem::Npm));
+
+        // The nearest lockfile wins: a member's own package-lock keeps it npm.
+        fs::write(web.join("package-lock.json"), "{}").unwrap();
+        assert_eq!(detect_within(&web, &root), Some(Ecosystem::Npm));
+    }
+
+    #[test]
+    fn lockfile_walk_stops_at_the_root() {
+        // A lockfile *above* the workspace root is ignored.
+        let outer = scratch();
+        fs::write(outer.join("yarn.lock"), "").unwrap();
+        let root = outer.join("ws");
+        let pkg = root.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("package.json"), "{}").unwrap();
+        assert_eq!(detect_within(&pkg, &root), Some(Ecosystem::Npm));
+        // A dir outside the root is probed on its own, never walked.
+        let elsewhere = outer.join("other");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("package.json"), "{}").unwrap();
+        assert_eq!(detect_within(&elsewhere, &root), Some(Ecosystem::Npm));
+    }
+
+    #[test]
     fn detects_cargo_go_python() {
         let d = scratch();
         fs::write(d.join("Cargo.toml"), "").unwrap();
@@ -605,6 +703,14 @@ mod tests {
         assert_eq!(
             Ecosystem::Npm.native_command("test"),
             ("npm".into(), vec!["run".into(), "test".into()])
+        );
+        assert_eq!(
+            Ecosystem::Pnpm.native_command("dev"),
+            ("pnpm".into(), vec!["run".into(), "dev".into()])
+        );
+        assert_eq!(
+            Ecosystem::Yarn.native_command("dev"),
+            ("yarn".into(), vec!["run".into(), "dev".into()])
         );
         assert_eq!(
             Ecosystem::Cargo.native_command("test"),

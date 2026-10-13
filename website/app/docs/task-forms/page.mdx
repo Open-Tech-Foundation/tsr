@@ -66,10 +66,16 @@ marker file and maps the task name to that ecosystem's native runner:
 | Marker file | Ecosystem | `tsr test` runs |
 |-------------|-----------|-----------------|
 | `package.json` (+ bun lockfile) | bun | `bun run test` |
+| `package.json` (+ `pnpm-lock.yaml`) | pnpm | `pnpm run test` |
+| `package.json` (+ `yarn.lock`) | yarn | `yarn run test` |
 | `package.json` | npm | `npm run test` |
 | `Cargo.toml` | cargo | `cargo test` |
 | `go.mod` | go | `go test` |
 | `pyproject.toml` | uv | `uv run test` |
+
+For a Node package, the nearest lockfile between the package and the workspace
+root decides the runner. A monorepo keeps one lockfile at its root, so every
+member runs under it.
 
 One exception: for Go, `tsr run` runs `go run .`, since a bare `go run` names no
 package and always fails.

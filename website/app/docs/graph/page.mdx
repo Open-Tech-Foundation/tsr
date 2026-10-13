@@ -52,7 +52,7 @@ deps = ["^build"]            # every dependency builds first
 
 An edge exists when a declared dependency name matches another workspace
 package's manifest name — so `workspace:*`, `path = "../ui"`, `replace`
-directives and plain version ranges all work the same way, across npm/bun,
+directives and plain version ranges all work the same way, across npm/bun/pnpm/yarn,
 cargo, go and python.
 
 ## Affected detection (`--since`)

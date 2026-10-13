@@ -23,8 +23,9 @@ pub enum Invocation {
 }
 
 /// Resolve `task`'s form into an [`Invocation`], detecting the ecosystem in
-/// `dir` when the task has neither `delegate` nor `run` (form 3).
-pub fn resolve(task: &Task, dir: &Path) -> Result<Invocation> {
+/// `dir` when the task has neither `delegate` nor `run` (form 3). `root` is the
+/// workspace root, which bounds the search for a Node lockfile.
+pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
     // Precedence 1: delegate.
     if let Some(delegate) = &task.delegate {
         return Ok(match delegate {
@@ -45,7 +46,7 @@ pub fn resolve(task: &Task, dir: &Path) -> Result<Invocation> {
     }
 
     // Precedence 3: auto-detect ecosystem → native runner.
-    let eco = detect::detect(dir).ok_or_else(|| {
+    let eco = detect::detect_within(dir, root).ok_or_else(|| {
         TsrError::runtime(format!(
             "task '{}': no recognised ecosystem in '{}' \
              (expected one of package.json, Cargo.toml, go.mod, pyproject.toml) \
@@ -86,7 +87,7 @@ mod tests {
         let mut t = task("build");
         t.delegate = Some(Delegate::Bin("turbo".into()));
         assert_eq!(
-            resolve(&t, &scratch()).unwrap(),
+            resolve(&t, &scratch(), &std::env::temp_dir()).unwrap(),
             Invocation::Direct {
                 program: "turbo".into(),
                 args: vec!["run".into(), "build".into()],
@@ -98,7 +99,9 @@ mod tests {
     fn delegate_string_uses_task_name_not_full_key() {
         let mut t = task("web#build");
         t.delegate = Some(Delegate::Bin("turbo".into()));
-        let Invocation::Direct { args, .. } = resolve(&t, &scratch()).unwrap() else {
+        let Invocation::Direct { args, .. } =
+            resolve(&t, &scratch(), &std::env::temp_dir()).unwrap()
+        else {
             panic!();
         };
         assert_eq!(args, vec!["run", "build"]);
@@ -112,7 +115,7 @@ mod tests {
             args: vec!["bundle".into()],
         });
         assert_eq!(
-            resolve(&t, &scratch()).unwrap(),
+            resolve(&t, &scratch(), &std::env::temp_dir()).unwrap(),
             Invocation::Direct {
                 program: "make".into(),
                 args: vec!["bundle".into()],
@@ -126,7 +129,7 @@ mod tests {
         fs::write(d.join("Cargo.toml"), "").unwrap();
         let mut t = task("dev");
         t.run = Some("vite".into());
-        assert_eq!(resolve(&t, &d).unwrap(), Invocation::Run("vite".into()));
+        assert_eq!(resolve(&t, &d, &d).unwrap(), Invocation::Run("vite".into()));
     }
 
     #[test]
@@ -134,7 +137,9 @@ mod tests {
         let mut t = task("build");
         t.run = Some("should-not-run".into());
         t.delegate = Some(Delegate::Bin("turbo".into()));
-        let Invocation::Direct { program, .. } = resolve(&t, &scratch()).unwrap() else {
+        let Invocation::Direct { program, .. } =
+            resolve(&t, &scratch(), &std::env::temp_dir()).unwrap()
+        else {
             panic!();
         };
         assert_eq!(program, "turbo");
@@ -145,7 +150,7 @@ mod tests {
         let d = scratch();
         fs::write(d.join("Cargo.toml"), "").unwrap();
         assert_eq!(
-            resolve(&task("test"), &d).unwrap(),
+            resolve(&task("test"), &d, &d).unwrap(),
             Invocation::Direct {
                 program: "cargo".into(),
                 args: vec!["test".into()],
@@ -154,8 +159,25 @@ mod tests {
     }
 
     #[test]
+    fn autodetect_uses_the_workspace_root_lockfile() {
+        // A pnpm monorepo keeps one lockfile at the root; the member runs pnpm.
+        let root = scratch();
+        fs::write(root.join("pnpm-lock.yaml"), "").unwrap();
+        let web = root.join("apps/web");
+        fs::create_dir_all(&web).unwrap();
+        fs::write(web.join("package.json"), "{}").unwrap();
+        assert_eq!(
+            resolve(&task("dev"), &web, &root).unwrap(),
+            Invocation::Direct {
+                program: "pnpm".into(),
+                args: vec!["run".into(), "dev".into()],
+            }
+        );
+    }
+
+    #[test]
     fn autodetect_failure_is_runtime_error() {
-        let err = resolve(&task("test"), &scratch()).unwrap_err();
+        let err = resolve(&task("test"), &scratch(), &std::env::temp_dir()).unwrap_err();
         assert!(matches!(err, TsrError::Runtime(_)));
         assert_eq!(err.exit_code(), 64);
     }

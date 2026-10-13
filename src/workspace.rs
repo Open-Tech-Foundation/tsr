@@ -41,7 +41,7 @@ pub fn packages(cfg: &Config) -> Vec<Package> {
             if !entry.is_dir() {
                 continue;
             }
-            let Some(eco) = detect::detect(&entry) else {
+            let Some(eco) = detect::detect_within(&entry, &cfg.root) else {
                 continue;
             };
             let rel = rel_to_slash(&cfg.root, &entry);
