@@ -563,6 +563,8 @@ The arrival of the dependency graph *is* what defines v1.1 as "the monorepo rele
 
 Content-hash caching, remote caching, and inputs/outputs tracking are **never** implemented in `tsr` — they are ceded to delegated backends (Turbo, Nx). Adding them would contradict the "lightweight, delegate" principle.
 
+**File watching** is likewise out of scope. Re-running on change needs a filesystem watcher, debouncing and ignore rules, and dedicated tools already do it well. Compose instead: `watchexec -- tsr test`, or forward the underlying tool's own flag (`tsr test -- --watch`).
+
 ---
 
 ## 12. Security model

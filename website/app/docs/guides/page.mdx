@@ -216,6 +216,23 @@ The task name is passed through, so `tsr build` becomes `turbo run build` and
 Turbo's cache does its job. See [task forms](/docs/task-forms) for the `delegate`
 table form and how precedence works.
 
+## Re-run on file changes
+
+`tsr` doesn't watch files, and that's deliberate: a file watcher is a separate
+tool's job. Most dev tools have their own watch mode, so forward their flag:
+
+```sh
+tsr test -- --watch        # vitest / jest watch mode
+```
+
+For anything else, wrap `tsr` in a watcher such as
+[watchexec](https://github.com/watchexec/watchexec):
+
+```sh
+watchexec -e rs,toml -- tsr test
+watchexec -w src -- tsr build --filter web
+```
+
 ## Author tasks interactively
 
 Instead of hand-editing TOML, open the terminal UI:

@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Docs: a new "Re-run on file changes" guide shows how to compose `tsr` with
+  a watcher (`watchexec -- tsr test`) or forward a tool's own `--watch`. The
+  SPEC now lists file watching as out of scope, next to caching.
+
 - **One broken task no longer blocks unrelated ones.** One invalid task, such
   as a `run` with a pipe, used to fail every command with exit `64`, including
   `--list` and tasks that had nothing to do with it.
