@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fifteen more ecosystems auto-detected.** A bare task now maps to the
+  native tool for:
+  - JVM: Gradle (`./gradlew`, or `gradle` without a wrapper), Maven (`./mvnw`
+    or `mvn`) and sbt. The wrapper is looked for up to the workspace root.
+  - Ruby: `bundle exec rake`, or `rake` without a Gemfile.
+  - PHP: `composer run`.
+  - .NET (`dotnet`), Dart and Flutter, Elixir (`mix`), Swift, and Zig (`zig
+    build <step>`).
+  - Haskell: Stack and Cabal.
+  - Terraform, and Docker Compose (`docker compose <task>`).
+
+  Configless `--list` shows composer scripts and Rakefile tasks, and for
+  command-style tools it explains that any of the tool's commands works. Names
+  are read from each manifest where there is one, so `packages`/`--filter` can
+  match them.
+
+- **Build systems without a task convention are recognised.** CMake, Meson,
+  Bazel, a bare `Dockerfile`, R, Julia and Perl projects used to get "no
+  marker found". The error now names the tool and suggests a `run` line to
+  start a `tasks.toml` from.
+
 - **Shell completion.** `tsr --completions bash|zsh|fish` prints a script that
   completes flags, option values and task names. Names are fetched at
   completion time from a new `tsr --list-names`, so they follow whichever

@@ -73,7 +73,49 @@ marker file and maps the task name to that ecosystem's native runner:
 | `Cargo.toml` | cargo | `cargo test` |
 | `go.mod` | go | `go test` |
 | `pyproject.toml` | uv | `uv run test`, only if `test` is a `.py` file or a `[project.scripts]` entry |
+| `build.gradle(.kts)` / `settings.gradle(.kts)` | Gradle | `./gradlew test`, or `gradle test` without a wrapper |
+| `pom.xml` | Maven | `./mvnw test`, or `mvn test` without a wrapper |
+| `build.sbt` | sbt | `sbt test` |
+| `mix.exs` | Elixir | `mix test` |
+| `composer.json` | PHP | `composer run test` |
+| `Rakefile` / `Gemfile` | Ruby | `bundle exec rake test` (`rake test` without a Gemfile) |
+| `*.sln` / `*.csproj` / `*.fsproj` | .NET | `dotnet test` |
+| `pubspec.yaml` | Dart / Flutter | `dart test`, or `flutter test` for a Flutter project |
+| `Package.swift` | Swift | `swift test` |
+| `build.zig` | Zig | `zig build test` |
+| `stack.yaml` | Stack | `stack test` |
+| `*.cabal` / `cabal.project` | Cabal | `cabal test` |
+| `compose.yaml` / `docker-compose.yml` | Compose | `docker compose test` (think `tsr up`, `tsr down`) |
+| `*.tf` | Terraform | `terraform test` (think `tsr plan`, `tsr apply`) |
 | `Makefile` (and nothing else above) | make | `make test` |
+
+The table is also the order of precedence. In a directory with several markers,
+the first row that matches wins, so a Rails or Laravel app with a root
+`package.json` runs npm scripts. Give a mixed repo a `tasks.toml` to say which
+tool each task means.
+
+Gradle and Maven use the project's wrapper (`gradlew`, `mvnw`) when there is
+one, looking from the package up to the workspace root, which is where a
+multi-project build keeps it. A Ruby project with no `Rakefile` has no task to
+map onto, so a bare task is an error that suggests a `run` line instead.
+
+### Recognised, but not auto-detected
+
+Some build systems and languages have no `<tool> <task-name>` convention to map
+onto: CMake (`CMakeLists.txt`), Meson (`meson.build`), Bazel (`MODULE.bazel`,
+`WORKSPACE`), a bare `Dockerfile`, R (`DESCRIPTION`), Julia (`Project.toml`) and
+Perl (`cpanfile`, `Makefile.PL`). `tsr` recognises them, and instead of
+reporting that nothing was found, its error names the tool and gives a `run`
+line to start a `tasks.toml` from:
+
+```text
+✗ config error: found CMakeLists.txt in '/work/engine' — CMake has no task-name
+convention for `tsr build` to map onto, so give it a task in tasks.toml
+(`tsr --init` creates one), e.g.
+
+  [tasks.build]
+  run = "cmake -B build && cmake --build build"
+```
 
 For a Node package, the nearest lockfile between the package and the workspace
 root decides the runner. A monorepo keeps one lockfile at its root, so every

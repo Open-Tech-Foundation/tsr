@@ -43,7 +43,7 @@ NODE_ENV = "development"
 
 ### 2.1 Configless mode
 
-`tasks.toml` is **optional**. When none is found (walking up from the current directory), `tsr <task>` still runs repo-aware by treating `<task>` as a bare form-3 auto-detect task (§3.1) anchored at the nearest directory holding an ecosystem marker (`package.json`, `deno.json`/`deno.jsonc`, `Cargo.toml`, `go.mod`, `pyproject.toml`, or a `Makefile`). So in a plain npm repo, `tsr dev` runs `npm run dev`; in a Cargo crate, `tsr build` runs `cargo build` — no config to write.
+`tasks.toml` is **optional**. When none is found (walking up from the current directory), `tsr <task>` still runs repo-aware by treating `<task>` as a bare form-3 auto-detect task (§3.1) anchored at the nearest directory holding an ecosystem marker (§9 lists them all). So in a plain npm repo, `tsr dev` runs `npm run dev`; in a Cargo crate, `tsr build` runs `cargo build` — no config to write.
 
 - Argument passthrough (§6) works as usual: `tsr test -- --watch`.
 - Package-qualified names (`web#build`) and the dependency graph require a `tasks.toml`; configless mode is single-task only.
@@ -464,7 +464,34 @@ delegate = { bin = "bash", args = ["-c", "set -o pipefail; cat x | grep y > z"] 
 
 ## 9. Detection layer
 
-- **v1** — detect each package's **ecosystem** (via marker files: `package.json` → npm/bun/pnpm/yarn, chosen by the nearest lockfile — `bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json` — between the package and the workspace root, defaulting to npm; `Cargo.toml` → cargo, `go.mod` → go, `pyproject.toml` → uv/poetry, `deno.json`/`deno.jsonc` → deno (checked before `package.json`), and — only when nothing else matches — a `Makefile` → make) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
+- **v1** — detect each package's **ecosystem** from its marker files (the table below) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
+
+  | Order | Marker | Ecosystem | `tsr <task>` runs | Manifest name read from |
+  |------:|--------|-----------|-------------------|-------------------------|
+  | 1 | `deno.json` / `deno.jsonc` | deno | `deno task <task>` | `name` |
+  | 2 | `package.json` | npm / bun / pnpm / yarn — the nearest lockfile (`bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`) between the package and the workspace root, default npm | `<runner> run <task>` | `name` |
+  | 3 | `Cargo.toml` | cargo | `cargo <task>` | `[package] name` |
+  | 4 | `go.mod` | go | `go <task>` (`run` → `go run .`) | `module` |
+  | 5 | `pyproject.toml` | uv | `uv run <task>`, `.py` files and declared scripts only | `[project] name` |
+  | 6 | `build.gradle(.kts)` / `settings.gradle(.kts)` | Gradle | `gradlew <task>` (nearest wrapper up to the root), else `gradle <task>` | — |
+  | 7 | `pom.xml` | Maven | `mvnw <task>`, else `mvn <task>` | own `<artifactId>` |
+  | 8 | `build.sbt` | sbt | `sbt <task>` | `name :=` |
+  | 9 | `mix.exs` | Elixir | `mix <task>` | `app:` |
+  | 10 | `composer.json` | PHP | `composer run <task>` | `name` |
+  | 11 | `Rakefile` / `Gemfile` | Ruby | `bundle exec rake <task>` (`rake <task>` without a Gemfile); no `Rakefile` → runner error | — |
+  | 12 | `*.sln` / `*.csproj` / `*.fsproj` / `*.vbproj` | .NET | `dotnet <task>` | project file stem |
+  | 13 | `pubspec.yaml` | Dart, or Flutter when it depends on `sdk: flutter` | `dart <task>` / `flutter <task>` | `name:` |
+  | 14 | `Package.swift` | Swift | `swift <task>` | `name:` |
+  | 15 | `build.zig` | Zig | `zig build <task>` | — |
+  | 16 | `stack.yaml` | Stack | `stack <task>` | `.cabal` `name:` |
+  | 17 | `*.cabal` / `cabal.project` | Cabal | `cabal <task>` | `.cabal` `name:` |
+  | 18 | `compose.yaml` / `compose.yml` / `docker-compose.y(a)ml` | Compose | `docker compose <task>` | — |
+  | 19 | `*.tf` | Terraform | `terraform <task>` | — |
+  | 20 | `Makefile` / `makefile` / `GNUmakefile` | make | `make <task>` | — |
+
+  The first matching row wins, so in a mixed directory (a Rails or Laravel app with a root `package.json`) the earlier marker decides; a `tasks.toml` is how to say otherwise. Workspace dependency edges (§9 v1.1) are read for rows 1–5; members of the others fan out unordered by the graph.
+
+  **Recognised but unmapped.** CMake (`CMakeLists.txt`), Meson (`meson.build`), Bazel (`MODULE.bazel`, `WORKSPACE.bazel`, `WORKSPACE`), Docker (`Dockerfile`), R (`DESCRIPTION`), Julia (`Project.toml`) and Perl (`cpanfile`, `Makefile.PL`) have no task-name convention. They are not ecosystems — they never anchor configless mode or become `packages` members — but when auto-detection finds nothing, the runner error (exit `64`) names the one it found and suggests a `run` line for `tasks.toml`.
 - **v1.1** — additionally read **dependency edges** from each manifest to build the package dependency graph that `^task`, affected-detection, and cross-package ordering require.
 
 One rule spans every ecosystem: an edge exists exactly when a **declared dependency name matches another workspace package's manifest name**. Version specifiers and protocols are never inspected, so `workspace:*`, `path = "../ui"`, `replace` directives and plain ranges all resolve identically, and external registry dependencies drop out because nothing matches them.

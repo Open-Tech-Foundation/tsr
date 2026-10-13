@@ -432,10 +432,24 @@ pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
 pub fn list_configless(cwd: &std::path::Path) {
     use crate::detect::{self, Ecosystem};
     let Some(root) = crate::config::nearest_package_root(cwd) else {
-        println!(
-            "No tasks.toml, and no package.json / deno.json / Cargo.toml / go.mod / \
-             pyproject.toml / Makefile here."
-        );
+        if let Some((dir, u)) = crate::config::nearest_unmapped(cwd) {
+            println!(
+                "No tasks.toml. Found {} ({}) at {}.",
+                u.marker,
+                u.tool,
+                dir.display()
+            );
+            println!(
+                "{} has no task-name convention to run by name, so define tasks in a",
+                u.tool
+            );
+            println!(
+                "tasks.toml (`tsr --init`), e.g.  run = \"{}\"",
+                u.example.replace('"', "\\\"")
+            );
+            return;
+        }
+        println!("No tasks.toml, and no project tsr recognises here.");
         println!("Run `tsr --init` to create a config, or cd into a package.");
         return;
     };
@@ -463,10 +477,17 @@ pub fn list_configless(cwd: &std::path::Path) {
         Some(_) if eco == Ecosystem::Make => {
             println!("The Makefile declares no targets tsr can name.")
         }
+        Some(_) if eco == Ecosystem::Composer => println!("composer.json declares no scripts."),
+        Some(_) if eco == Ecosystem::Ruby => {
+            println!("No Rakefile tasks found. Add a tasks.toml task for anything else,");
+            println!("e.g.  run = \"bundle exec rspec\".");
+        }
         Some(_) => println!("package.json declares no scripts."),
         None => {
-            let tool = if eco == Ecosystem::Go { "go" } else { "cargo" };
-            println!("Any {tool} subcommand runs as a task:  tsr build, tsr test, tsr run, …");
+            let (what, examples) = eco
+                .command_hint()
+                .unwrap_or(("Any subcommand", "tsr build, tsr test"));
+            println!("{what} runs as a task:  {examples}, …");
         }
     }
 }
@@ -483,6 +504,21 @@ fn ecosystem_label(eco: crate::detect::Ecosystem) -> &'static str {
         Go => "a Go module (go.mod)",
         Python => "a Python project (pyproject.toml)",
         Deno => "a Deno project (deno.json)",
+        Gradle => "a Gradle build (build.gradle)",
+        Maven => "a Maven project (pom.xml)",
+        Sbt => "an sbt project (build.sbt)",
+        Mix => "an Elixir project (mix.exs)",
+        Composer => "a PHP project (composer.json)",
+        Ruby => "a Ruby project (Rakefile / Gemfile)",
+        Dotnet => "a .NET project (.sln / .csproj)",
+        Dart => "a Dart package (pubspec.yaml)",
+        Flutter => "a Flutter project (pubspec.yaml)",
+        Swift => "a Swift package (Package.swift)",
+        Zig => "a Zig project (build.zig)",
+        Stack => "a Stack project (stack.yaml)",
+        Cabal => "a Cabal project (.cabal)",
+        Compose => "a Docker Compose project (compose.yaml)",
+        Terraform => "a Terraform configuration (*.tf)",
         Make => "a Makefile",
     }
 }

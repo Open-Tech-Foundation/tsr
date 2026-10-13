@@ -11,6 +11,7 @@ mod env;
 mod error;
 mod exec;
 mod graph;
+mod langs;
 mod path;
 mod pkggraph;
 mod proc;
@@ -234,6 +235,9 @@ fn implicit_config(cwd: &std::path::Path, task: &str) -> error::Result<Config> {
         )));
     }
     let root = config::nearest_package_root(cwd).ok_or_else(|| {
+        if let Some((dir, u)) = config::nearest_unmapped(cwd) {
+            return TsrError::config(u.explain(&dir, task));
+        }
         TsrError::config(format!(
             "no '{}' found in '{}' or any parent, and no package.json / deno.json / \
              Cargo.toml / go.mod / pyproject.toml / Makefile to detect a runner from — run `tsr --init` to \

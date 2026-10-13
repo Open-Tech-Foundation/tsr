@@ -91,8 +91,9 @@ Because `run = "vite"` has no shell metacharacters, `tsr` splits it and spawns
 </Callout>
 
 <Callout type="tip" title="No config? tsr still runs your scripts">
-  `tasks.toml` is optional. In a repo that only has a `package.json` (or
-  `deno.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a `Makefile`), `tsr dev` just runs `npm run dev` /
+  `tasks.toml` is optional. In a repo that only has a `package.json` (or a
+  `Cargo.toml`, `go.mod`, `pom.xml`, `Gemfile`, … — [the full
+  list](/docs/task-forms#form-3--auto-detect)), `tsr dev` just runs `npm run dev` /
   `cargo dev` / … by auto-detecting the ecosystem — no config to write. Add a
   `tasks.toml` when you want a dependency graph, monorepo fan-out, or `delegate`.
 </Callout>

@@ -52,6 +52,9 @@ pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
 
     // Precedence 3: auto-detect ecosystem → native runner.
     let eco = detect::detect_within(dir, root).ok_or_else(|| {
+        if let Some(u) = crate::langs::unmapped(dir) {
+            return TsrError::runtime(format!("task '{}': {}", task.key, u.explain(dir, task.task_name())));
+        }
         TsrError::runtime(format!(
             "task '{}': no recognised ecosystem in '{}' \
              (expected one of package.json, deno.json, Cargo.toml, go.mod, pyproject.toml, Makefile) \
@@ -69,7 +72,15 @@ pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
             name = task.task_name(),
         )));
     }
-    let (program, args) = eco.native_command(task.task_name());
+    if eco == detect::Ecosystem::Ruby && !crate::langs::has_any(dir, &crate::langs::RAKEFILES) {
+        return Err(TsrError::runtime(format!(
+            "task '{}': this Ruby project has no Rakefile for `rake {}` to run — add a \
+             Rakefile task, or give the task a command, e.g. `run = \"bundle exec rspec\"`",
+            task.key,
+            task.task_name(),
+        )));
+    }
+    let (program, args) = eco.native_command(task.task_name(), dir, root);
     Ok(Invocation::Direct { program, args })
 }
 

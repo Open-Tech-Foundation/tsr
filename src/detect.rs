@@ -25,6 +25,39 @@ pub enum Ecosystem {
     /// `deno.json` / `deno.jsonc` present. Checked before `package.json`: Deno
     /// reads `package.json` too, and `deno task` falls back to its scripts.
     Deno,
+    /// `build.gradle(.kts)` / `settings.gradle(.kts)`. Runs `./gradlew` when
+    /// the project has a wrapper.
+    Gradle,
+    /// `pom.xml`. Runs `./mvnw` when the project has a wrapper.
+    Maven,
+    /// `build.sbt` (Scala).
+    Sbt,
+    /// `mix.exs` (Elixir).
+    Mix,
+    /// `composer.json` (PHP).
+    Composer,
+    /// A `Rakefile` or `Gemfile` (Ruby). Tasks are rake tasks, through
+    /// `bundle exec` when there is a Gemfile.
+    Ruby,
+    /// A `.sln` / `.csproj` / `.fsproj` / `.vbproj`.
+    Dotnet,
+    /// `pubspec.yaml` without the Flutter SDK.
+    Dart,
+    /// `pubspec.yaml` depending on `sdk: flutter`.
+    Flutter,
+    /// `Package.swift`.
+    Swift,
+    /// `build.zig`. Tasks are build steps.
+    Zig,
+    /// `stack.yaml` (Haskell). Checked before Cabal: a Stack project has a
+    /// `.cabal` file too.
+    Stack,
+    /// A `.cabal` file or `cabal.project` (Haskell).
+    Cabal,
+    /// A Compose file (`compose.yaml`, `docker-compose.yml`, …).
+    Compose,
+    /// `*.tf` (Terraform / OpenTofu configuration).
+    Terraform,
     /// Only a `Makefile` (`makefile`, `GNUmakefile`). Checked last, so a Cargo
     /// or Go repo that also keeps a Makefile stays Cargo or Go.
     Make,
@@ -38,29 +71,93 @@ const DENO_CONFIGS: [&str; 2] = ["deno.json", "deno.jsonc"];
 
 impl Ecosystem {
     /// Map a bare task name to `(program, args)` for this ecosystem's native
-    /// runner, convention-based (SPEC §3.1):
+    /// runner, convention-based (SPEC §3.1). `dir` is the package and `root`
+    /// the workspace root, which bound the search for a build wrapper.
     ///
     /// - npm/bun/pnpm/yarn → `<runner> run <task>`
     /// - cargo   → `cargo <task>`   (`test`/`build`/`run` are native subcommands)
     /// - go      → `go <task>`, except `run` → `go run .` (a bare `go run`
     ///   names no package and always fails; `build`/`test` default to `.`)
     /// - deno    → `deno task <task>`
-    /// - make    → `make <task>`
+    /// - gradle  → `./gradlew <task>`, or `gradle <task>` without a wrapper
+    /// - maven   → `./mvnw <task>`, or `mvn <task>` without a wrapper
+    /// - ruby    → `bundle exec rake <task>` (plain `rake` without a Gemfile)
+    /// - composer → `composer run <task>`
+    /// - zig     → `zig build <task>`
+    /// - compose → `docker compose <task>`
+    /// - sbt, mix, dotnet, dart, flutter, swift, stack, cabal, terraform,
+    ///   make → `<tool> <task>`
     /// - python  → `uv run <task>`, valid only for a [`python_target`]; the
-    ///   caller rejects any other name before getting here
-    pub fn native_command(self, task: &str) -> (String, Vec<String>) {
+    ///   caller rejects any other name before getting here (likewise a Ruby
+    ///   project with no Rakefile)
+    pub fn native_command(self, task: &str, dir: &Path, root: &Path) -> (String, Vec<String>) {
+        let plain = |tool: &str| (tool.to_string(), vec![task.to_string()]);
+        let prefixed = |tool: &str, sub: &[&str]| {
+            let mut args: Vec<String> = sub.iter().map(|s| s.to_string()).collect();
+            args.push(task.to_string());
+            (tool.to_string(), args)
+        };
+        let wrapped = |wrapper: &str, tool: &str| match crate::langs::wrapper(dir, root, wrapper) {
+            Some(path) => (path.to_string_lossy().into_owned(), vec![task.to_string()]),
+            None => plain(tool),
+        };
         match self {
-            Ecosystem::Npm => ("npm".into(), vec!["run".into(), task.into()]),
-            Ecosystem::Bun => ("bun".into(), vec!["run".into(), task.into()]),
-            Ecosystem::Pnpm => ("pnpm".into(), vec!["run".into(), task.into()]),
-            Ecosystem::Yarn => ("yarn".into(), vec!["run".into(), task.into()]),
-            Ecosystem::Cargo => ("cargo".into(), vec![task.into()]),
+            Ecosystem::Npm => prefixed("npm", &["run"]),
+            Ecosystem::Bun => prefixed("bun", &["run"]),
+            Ecosystem::Pnpm => prefixed("pnpm", &["run"]),
+            Ecosystem::Yarn => prefixed("yarn", &["run"]),
+            Ecosystem::Cargo => plain("cargo"),
             Ecosystem::Go if task == "run" => ("go".into(), vec!["run".into(), ".".into()]),
-            Ecosystem::Go => ("go".into(), vec![task.into()]),
-            Ecosystem::Python => ("uv".into(), vec!["run".into(), task.into()]),
-            Ecosystem::Deno => ("deno".into(), vec!["task".into(), task.into()]),
-            Ecosystem::Make => ("make".into(), vec![task.into()]),
+            Ecosystem::Go => plain("go"),
+            Ecosystem::Python => prefixed("uv", &["run"]),
+            Ecosystem::Deno => prefixed("deno", &["task"]),
+            Ecosystem::Gradle => wrapped("gradlew", "gradle"),
+            Ecosystem::Maven => wrapped("mvnw", "mvn"),
+            Ecosystem::Sbt => plain("sbt"),
+            Ecosystem::Mix => plain("mix"),
+            Ecosystem::Composer => prefixed("composer", &["run"]),
+            Ecosystem::Ruby if dir.join("Gemfile").is_file() => {
+                prefixed("bundle", &["exec", "rake"])
+            }
+            Ecosystem::Ruby => plain("rake"),
+            Ecosystem::Dotnet => plain("dotnet"),
+            Ecosystem::Dart => plain("dart"),
+            Ecosystem::Flutter => plain("flutter"),
+            Ecosystem::Swift => plain("swift"),
+            Ecosystem::Zig => prefixed("zig", &["build"]),
+            Ecosystem::Stack => plain("stack"),
+            Ecosystem::Cabal => plain("cabal"),
+            Ecosystem::Compose => prefixed("docker", &["compose"]),
+            Ecosystem::Terraform => plain("terraform"),
+            Ecosystem::Make => plain("make"),
         }
+    }
+
+    /// For an ecosystem whose task names are the tool's own commands rather
+    /// than declared scripts: what to call them and two examples, for the
+    /// configless `--list`. `None` for the script-based ecosystems.
+    pub fn command_hint(self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Ecosystem::Cargo => ("Any cargo subcommand", "tsr build, tsr test, tsr run"),
+            Ecosystem::Go => ("Any go subcommand", "tsr build, tsr test, tsr run"),
+            Ecosystem::Gradle => ("Any Gradle task", "tsr build, tsr test, tsr bootRun"),
+            Ecosystem::Maven => (
+                "Any Maven phase or goal",
+                "tsr test, tsr package, tsr verify",
+            ),
+            Ecosystem::Sbt => ("Any sbt task", "tsr compile, tsr test, tsr run"),
+            Ecosystem::Mix => ("Any mix task", "tsr test, tsr compile, tsr phx.server"),
+            Ecosystem::Dotnet => ("Any dotnet command", "tsr build, tsr test, tsr run"),
+            Ecosystem::Dart => ("Any dart command", "tsr test, tsr analyze, tsr run"),
+            Ecosystem::Flutter => ("Any flutter command", "tsr test, tsr analyze, tsr run"),
+            Ecosystem::Swift => ("Any swift subcommand", "tsr build, tsr test, tsr run"),
+            Ecosystem::Zig => ("Any `zig build` step", "tsr test, tsr run, tsr install"),
+            Ecosystem::Stack => ("Any stack command", "tsr build, tsr test, tsr run"),
+            Ecosystem::Cabal => ("Any cabal command", "tsr build, tsr test, tsr run"),
+            Ecosystem::Compose => ("Any docker compose command", "tsr up, tsr down, tsr build"),
+            Ecosystem::Terraform => ("Any terraform command", "tsr init, tsr plan, tsr apply"),
+            _ => return None,
+        })
     }
 }
 
@@ -94,6 +191,53 @@ pub fn detect_within(dir: &Path, root: &Path) -> Option<Ecosystem> {
     }
     if dir.join("pyproject.toml").is_file() {
         return Some(Ecosystem::Python);
+    }
+    use crate::langs;
+    if langs::has_any(dir, &langs::GRADLE_FILES) {
+        return Some(Ecosystem::Gradle);
+    }
+    if dir.join("pom.xml").is_file() {
+        return Some(Ecosystem::Maven);
+    }
+    if dir.join("build.sbt").is_file() {
+        return Some(Ecosystem::Sbt);
+    }
+    if dir.join("mix.exs").is_file() {
+        return Some(Ecosystem::Mix);
+    }
+    if dir.join("composer.json").is_file() {
+        return Some(Ecosystem::Composer);
+    }
+    if langs::has_any(dir, &langs::RAKEFILES) || dir.join("Gemfile").is_file() {
+        return Some(Ecosystem::Ruby);
+    }
+    if langs::first_with_ext(dir, &langs::DOTNET_EXTS).is_some() {
+        return Some(Ecosystem::Dotnet);
+    }
+    if dir.join("pubspec.yaml").is_file() {
+        return Some(if langs::is_flutter(dir) {
+            Ecosystem::Flutter
+        } else {
+            Ecosystem::Dart
+        });
+    }
+    if dir.join("Package.swift").is_file() {
+        return Some(Ecosystem::Swift);
+    }
+    if dir.join("build.zig").is_file() {
+        return Some(Ecosystem::Zig);
+    }
+    if dir.join("stack.yaml").is_file() {
+        return Some(Ecosystem::Stack);
+    }
+    if dir.join("cabal.project").is_file() || langs::first_with_ext(dir, &["cabal"]).is_some() {
+        return Some(Ecosystem::Cabal);
+    }
+    if langs::has_any(dir, &langs::COMPOSE_FILES) {
+        return Some(Ecosystem::Compose);
+    }
+    if langs::first_with_ext(dir, &["tf"]).is_some() {
+        return Some(Ecosystem::Terraform);
     }
     if MAKEFILES.iter().any(|f| dir.join(f).is_file()) {
         return Some(Ecosystem::Make);
@@ -219,7 +363,13 @@ pub fn scripts(dir: &Path, eco: Ecosystem) -> Option<Vec<(String, String)>> {
             )
         }
         Ecosystem::Make => Some(make_targets(dir)),
-        Ecosystem::Cargo | Ecosystem::Go => None,
+        Ecosystem::Composer => Some(
+            json_doc(&dir.join("composer.json"))
+                .map(|d| crate::langs::composer_scripts(&d))
+                .unwrap_or_default(),
+        ),
+        Ecosystem::Ruby => Some(crate::langs::rake_tasks(dir)),
+        _ => None,
     }
 }
 
@@ -346,8 +496,22 @@ pub fn manifest_name(dir: &Path, eco: Ecosystem) -> Option<String> {
             .or_else(|| toml_name(&dir.join("pyproject.toml"), &["tool", "poetry"])),
         Ecosystem::Go => go_module(&dir.join("go.mod")),
         Ecosystem::Deno => deno_doc(dir)?.get("name")?.as_str().map(str::to_string),
-        // A Makefile declares no package name.
-        Ecosystem::Make => None,
+        Ecosystem::Maven => crate::langs::maven_name(dir),
+        Ecosystem::Sbt => crate::langs::sbt_name(dir),
+        Ecosystem::Mix => crate::langs::mix_app(dir),
+        Ecosystem::Composer => json_name(&dir.join("composer.json")),
+        Ecosystem::Dotnet => crate::langs::dotnet_name(dir),
+        Ecosystem::Dart | Ecosystem::Flutter => crate::langs::pubspec_name(dir),
+        Ecosystem::Swift => crate::langs::swift_name(dir),
+        Ecosystem::Cabal | Ecosystem::Stack => crate::langs::cabal_name(dir),
+        // No manifest name to read (or none worth a parser): path matching
+        // still works for these.
+        Ecosystem::Gradle
+        | Ecosystem::Ruby
+        | Ecosystem::Zig
+        | Ecosystem::Compose
+        | Ecosystem::Terraform
+        | Ecosystem::Make => None,
     }
 }
 
@@ -374,9 +538,10 @@ pub fn manifest_deps(dir: &Path, eco: Ecosystem) -> Vec<String> {
         Ecosystem::Cargo => cargo_deps(&dir.join("Cargo.toml")),
         Ecosystem::Python => python_deps(&dir.join("pyproject.toml")),
         Ecosystem::Go => go_deps(&dir.join("go.mod")),
-        // Deno names dependencies by specifier (`jsr:@scope/pkg`), and a
-        // Makefile names none; neither yields workspace edges yet.
-        Ecosystem::Deno | Ecosystem::Make => Vec::new(),
+        // The rest yield no workspace edges yet: their dependency formats
+        // (Deno specifiers, Gradle/Maven coordinates, …) need their own
+        // readers, and `packages` fan-outs still run — just unordered.
+        _ => Vec::new(),
     }
 }
 
@@ -1058,42 +1223,144 @@ mod tests {
     }
 
     #[test]
+    fn detects_every_marker_based_ecosystem() {
+        let cases: &[(&str, &str, Ecosystem)] = &[
+            ("build.gradle.kts", "", Ecosystem::Gradle),
+            ("settings.gradle", "", Ecosystem::Gradle),
+            ("pom.xml", "<project/>", Ecosystem::Maven),
+            ("build.sbt", "", Ecosystem::Sbt),
+            ("mix.exs", "", Ecosystem::Mix),
+            ("composer.json", "{}", Ecosystem::Composer),
+            ("Rakefile", "", Ecosystem::Ruby),
+            ("Gemfile", "", Ecosystem::Ruby),
+            ("App.sln", "", Ecosystem::Dotnet),
+            ("Api.fsproj", "", Ecosystem::Dotnet),
+            ("pubspec.yaml", "name: x\n", Ecosystem::Dart),
+            (
+                "pubspec.yaml",
+                "name: x\ndependencies:\n  flutter:\n    sdk: flutter\n",
+                Ecosystem::Flutter,
+            ),
+            ("Package.swift", "", Ecosystem::Swift),
+            ("build.zig", "", Ecosystem::Zig),
+            ("stack.yaml", "", Ecosystem::Stack),
+            ("lib.cabal", "", Ecosystem::Cabal),
+            ("cabal.project", "", Ecosystem::Cabal),
+            ("compose.yaml", "", Ecosystem::Compose),
+            ("docker-compose.yml", "", Ecosystem::Compose),
+            ("main.tf", "", Ecosystem::Terraform),
+        ];
+        for (file, body, eco) in cases {
+            let d = scratch();
+            fs::write(d.join(file), body).unwrap();
+            assert_eq!(detect(&d), Some(*eco), "{file}");
+        }
+    }
+
+    #[test]
+    fn earlier_markers_win_in_mixed_repos() {
+        // A Stack project also has a .cabal file.
+        let d = scratch();
+        fs::write(d.join("stack.yaml"), "").unwrap();
+        fs::write(d.join("x.cabal"), "").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Stack));
+        // Gradle over Maven; Node over everything below it.
+        let d = scratch();
+        fs::write(d.join("pom.xml"), "").unwrap();
+        fs::write(d.join("build.gradle"), "").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Gradle));
+        fs::write(d.join("package.json"), "{}").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Npm));
+        // A Makefile stays the fallback.
+        let d = scratch();
+        fs::write(d.join("Makefile"), "").unwrap();
+        fs::write(d.join("main.tf"), "").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Terraform));
+    }
+
+    #[test]
+    fn maps_new_ecosystems_to_their_tool() {
+        let d = scratch();
+        let run = |eco: Ecosystem, task: &str| {
+            let (p, a) = eco.native_command(task, &d, &d);
+            std::iter::once(p).chain(a).collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(run(Ecosystem::Gradle, "build"), "gradle build");
+        assert_eq!(run(Ecosystem::Maven, "test"), "mvn test");
+        assert_eq!(run(Ecosystem::Sbt, "test"), "sbt test");
+        assert_eq!(run(Ecosystem::Mix, "test"), "mix test");
+        assert_eq!(run(Ecosystem::Composer, "test"), "composer run test");
+        assert_eq!(run(Ecosystem::Ruby, "spec"), "rake spec");
+        assert_eq!(run(Ecosystem::Dotnet, "test"), "dotnet test");
+        assert_eq!(run(Ecosystem::Dart, "test"), "dart test");
+        assert_eq!(run(Ecosystem::Flutter, "test"), "flutter test");
+        assert_eq!(run(Ecosystem::Swift, "build"), "swift build");
+        assert_eq!(run(Ecosystem::Zig, "test"), "zig build test");
+        assert_eq!(run(Ecosystem::Stack, "test"), "stack test");
+        assert_eq!(run(Ecosystem::Cabal, "test"), "cabal test");
+        assert_eq!(run(Ecosystem::Compose, "up"), "docker compose up");
+        assert_eq!(run(Ecosystem::Terraform, "plan"), "terraform plan");
+
+        // A Gemfile adds `bundle exec`; a wrapper replaces the global tool.
+        fs::write(d.join("Gemfile"), "").unwrap();
+        assert_eq!(run(Ecosystem::Ruby, "spec"), "bundle exec rake spec");
+        let wrapper = if cfg!(windows) {
+            "gradlew.bat"
+        } else {
+            "gradlew"
+        };
+        fs::write(d.join(wrapper), "").unwrap();
+        assert_eq!(
+            run(Ecosystem::Gradle, "build"),
+            format!("{} build", d.join(wrapper).display())
+        );
+    }
+
+    #[test]
+    fn command_style_ecosystems_have_a_hint_and_script_ones_do_not() {
+        assert!(Ecosystem::Gradle.command_hint().is_some());
+        assert!(Ecosystem::Terraform.command_hint().is_some());
+        assert!(Ecosystem::Npm.command_hint().is_none());
+        assert!(Ecosystem::Composer.command_hint().is_none());
+    }
+
+    #[test]
     fn native_command_conventions() {
         assert_eq!(
-            Ecosystem::Npm.native_command("test"),
+            Ecosystem::Npm.native_command("test", Path::new("."), Path::new(".")),
             ("npm".into(), vec!["run".into(), "test".into()])
         );
         assert_eq!(
-            Ecosystem::Pnpm.native_command("dev"),
+            Ecosystem::Pnpm.native_command("dev", Path::new("."), Path::new(".")),
             ("pnpm".into(), vec!["run".into(), "dev".into()])
         );
         assert_eq!(
-            Ecosystem::Yarn.native_command("dev"),
+            Ecosystem::Yarn.native_command("dev", Path::new("."), Path::new(".")),
             ("yarn".into(), vec!["run".into(), "dev".into()])
         );
         assert_eq!(
-            Ecosystem::Deno.native_command("dev"),
+            Ecosystem::Deno.native_command("dev", Path::new("."), Path::new(".")),
             ("deno".into(), vec!["task".into(), "dev".into()])
         );
         assert_eq!(
-            Ecosystem::Make.native_command("build"),
+            Ecosystem::Make.native_command("build", Path::new("."), Path::new(".")),
             ("make".into(), vec!["build".into()])
         );
         assert_eq!(
-            Ecosystem::Cargo.native_command("test"),
+            Ecosystem::Cargo.native_command("test", Path::new("."), Path::new(".")),
             ("cargo".into(), vec!["test".into()])
         );
         assert_eq!(
-            Ecosystem::Go.native_command("build"),
+            Ecosystem::Go.native_command("build", Path::new("."), Path::new(".")),
             ("go".into(), vec!["build".into()])
         );
         // `go run` needs a package argument; `build`/`test` do not.
         assert_eq!(
-            Ecosystem::Go.native_command("run"),
+            Ecosystem::Go.native_command("run", Path::new("."), Path::new(".")),
             ("go".into(), vec!["run".into(), ".".into()])
         );
         assert_eq!(
-            Ecosystem::Python.native_command("lint"),
+            Ecosystem::Python.native_command("lint", Path::new("."), Path::new(".")),
             ("uv".into(), vec!["run".into(), "lint".into()])
         );
     }

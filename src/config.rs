@@ -265,6 +265,15 @@ pub fn nearest_package_root(start: &Path) -> Option<PathBuf> {
     walk_up(start, |dir| crate::detect::detect(dir).is_some())
 }
 
+/// Walk up from `start` to the nearest project `tsr` recognises but cannot
+/// auto-detect (CMake, Bazel, …; see [`crate::langs::unmapped`]), so the
+/// configless error can name it instead of saying nothing was found.
+pub fn nearest_unmapped(start: &Path) -> Option<(PathBuf, crate::langs::Unmapped)> {
+    let dir = walk_up(start, |dir| crate::langs::unmapped(dir).is_some())?;
+    let u = crate::langs::unmapped(&dir)?;
+    Some((dir, u))
+}
+
 /// Walk from `start` upward, returning the first directory `found` accepts.
 ///
 /// The walk is **bounded** (SPEC §12.3). Discovery decides which file gets to

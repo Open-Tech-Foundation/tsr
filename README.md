@@ -49,8 +49,9 @@ first argument is always a task name — every builtin is a flag, so a task name
 `list` or `init` is never shadowed.
 
 **No config required.** `tasks.toml` is optional: in a repo that only has a
-`package.json` (or `deno.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a
-`Makefile`), `tsr dev` runs
+`package.json` (or a `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`,
+`build.gradle`, `Gemfile`, `composer.json`, `*.csproj`, `mix.exs`, … — see
+[task forms](https://tsr.opentechf.org/docs/task-forms)), `tsr dev` runs
 `npm run dev` / `cargo dev` / … by auto-detecting the ecosystem. Add a
 `tasks.toml` when you want a dependency graph, monorepo fan-out, or `delegate`; a
 present config always takes precedence over auto-detection.

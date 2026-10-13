@@ -3127,3 +3127,205 @@ fn bash_completion_offers_task_names_and_options() {
     assert_eq!(complete("tsr dev --dr", 2), ["--dry-run"]);
     assert_eq!(complete("tsr dev --reporter ", 3), ["human", "ndjson"]);
 }
+
+// --- JVM, Ruby, PHP, .NET, Dart, Elixir, Swift, Zig, Haskell, Scala, IaC ---
+
+#[test]
+fn configless_runs_each_ecosystem_with_its_tool() {
+    // (marker, contents, shim to install, task, expected invocation)
+    let cases: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "build.gradle",
+            "",
+            "gradle",
+            "build",
+            "INVOKED gradle build",
+        ),
+        ("pom.xml", "<project/>", "mvn", "test", "INVOKED mvn test"),
+        ("build.sbt", "", "sbt", "test", "INVOKED sbt test"),
+        ("mix.exs", "", "mix", "test", "INVOKED mix test"),
+        (
+            "composer.json",
+            "{}",
+            "composer",
+            "lint",
+            "INVOKED composer run lint",
+        ),
+        (
+            "Rakefile",
+            "task :spec do\nend\n",
+            "rake",
+            "spec",
+            "INVOKED rake spec",
+        ),
+        (
+            "Api.csproj",
+            "<Project/>",
+            "dotnet",
+            "test",
+            "INVOKED dotnet test",
+        ),
+        (
+            "pubspec.yaml",
+            "name: x\n",
+            "dart",
+            "test",
+            "INVOKED dart test",
+        ),
+        ("Package.swift", "", "swift", "build", "INVOKED swift build"),
+        ("build.zig", "", "zig", "test", "INVOKED zig build test"),
+        ("stack.yaml", "", "stack", "test", "INVOKED stack test"),
+        ("x.cabal", "", "cabal", "test", "INVOKED cabal test"),
+        (
+            "compose.yaml",
+            "",
+            "docker",
+            "up",
+            "INVOKED docker compose up",
+        ),
+        ("main.tf", "", "terraform", "plan", "INVOKED terraform plan"),
+    ];
+    for (marker, body, tool, task, expected) in cases {
+        let ws = workspace();
+        let bin = ws.join("shims");
+        fs::create_dir_all(&bin).unwrap();
+        shim(&bin, tool);
+        write(&ws, marker, body);
+        let out = tsr_with_path(&ws, &[task, "--", "-x"], &bin);
+        assert_eq!(code(&out), 0, "{marker}: stderr {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("{expected} -x")),
+            "{marker}: {}",
+            stdout(&out)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gradle_and_maven_prefer_the_project_wrapper() {
+    for (marker, wrapper) in [("build.gradle.kts", "gradlew"), ("pom.xml", "mvnw")] {
+        let ws = workspace();
+        write(&ws, marker, "");
+        // The wrapper sits at the workspace root; the task runs in a member.
+        shim(&ws, wrapper);
+        write(&ws, &format!("app/{marker}"), "");
+        write(
+            &ws,
+            "tasks.toml",
+            "[workspace]\nmembers = [\"app\"]\n[tasks.build]\npackages = [\"app\"]\n",
+        );
+        let out = tsr(&ws, &["build"]);
+        assert_eq!(code(&out), 0, "{wrapper}: stderr {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("INVOKED {wrapper} build")),
+            "{wrapper}: {}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
+fn bundler_projects_run_rake_through_bundle_exec() {
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "bundle");
+    write(&ws, "Gemfile", "source 'https://rubygems.org'\n");
+    write(&ws, "Rakefile", "desc 'Run specs'\ntask :spec do\nend\n");
+    let out = tsr_with_path(&ws, &["spec"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED bundle exec rake spec"),
+        "{}",
+        stdout(&out)
+    );
+
+    // --list shows the Rakefile's tasks with their descriptions.
+    let out = tsr(&ws, &["--list"]);
+    assert!(stdout(&out).contains("spec  Run specs"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_ruby_project_without_a_rakefile_says_what_to_write() {
+    let ws = workspace();
+    write(&ws, "Gemfile", "");
+    let out = tsr(&ws, &["test"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(stderr(&out).contains("no Rakefile"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("bundle exec rspec"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn composer_list_shows_scripts() {
+    let ws = workspace();
+    write(&ws, "composer.json", r#"{"scripts":{"test":"phpunit"}}"#);
+    let out = tsr(&ws, &["--list"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(stdout(&out).contains("test  phpunit"), "{}", stdout(&out));
+}
+
+#[test]
+fn command_style_ecosystems_explain_themselves_in_list() {
+    let ws = workspace();
+    write(&ws, "main.tf", "");
+    let out = tsr(&ws, &["--list"]);
+    assert!(
+        stdout(&out).contains("Any terraform command runs as a task:  tsr init, tsr plan"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn unmapped_build_systems_get_a_tailored_error() {
+    for (marker, tool, example) in [
+        ("CMakeLists.txt", "CMake", "cmake -B build"),
+        ("MODULE.bazel", "Bazel", "bazel build //..."),
+        ("Dockerfile", "Docker", "docker build -t app ."),
+        ("Project.toml", "Julia", "julia --project"),
+    ] {
+        let ws = workspace();
+        write(&ws, marker, "");
+        let nested = ws.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let out = tsr(&nested, &["build"]);
+        assert_eq!(code(&out), 64, "{marker}: stderr {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains(&format!("found {marker}")), "{marker}: {err}");
+        assert!(
+            err.contains(&format!("{tool} has no task-name convention")),
+            "{marker}: {err}"
+        );
+        assert!(
+            err.contains("[tasks.build]") && err.contains(example),
+            "{marker}: {err}"
+        );
+
+        let out = tsr(&nested, &["--list"]);
+        assert!(
+            stdout(&out).contains(&format!("Found {marker} ({tool})")),
+            "{}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
+fn an_unmapped_member_explains_itself_in_a_fan_out() {
+    let ws = workspace();
+    write(&ws, "native/CMakeLists.txt", "");
+    write(&ws, "web/package.json", "{}");
+    write(&ws, "tasks.toml", "[tasks.build]\ndir = \"native\"\n");
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("found CMakeLists.txt"),
+        "{}",
+        stderr(&out)
+    );
+}

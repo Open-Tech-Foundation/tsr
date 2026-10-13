@@ -17,9 +17,11 @@ relative to the workspace root:
 members = ["apps/*", "packages/*"]
 ```
 
-A directory matches only if it carries a recognised ecosystem marker
-(`package.json`, `deno.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a
-`Makefile`).
+A directory matches only if it carries a recognised [ecosystem
+marker](/docs/task-forms#form-3--auto-detect). Dependency edges between packages
+are read for npm/bun/pnpm/yarn, Cargo, Go and Python. Members of the other
+ecosystems still fan out, but in path order, so use plain `deps` where order
+matters.
 
 ## Fanning out with `packages`
 
