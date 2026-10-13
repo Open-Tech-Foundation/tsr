@@ -239,14 +239,16 @@ PATH = ":$PATH"        # rejected — the empty entry *is* the working directory
 | Task `env` | ✅ |
 | `env_file` | ✅ |
 | Root `.env` | ✅ |
+| `NAME=value` prefixes in a `run` string | ✅ |
 | **Process environment** | ❌ — passed through untouched |
 
 The process environment belongs to whoever invoked `tsr`. A runner that refused
 the environment it was handed would be broken rather than safe — and the user who
 exported `LD_PRELOAD` in their own shell has already made that decision.
 
-Only the tasks that will actually run are checked, so an unrelated task elsewhere
-in `tasks.toml` cannot block a run that never touches it.
+Only the tasks that will actually run are checked, including any reached
+through an `^upstream` dep, so an unrelated task elsewhere in `tasks.toml` cannot
+block a run that never touches it.
 
 ### Lifting it
 
@@ -383,6 +385,10 @@ A config that cannot be resolved still fails with the same error a real run woul
 give — a dry run is an inspection, not a bypass. See
 [`--dry-run`](/docs/cli#tsr-task-dry-run).
 
+`--dry-run --expand` is the opposite trade, for debugging your own config: it
+shows each command after expansion and the environment `tsr` sets, **values
+included**, and warns on stderr that its output is not safe to paste.
+
 ### Working with a repo you haven't read
 
 ```sh
@@ -403,7 +409,8 @@ tsr ci                    # only then
 | `PATH` must extend, and hide no cwd entry | on | `--allow-unsafe-env` | Exit `64` at load |
 | Discovery bounded at repo / `$HOME` / filesystem | on | — | Task not found, exit `64` |
 | World-writable config / `.env` / `env_file` refused | on (unix) | `chmod o-w` | Exit `64` at load |
-| Process-tree teardown | parallel runs, and any non-tty run | — | — |
+| Process-tree teardown | parallel runs, runs with a `timeout`, and any non-tty run | — | — |
+| `cd` in a `run` string confined to the workspace | on | `[security] allow_paths` | `cd` exits `1` |
 | Ctrl-C aborts and exits `130` | on | — | — |
 
 ## What is *not* guarded
@@ -414,15 +421,19 @@ Stated plainly, so the boundary is not mistaken for more than it is:
   cannot and does not sandbox it.
 - **`delegate` and `run` targets.** Naming a binary to execute is the feature;
   `tsr` does not decide which binaries are allowed.
+- **`shell = true` strings.** They go to `sh -c` / `cmd /c` as written, so the
+  platform shell's rules apply, not the mini-shell's. The env guards still cover
+  the task's `env`, and arguments are passed as `"$@"`, never re-parsed.
 - **`node_modules/.bin` on `PATH`.** A repo-local binary shadowing a global one
   is npm's own behaviour, and what makes `run = "vite"` work
   ([§9.2](/docs/monorepo)).
 - **A child's output.** Children inherit stdio; whatever they print — including
-  secrets — is theirs. `tsr` itself never prints an environment *value*:
-  `--dry-run` prints commands before expansion and no reporter event carries env,
-  so there is nothing for it to mask.
+  secrets — is theirs. `tsr` itself prints an environment *value* only when you
+  ask with `--dry-run --expand`, which warns first. Plain `--dry-run` prints
+  commands before expansion, and no reporter event carries env.
 - **Resource exhaustion.** There are no CPU, memory or file-descriptor limits on
-  a task. Limits declared in `tasks.toml` would be no defence against a config
+  a task. `--jobs` caps how many run at once, and `timeout` bounds how long, but
+  neither limits what one command uses. Limits declared in `tasks.toml` would be no defence against a config
   that simply omits them — use `systemd-run`, `ulimit` or a container.
 - **A local attacker racing the run.** The path checks resolve, then act; they
   are not TOCTOU-hardened. Someone who can create symlinks inside your workspace

@@ -37,12 +37,14 @@ delegate = { bin = "make", args = ["bundle"] }
   own name.
 - **Table** `{ bin, args }` runs exactly `bin args…` — nothing is inferred.
 
-This is the escape hatch for real shell power, too:
+It's also the escape hatch for full control over a shell:
 
 ```toml
 [tasks.pipeline]
-delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
+delegate = { bin = "bash", args = ["-c", "set -o pipefail; cat x | grep y > z"] }
 ```
+
+For most shell needs, `shell = true` on a `run` task is shorter (see below).
 
 ## Form 2 — `run`
 
@@ -56,7 +58,15 @@ args = ["--host"]          # prepended before CLI passthrough
 ```
 
 How the string is executed (direct spawn vs. the mini-shell) is covered in
-[run & the mini-shell](/docs/run-and-shell).
+[run & the mini-shell](/docs/run-and-shell). Add `shell = true` to hand the
+string to the platform shell instead (`sh -c`, or `cmd /c` on Windows), so pipes
+and redirects work, at the cost of portability:
+
+```toml
+[tasks.report]
+run = "cargo test 2>&1 | tee test.log"
+shell = true
+```
 
 ## Form 3 — auto-detect
 

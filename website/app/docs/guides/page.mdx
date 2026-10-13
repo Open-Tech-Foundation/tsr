@@ -28,7 +28,7 @@ follow the links inside for the full reference on any concept.
 ## Run without a config file
 
 You don't need a `tasks.toml` to start. In any repo with a [recognised
-marker](/docs/task-forms#form-3--auto-detect) (`package.json`, `Cargo.toml`,
+marker](/docs/task-forms#form-3-auto-detect) (`package.json`, `Cargo.toml`,
 `go.mod`, `pom.xml`, `Gemfile`, …), `tsr <task>` runs the
 package's native script by auto-detecting the ecosystem:
 
@@ -69,13 +69,43 @@ tsr --list
 
 ```text
 Available tasks:
-  build  delegate: turbo
-  dev    run: vite  ·  dir: apps/web
-  test   packages: apps/*
+  build          delegate: turbo
+  dev (default)  Start the web app  (run: vite  ·  dir: apps/web)
+  test           packages: apps/*  ·  timeout: 10m  ·  retries: 1
 ```
 
 Each line shows the task's form at a glance — `run`, `delegate`, `packages`, or
-`deps` — so you can see how a task resolves without opening the file.
+`deps` — so you can see how a task resolves without opening the file. Give a task
+a `desc` and it leads the line. A task with a config error still shows, marked
+`✗` with its error, so one typo never hides the rest of the list. Without a
+`tasks.toml`, `--list` shows your `package.json` scripts (or `deno.json` tasks,
+Make targets, composer scripts, Rakefile tasks) instead.
+
+Mistype a name and `tsr` suggests the closest one:
+
+```text
+✗ error: unknown task 'tset' — did you mean 'test'?
+```
+
+## Set a default task
+
+```toml
+[workspace]
+default = "dev"
+```
+
+Now a bare `tsr` runs `dev`, and `tsr -- --port 4000` forwards arguments to it.
+
+## Tab-complete task names
+
+```sh
+eval "$(tsr --completions bash)"     # ~/.bashrc
+source <(tsr --completions zsh)      # ~/.zshrc, after compinit
+tsr --completions fish | source      # ~/.config/fish/config.fish
+```
+
+Task names are read from the current directory each time, so new tasks complete
+straight away.
 
 ## Run a task from anywhere in the repo
 
@@ -109,14 +139,26 @@ run = "vitest --run"
 ```
 
 `tsr` resolves project-local binaries from `node_modules/.bin` exactly like
-`npm`/`bun`, so `run = "vite"` finds `./node_modules/.bin/vite`. See
-[run & the mini-shell](/docs/run-and-shell) for what the mini-shell supports
-(`$VAR`, `&&`/`||`/`;`, quoting) and what it rejects (pipes, redirects, globs).
+`npm`/`bun`, so `run = "vite"` finds `./node_modules/.bin/vite`. The usual
+script idioms work as written, on every platform:
+
+```toml
+[tasks.e2e]
+run = "cd apps/web && NODE_ENV=test playwright test"
+
+[tasks.clean]
+run = "rm -rf dist/* || true"
+```
+
+See [run & the mini-shell](/docs/run-and-shell) for what the mini-shell supports
+(`$VAR`, `&&`/`||`/`;`, quoting, globs, `cd`, `exit`, `NAME=value` prefixes). A
+script that pipes or redirects needs `shell = true`, which hands it to `sh -c`
+and gives up portability.
 
 <Callout type="info" title="Keep a bare task when the runner is obvious">
   For a package whose ecosystem `tsr` can detect, a bare `[tasks.test]` with no
   `run`/`delegate` auto-detects the native runner (`npm run test`, `cargo test`,
-  `go test`, `uv run …`). See [task forms](/docs/task-forms).
+  `./gradlew test`, `dotnet test`, `mix test`, …). See [task forms](/docs/task-forms).
 </Callout>
 
 ## Chain tasks with a dependency graph
@@ -152,10 +194,38 @@ packages = ["apps/*"]      # auto-detect each package's runner
 
 ```sh
 tsr test                   # runs the detected test task in every apps/* package
+tsr test --filter web      # just one package, no extra config
 tsr web#build              # or target one package's task directly
 ```
 
 See [monorepo & packages](/docs/monorepo) for matching rules and manifest names.
+
+## Keep CI under control
+
+```sh
+tsr ci --jobs 4            # at most four commands at once, however wide the graph
+```
+
+```toml
+[tasks.e2e]
+run = "playwright test"
+timeout = "10m"            # kill the whole process tree → exit 124
+retries = 2                # a flaky failure gets two more tries
+```
+
+A failure that a retry then fixes doesn't trip fail-fast; only the last attempt
+counts. Write results somewhere a script can read them with
+`--reporter-file results.ndjson`.
+
+## See exactly what a task will run
+
+```sh
+tsr deploy --dry-run           # the plan, as written: safe to paste
+tsr deploy --dry-run --expand  # after $VAR and glob expansion, with the env
+```
+
+`--expand` prints variable values, `.env` secrets included, so keep its output to
+yourself.
 
 ## Call a project-local tool (vite, eslint, …)
 

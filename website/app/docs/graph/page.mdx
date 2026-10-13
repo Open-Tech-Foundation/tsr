@@ -105,6 +105,11 @@ deps = ["lint", "test", "build"]
 parallel = true              # opt into concurrency
 ```
 
+To cap how much runs at once, pass `--jobs N` (`-j N`). It limits the whole run,
+nested fan-outs included, so `tsr build -j 4` never has more than four commands
+going, however wide the graph is. `--jobs` never adds parallelism: a batch
+without `parallel = true` stays sequential.
+
 ## Fail-fast
 
 On any failure within a task's batch, `tsr` **fails fast**: it stops launching
@@ -124,3 +129,22 @@ In a parallel batch, "the failure" is whichever child exits non-zero first in
 wall-clock time; this is non-deterministic across runs and is expected.
 Fail-fast guarantees at most one failing child's code is reported — and that
 [exact code](/docs/exit-codes) is what `tsr` propagates.
+
+### Timeouts and retries
+
+A task can bound and retry its own command:
+
+```toml
+[tasks.e2e]
+run = "playwright test"
+timeout = "10m"     # "30s", "1h30m", "500ms", or a number of seconds
+retries = 2
+```
+
+- `timeout` applies to each attempt, and to each package of a fan-out
+  separately. When it passes, the attempt's whole process tree is killed, the
+  same teardown fail-fast uses, and the attempt fails with exit `124`.
+- `retries` re-runs a failed attempt, whether it exited non-zero or timed out.
+  Only the last attempt counts, so fail-fast doesn't kill siblings over a
+  failure that a retry then fixes. A program that can't be started isn't
+  retried.

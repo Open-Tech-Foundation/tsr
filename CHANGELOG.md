@@ -119,6 +119,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Website: the landing page and docs cover this release.
+  - The landing page lists the wider ecosystem support, has new "Built for
+    CI", "Self-documenting" and "Edit safely" cards, and its sample
+    `tasks.toml` shows `default`, `desc`, `timeout` and `retries`.
+  - New guides cover default tasks, completions, `--filter`, `--jobs`,
+    timeouts/retries and `--dry-run --expand`.
+  - The graph, monorepo, environment, task-forms and security pages cover
+    `--jobs`, `--filter`, timeouts/retries, `NAME=value` prefixes,
+    `shell = true` and `--expand`.
+  - Fixed: the security page claimed `tsr` never prints an env value, which
+    `--expand` now does, with a warning.
+  - Fixed: the npm-migration guide said globs are rejected; they are
+    supported.
+  - Fixed: four in-page links pointed at heading anchors that don't exist.
+
 - Docs: a new "Re-run on file changes" guide shows how to compose `tsr` with
   a watcher (`watchexec -- tsr test`) or forward a tool's own `--watch`. The
   SPEC now lists file watching as out of scope, next to caching.

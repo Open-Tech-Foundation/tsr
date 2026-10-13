@@ -73,6 +73,25 @@ LOGS = "$ROOT/logs"          # → /srv/app/logs
   <code>✗ config error: task 'deploy': '$TARGET' is not defined…</code>
 </Callout>
 
+## Per-command variables
+
+A `NAME=value` prefix in a `run` string sets a variable for that one command, as
+in `sh`:
+
+```toml
+[tasks.build]
+run = "NODE_ENV=production vite build && echo done"   # echo doesn't see it
+```
+
+The value is expanded (`TOKEN=$SECRET deploy`) but never globbed. Prefixes go
+through the same [guards](/docs/security#guarded-environment-variables) as `env`.
+
+## Seeing the resolved env
+
+`tsr <task> --dry-run --expand` lists every variable `tsr` sets or changes for
+each task, with its value, next to the expanded command. Plain `--dry-run` never
+shows values.
+
 ## Process env
 
 The process environment is fully inherited; there is no filtering or

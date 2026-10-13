@@ -31,7 +31,7 @@ These options may follow a task name. Each value-taking one accepts
 | [`--resume-from <pkg>`](#tsr-task-resume-from-pkg) | — | Skip packages ordered before `<pkg>`. |
 | [`--no-bail`](#tsr-task-no-bail) | off | Run everything; don't stop at the first failure. |
 | [`--dry-run`](#tsr-task-dry-run) | off | Print what would run, and run nothing. |
-| [`--expand`](#debugging-with---expand) | off | With `--dry-run`: show expanded commands and env. |
+| [`--expand`](#debugging-with-expand) | off | With `--dry-run`: show expanded commands and env. |
 | [`-F`, `--filter <pkg>`](#tsr-task-filter-pkg) | — | Run package fan-outs only in `<pkg>`. Repeatable. |
 | [`-j`, `--jobs <n>`](#tsr-task-jobs-n) | unlimited | Run at most `<n>` commands at once. |
 | [`--allow-unsafe-env`](#tsr-task-allow-unsafe-env) | off | Let the config set guarded env variables. |
@@ -43,19 +43,24 @@ These options may follow a task name. Each value-taking one accepts
 | [`--list`](#tsr-list) | List the tasks in `tasks.toml`. |
 | [`--config`](#tsr-config) | Edit `tasks.toml` in an interactive TUI. |
 | [`--init`](#tsr-init) | Scaffold a starter `tasks.toml`. |
-| [`--completions <shell>`](#tsr---completions-shell) | Print a shell completion script. |
+| [`--completions <shell>`](#tsr-completions-shell) | Print a shell completion script. |
 | `--help` / `-h` · `--version` / `-V` | Usage and version. |
 
 ## `tsr <task>`
 
 Runs the named task. `tsr` finds the workspace root by walking up to the nearest
-`tasks.toml`, validates the config and the dependency subgraph, then executes.
+`tasks.toml`, validates the task and everything it depends on, then executes. A
+broken task elsewhere in the file doesn't block it.
 
 ```sh
 tsr dev
 tsr build:prod
 tsr web#build          # the 'build' task in package 'web'
+tsr                    # the [workspace] default task, if one is set
 ```
+
+An unknown name exits `64` and suggests the closest defined task:
+`unknown task 'tset' — did you mean 'test'?`.
 
 ### No config? It still runs
 
@@ -71,7 +76,7 @@ tsr test -- --watch    # → npm run test --watch
 ```
 
 If neither a `tasks.toml` nor an [ecosystem
-marker](/docs/task-forms#form-3--auto-detect) is found, `tsr` exits `64` and
+marker](/docs/task-forms#form-3-auto-detect) is found, `tsr` exits `64` and
 points you at `tsr --init`. A build system with no task-name convention (CMake,
 Meson, Bazel, a bare `Dockerfile`, R, Julia, Perl) is named in that error, along
 with a `run` line to start your `tasks.toml` from. A `tasks.toml`, when present, always wins — there's no fall-through

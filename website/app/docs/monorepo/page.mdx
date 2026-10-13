@@ -18,7 +18,7 @@ members = ["apps/*", "packages/*"]
 ```
 
 A directory matches only if it carries a recognised [ecosystem
-marker](/docs/task-forms#form-3--auto-detect). Dependency edges between packages
+marker](/docs/task-forms#form-3-auto-detect). Dependency edges between packages
 are read for npm/bun/pnpm/yarn, Cargo, Go and Python. Members of the other
 ecosystems still fan out, but in path order, so use plain `deps` where order
 matters.
@@ -96,6 +96,19 @@ deps = ["^build"]
 Every package's dependencies build before it does, a shared library builds once,
 and upstream packages are built even when the pattern didn't select them. See
 [the graph docs](/docs/graph) for the full rules.
+
+## Running one package
+
+```bash
+tsr build --filter web               # manifest name
+tsr test -F apps/admin -F 'packages/*'
+```
+
+`--filter` (`-F`, repeatable) narrows every `packages` fan-out to the matching
+packages, using the same matching rules as `packages`. You don't need a
+`web#build` task for it. Upstream `^` dependencies still build, because the
+package needs them. A pattern that matches nothing exits `64` before anything
+runs.
 
 ## Running only what changed
 

@@ -40,7 +40,7 @@ const COMPARE_TOOLS = COMPARE_GROUPS.flatMap((g) => g.tools);
 const COMPARE_ROWS = [
   {
     label: "Auto-detects each package's runner",
-    hint: "cargo / go / npm / bun / uv from a bare task",
+    hint: "npm / pnpm / cargo / go / uv / gradle / dotnet / mix / … from a bare task",
     cells: ["y", "n", "n", "n", "n", "n", "n", "n"],
   },
   {
@@ -125,10 +125,10 @@ export default function Home() {
             </h1>
             <p class="lede">
               <strong>tsr</strong> is a lightweight, polyglot, repo-aware task runner. It
-              wraps the native runners you already have — <code>npm</code>, <code>bun</code>,{" "}
-              <code>cargo</code>, <code>go</code>, <code>uv</code> — adds a task dependency
-              graph and opt-in parallelism, and delegates caching to Turbo/Nx instead of
-              reinventing it.
+              wraps the native runners you already have — <code>npm</code>, <code>cargo</code>,{" "}
+              <code>go</code>, <code>uv</code>, <code>gradle</code>, <code>dotnet</code> and
+              more — adds a task dependency graph and opt-in parallelism, and delegates
+              caching to Turbo/Nx instead of reinventing it.
             </p>
             <div class="cta-row">
               <Link class="btn btn-primary" href="/docs">
@@ -189,7 +189,8 @@ export default function Home() {
               <h3>Polyglot</h3>
               <p>
                 One entry point across every ecosystem. A bare <code>[tasks.test]</code>
-                auto-detects each package's runner: cargo, go, npm/bun, uv.
+                auto-detects each package's runner — npm, pnpm, yarn, bun, deno, cargo, go,
+                uv, Gradle, Maven, .NET, Ruby, PHP, Elixir, Swift, Zig and more.
               </p>
             </div>
             <div class="card">
@@ -212,8 +213,37 @@ export default function Home() {
               <div class="ico">🐚</div>
               <h3>Safe mini-shell</h3>
               <p>
-                In-process <code>$VAR</code> expansion, <code>&amp;&amp; || ;</code>, quoting, and globs
-                (<code>*</code>, <code>**</code>) plus cross-platform builtins (<code>rm</code>, <code>cp</code>, <code>mkdir</code>). Pipes &amp; redirects are rejected up front.
+                In-process <code>$VAR</code> expansion, <code>&amp;&amp; || ;</code>, quoting, globs
+                (<code>*</code>, <code>**</code>), <code>cd</code>, <code>exit</code> and{" "}
+                <code>NAME=value</code> prefixes, plus cross-platform builtins (<code>rm</code>,{" "}
+                <code>cp</code>, <code>mkdir</code>). Pipes &amp; redirects need an explicit{" "}
+                <code>shell = true</code>.
+              </p>
+            </div>
+            <div class="card">
+              <div class="ico">🚦</div>
+              <h3>Built for CI</h3>
+              <p>
+                Cap concurrency with <code>--jobs</code>, run one package with{" "}
+                <code>--filter</code>, bound flaky steps with per-task <code>timeout</code>{" "}
+                and <code>retries</code>, and parse results from an NDJSON reporter file.
+              </p>
+            </div>
+            <div class="card">
+              <div class="ico">📖</div>
+              <h3>Self-documenting</h3>
+              <p>
+                <code>desc</code> on every task, a <code>default</code> for bare{" "}
+                <code>tsr</code>, <code>--list</code> that shows your scripts even without a
+                config, "did you mean…?" on typos, and bash/zsh/fish completions.
+              </p>
+            </div>
+            <div class="card">
+              <div class="ico">✍️</div>
+              <h3>Edit safely</h3>
+              <p>
+                Author tasks in the <code>tsr --config</code> TUI or by hand — comments,
+                ordering and keys tsr doesn't know all survive every save.
               </p>
             </div>
             <div class="card">
@@ -438,6 +468,10 @@ export default function Home() {
               <li>
                 <code>deps</code> + <code>parallel</code> — the graph, opt-in concurrency.
               </li>
+              <li>
+                <code>desc</code>, <code>timeout</code>, <code>retries</code>,{" "}
+                <code>shell</code> — per-task polish when you need it.
+              </li>
             </ul>
             <div class="cta-row" style="margin-top:20px">
               <Link class="btn btn-ghost" href="/docs/configuration">
@@ -451,13 +485,17 @@ export default function Home() {
               <span class="cm"># tasks.toml</span>{"\n"}
               <span class="k">[workspace]</span>{"\n"}
               members = [<span class="s">"apps/*"</span>, <span class="s">"packages/*"</span>]{"\n"}
+              default = <span class="s">"dev"</span>             <span class="cm"># bare `tsr` runs it</span>{"\n"}
               {"\n"}
               <span class="k">[tasks.dev]</span>{"\n"}
+              desc = <span class="s">"Start the web app"</span>{"\n"}
               run = <span class="s">"vite"</span>{"\n"}
               dir = <span class="s">"apps/web"</span>{"\n"}
               {"\n"}
               <span class="k">[tasks.test]</span>{"\n"}
               packages = [<span class="s">"apps/*"</span>]        <span class="cm"># auto-detect</span>{"\n"}
+              timeout = <span class="s">"10m"</span>{"\n"}
+              retries = <span class="t">1</span>{"\n"}
               {"\n"}
               <span class="k">[tasks.build]</span>{"\n"}
               delegate = <span class="s">"turbo"</span>           <span class="cm"># → turbo run build</span>{"\n"}

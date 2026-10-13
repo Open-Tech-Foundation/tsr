@@ -10,7 +10,8 @@ import InstallTabs from "./InstallTabs.jsx";
 
 `tsr` is a lightweight, polyglot, repo-aware **task runner**. It is a *command
 runner*, not a build system: it provides one unified interface over the native
-runners already in your repo (`npm`, `bun`, `cargo`, `go`, `uv`, …), adds a task
+runners already in your repo (`npm`, `pnpm`, `cargo`, `go`, `uv`, `gradle`,
+`dotnet`, `mix`, …), adds a task
 dependency graph and opt-in parallelism, and **delegates** caching to specialist
 tools (Turbo, Nx) rather than reimplementing it.
 
@@ -39,7 +40,9 @@ tsr test -- --watch
 
 Content-hash caching, remote caching, and inputs/outputs tracking are **never**
 implemented in `tsr` — they are ceded to delegated backends (Turbo, Nx). Adding
-them would contradict the "lightweight, delegate" principle.
+them would contradict the "lightweight, delegate" principle. File watching is out
+of scope for the same reason: compose with a watcher instead (`watchexec -- tsr
+test`, see [the guide](/docs/guides#re-run-on-file-changes)).
 
 ## Run your first task
 
@@ -79,6 +82,10 @@ dir = "apps/web"
 tsr dev
 ```
 
+Set `default = "dev"` under `[workspace]` and a bare `tsr` runs it, and
+`tsr --completions bash` (or `zsh`, `fish`) gives you tab-completion of task
+names.
+
 Because `run = "vite"` has no shell metacharacters, `tsr` splits it and spawns
 `vite` directly — no `npm run` / Node startup tax.
 
@@ -93,7 +100,7 @@ Because `run = "vite"` has no shell metacharacters, `tsr` splits it and spawns
 <Callout type="tip" title="No config? tsr still runs your scripts">
   `tasks.toml` is optional. In a repo that only has a `package.json` (or a
   `Cargo.toml`, `go.mod`, `pom.xml`, `Gemfile`, … — [the full
-  list](/docs/task-forms#form-3--auto-detect)), `tsr dev` just runs `npm run dev` /
+  list](/docs/task-forms#form-3-auto-detect)), `tsr dev` just runs `npm run dev` /
   `cargo dev` / … by auto-detecting the ecosystem — no config to write. Add a
   `tasks.toml` when you want a dependency graph, monorepo fan-out, or `delegate`.
 </Callout>
