@@ -55,6 +55,15 @@ pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
             dir.display()
         ))
     })?;
+    if eco == detect::Ecosystem::Python && !detect::python_target(dir, task.task_name()) {
+        return Err(TsrError::runtime(format!(
+            "task '{}': a Python project has no '{name}' script for `uv run {name}` to find \
+             — give the task a command, e.g. `run = \"uv run pytest\"` in tasks.toml \
+             (only a `.py` file or a name declared in [project.scripts] runs bare)",
+            task.key,
+            name = task.task_name(),
+        )));
+    }
     let (program, args) = eco.native_command(task.task_name());
     Ok(Invocation::Direct { program, args })
 }
@@ -171,6 +180,33 @@ mod tests {
             Invocation::Direct {
                 program: "pnpm".into(),
                 args: vec!["run".into(), "dev".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn python_bare_name_without_a_script_is_an_error() {
+        let d = scratch();
+        fs::write(d.join("pyproject.toml"), "[project]\nname = \"p\"\n").unwrap();
+        let err = resolve(&task("test"), &d, &d).unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+        let msg = err.to_string();
+        assert!(msg.contains("run = \"uv run pytest\""), "{msg}");
+    }
+
+    #[test]
+    fn python_declared_script_maps_to_uv_run() {
+        let d = scratch();
+        fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"p\"\n[project.scripts]\nserve = \"p:main\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve(&task("serve"), &d, &d).unwrap(),
+            Invocation::Direct {
+                program: "uv".into(),
+                args: vec!["run".into(), "serve".into()],
             }
         );
     }

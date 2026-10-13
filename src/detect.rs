@@ -32,7 +32,8 @@ impl Ecosystem {
     /// - cargo   → `cargo <task>`   (`test`/`build`/`run` are native subcommands)
     /// - go      → `go <task>`, except `run` → `go run .` (a bare `go run`
     ///   names no package and always fails; `build`/`test` default to `.`)
-    /// - python  → `uv run <task>`
+    /// - python  → `uv run <task>`, valid only for a [`python_target`]; the
+    ///   caller rejects any other name before getting here
     pub fn native_command(self, task: &str) -> (String, Vec<String>) {
         match self {
             Ecosystem::Npm => ("npm".into(), vec!["run".into(), task.into()]),
@@ -105,6 +106,30 @@ fn node_runner(dir: &Path, root: &Path) -> Ecosystem {
         }
     }
     Ecosystem::Npm
+}
+
+/// Whether `uv run <task>` can mean anything for the Python project at `dir`.
+///
+/// Python has no `<runner> run <script-name>` convention the way npm does, so a
+/// bare `test` becomes `uv run test`, which looks for an executable called
+/// `test` and fails without saying why. Only two kinds of name are real
+/// targets: a `.py` file, and a console script the project itself declares in
+/// `[project.scripts]` (or Poetry's `[tool.poetry.scripts]`), the nearest thing
+/// Python has to a `package.json` script.
+pub fn python_target(dir: &Path, task: &str) -> bool {
+    if task.ends_with(".py") {
+        return true;
+    }
+    let Some(doc) = toml_doc(&dir.join("pyproject.toml")) else {
+        return false;
+    };
+    let declares = |table: Option<&toml_edit::Item>| {
+        table
+            .and_then(|i| i.get("scripts"))
+            .and_then(|i| i.as_table_like())
+            .is_some_and(|t| t.contains_key(task))
+    };
+    declares(doc.get("project")) || declares(doc.get("tool").and_then(|t| t.get("poetry")))
 }
 
 /// Read the package's manifest name, so `packages` can match against declared
@@ -696,6 +721,25 @@ mod tests {
         // A manifest that is absent entirely is equally inert.
         let d = scratch();
         assert!(manifest_deps(&d, Ecosystem::Go).is_empty());
+    }
+
+    #[test]
+    fn python_targets_are_py_files_and_declared_scripts() {
+        let d = scratch();
+        fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"p\"\n[project.scripts]\nserve = \"p.app:main\"\n\
+             [tool.poetry.scripts]\nmigrate = \"p.db:migrate\"\n",
+        )
+        .unwrap();
+        assert!(python_target(&d, "hello.py"));
+        assert!(python_target(&d, "scripts/hello.py"));
+        assert!(python_target(&d, "serve"));
+        assert!(python_target(&d, "migrate"));
+        // `test` is not declared anywhere, so `uv run test` would mean nothing.
+        assert!(!python_target(&d, "test"));
+        // No pyproject (or a malformed one) declares nothing.
+        assert!(!python_target(&scratch(), "serve"));
     }
 
     #[test]

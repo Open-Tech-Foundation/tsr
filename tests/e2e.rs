@@ -511,6 +511,16 @@ fn bare_task_autodetects_each_ecosystem() {
     let cases: &[Case] = &[
         ("npm", &[("package.json", "{}")], "INVOKED npm run build"),
         (
+            "pnpm",
+            &[("package.json", "{}"), ("pnpm-lock.yaml", "")],
+            "INVOKED pnpm run build",
+        ),
+        (
+            "yarn",
+            &[("package.json", "{}"), ("yarn.lock", "")],
+            "INVOKED yarn run build",
+        ),
+        (
             "bun",
             &[("package.json", "{}"), ("bun.lock", "")],
             "INVOKED bun run build",
@@ -523,7 +533,11 @@ fn bare_task_autodetects_each_ecosystem() {
         ("go", &[("go.mod", "module ex\n")], "INVOKED go build"),
         (
             "uv",
-            &[("pyproject.toml", "[project]\nname=\"p\"\n")],
+            // Python resolves only a declared script (or a `.py` file).
+            &[(
+                "pyproject.toml",
+                "[project]\nname=\"p\"\n[project.scripts]\nbuild=\"p:main\"\n",
+            )],
             "INVOKED uv run build",
         ),
     ];
@@ -531,7 +545,7 @@ fn bare_task_autodetects_each_ecosystem() {
         let ws = workspace();
         let bin = ws.join("shims");
         fs::create_dir_all(&bin).unwrap();
-        for r in ["npm", "bun", "cargo", "go", "uv"] {
+        for r in ["npm", "pnpm", "yarn", "bun", "cargo", "go", "uv"] {
             shim(&bin, r);
         }
         for (name, contents) in *markers {
@@ -673,6 +687,46 @@ fn pnpm_workspace_members_use_the_root_lockfile() {
         stdout(&out)
     );
     assert!(!stdout(&out).contains("INVOKED npm"), "{}", stdout(&out));
+}
+
+#[test]
+fn configless_python_runs_files_and_declared_scripts_only() {
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "uv");
+    write(
+        &ws,
+        "pyproject.toml",
+        "[project]\nname = \"p\"\n[project.scripts]\nserve = \"p:main\"\n",
+    );
+
+    // A `.py` file and a declared console script both run through `uv run`.
+    let out = tsr_with_path(&ws, &["hello.py"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED uv run hello.py"),
+        "{}",
+        stdout(&out)
+    );
+    let out = tsr_with_path(&ws, &["serve"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED uv run serve"),
+        "{}",
+        stdout(&out)
+    );
+
+    // Any other bare name is a runner error that says what to write instead,
+    // not a silent `uv run test` failing with exit 1.
+    let out = tsr_with_path(&ws, &["test"], &bin);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(!stdout(&out).contains("INVOKED"), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("run = \"uv run pytest\""),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]

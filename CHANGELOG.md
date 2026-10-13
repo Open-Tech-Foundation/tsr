@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or `yarn.lock` now runs `pnpm run <task>` / `yarn run <task>`. Before, it ran
   `npm run <task>`, which can behave differently in a real workspace.
 
+### Changed
+
+- **Bare Python task names no longer guess.** A bare task in a Python project
+  mapped to `uv run <task>`, so `tsr test` looked for an executable called
+  `test` and exited `1` with nothing useful to say. A bare name now runs only
+  when it is a `.py` file or a console script the project declares in
+  `[project.scripts]` / `[tool.poetry.scripts]`. Anything else is a runner error
+  (exit `64`) that says to write a `run` command such as `uv run pytest`.
+
 ### Fixed
 
 - Auto-detect (Node monorepos): a workspace member was matched to its runner

@@ -61,7 +61,7 @@ When `tsr <task>` runs, the task's form is chosen in this order:
 
 1. **`delegate` present** → hand off to a backend: `<bin> run <task>`.
 2. **`run` present** → spawn the command directly (no `npm`/`node` startup tax).
-3. **Neither** → auto-detect the package's ecosystem and map the task name to its native runner (`npm run <task>`, `cargo <task>`, `go <task>`, …). Go's `run` maps to `go run .`, because a bare `go run` names no package and always fails.
+3. **Neither** → auto-detect the package's ecosystem and map the task name to its native runner (`npm run <task>`, `cargo <task>`, `go <task>`, …). Go's `run` maps to `go run .`, because a bare `go run` names no package and always fails. Python has no script-name convention, so `uv run <task>` is used only when `<task>` is a `.py` file or a script declared in `[project.scripts]` / `[tool.poetry.scripts]`; any other bare Python task is a runner error (exit `64`) telling the user to write a `run` command such as `uv run pytest`.
 
 Form 3 is the core "wrapper" behaviour: a bare `[tasks.test]` just works across a polyglot repo with no per-package config.
 

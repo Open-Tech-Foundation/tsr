@@ -71,13 +71,23 @@ marker file and maps the task name to that ecosystem's native runner:
 | `package.json` | npm | `npm run test` |
 | `Cargo.toml` | cargo | `cargo test` |
 | `go.mod` | go | `go test` |
-| `pyproject.toml` | uv | `uv run test` |
+| `pyproject.toml` | uv | `uv run test`, only if `test` is a `.py` file or a `[project.scripts]` entry |
 
 For a Node package, the nearest lockfile between the package and the workspace
 root decides the runner. A monorepo keeps one lockfile at its root, so every
 member runs under it.
 
-One exception: for Go, `tsr run` runs `go run .`, since a bare `go run` names no
+Python has no `<runner> run <script-name>` convention like npm's, so a bare name
+only runs when `uv run` can find it: a `.py` file, or a console script the
+project declares in `[project.scripts]` (or `[tool.poetry.scripts]`). Anything
+else is an error. Give Python tasks a command instead:
+
+```toml
+[tasks.test]
+run = "uv run pytest"
+```
+
+For Go, `tsr run` runs `go run .`, since a bare `go run` names no
 package and always fails.
 
 This is the core "wrapper" behaviour: a bare `[tasks.test]` just works across a

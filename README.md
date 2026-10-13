@@ -92,7 +92,9 @@ env = { CI = "true" }
 1. `delegate` → `<bin> run <task>` (string) or `{ bin, args }` (table).
 2. `run` → spawn the command directly.
 3. Neither → auto-detect the package's ecosystem and map the task name to its
-   native runner (`npm run <task>`, `cargo <task>`, `go <task>`, `uv run <task>`).
+   native runner (`npm run <task>`, `cargo <task>`, `go <task>`). Python runs
+   `uv run <task>` only for a `.py` file or a `[project.scripts]` entry, so give
+   Python tasks a `run` such as `uv run pytest`.
 
 ### `run` strings
 
