@@ -186,6 +186,14 @@ On any failure within a task's batch, `tsr` **fails fast**: it stops launching n
 exit code: 1
 ```
 
+When nothing failed but `tsr` itself could not proceed (§10) — say a `delegate` binary is not installed — the summary leads with the runner error rather than `✗ <task> failed`, the leaf that could not be spawned is marked `not run` instead of `exit 64`, and a run of that one leaf prints only the error:
+
+```
+✗ error: task 'build': 'turbo' not found — is it installed and on PATH?
+
+exit code: 64
+```
+
 In a parallel batch, "the failure" is whichever child exits non-zero first in wall-clock time; this is non-deterministic across runs and is expected. Fail-fast guarantees at most one failing child's code is reported.
 
 **`--no-bail`** opts out: every batch runs to completion, siblings are neither skipped nor killed, and the summary lists every failure. The propagated exit code is still the **first** failing child's, so CI sees the same signal either way. This is the flag for "tell me everything that is broken", not just the first thing.

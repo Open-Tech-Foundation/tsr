@@ -29,6 +29,16 @@ pipelines see the real signal.
 - a rejected [security guard](/docs/security) — a path outside the workspace, a
   guarded environment variable, a world-writable config.
 
+A program that can't be launched is reported as that runner error, not as a
+task failure. The output leads with the error, and when other tasks ran, the
+leaf that never started shows as `not run` in the summary:
+
+```text
+✗ error: task 'build': 'turbo' not found — is it installed and on PATH?
+
+exit code: 64
+```
+
 <Callout type="info" title="Why the distinction matters">
   A child code (like <code>1</code> or <code>130</code>) means <em>your task</em>
   failed. Code <code>64</code> means <em>tsr itself</em> couldn't proceed — a

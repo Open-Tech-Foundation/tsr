@@ -133,6 +133,9 @@ enum ResultKind {
     Ok,
     Failed(i32),
     Skipped,
+    /// The leaf never ran: its program could not be spawned. A runner error
+    /// (exit `64`), not a task failure, so the human summary says "not run".
+    NotRun,
 }
 
 impl ResultKind {
@@ -140,7 +143,9 @@ impl ResultKind {
     fn as_str(self) -> &'static str {
         match self {
             ResultKind::Ok => "ok",
-            ResultKind::Failed(_) => "failed",
+            // Reported as a failure with exit 64, as it always was, so NDJSON
+            // consumers see no new status.
+            ResultKind::Failed(_) | ResultKind::NotRun => "failed",
             ResultKind::Skipped => "skipped",
         }
     }
@@ -258,7 +263,11 @@ impl<'a> Ctx<'a> {
                 "type": "task",
                 "label": label,
                 "status": kind.as_str(),
-                "exitCode": match kind { ResultKind::Failed(c) => Some(c), _ => None },
+                "exitCode": match kind {
+                    ResultKind::Failed(c) => Some(c),
+                    ResultKind::NotRun => Some(crate::error::EXIT_RUNNER_ERROR),
+                    _ => None,
+                },
                 "durationMs": dur.map(millis),
             }));
         }
@@ -312,7 +321,7 @@ impl<'a> Ctx<'a> {
             "status": if code == 0 { "ok" } else { "failed" },
             "exitCode": code,
             "ok": count(|k| matches!(k, ResultKind::Ok)),
-            "failed": count(|k| matches!(k, ResultKind::Failed(_))),
+            "failed": count(|k| matches!(k, ResultKind::Failed(_) | ResultKind::NotRun)),
             "skipped": count(|k| matches!(k, ResultKind::Skipped)),
             "runnerError": runner_error,
             "durationMs": millis(started.elapsed()),
@@ -817,7 +826,7 @@ impl<'a> Ctx<'a> {
             }
             LeafWait::SpawnFailed(msg) => {
                 self.note_runner(msg);
-                self.record(&job.label, ResultKind::Failed(64), Some(dur));
+                self.record(&job.label, ResultKind::NotRun, Some(dur));
                 Status::Runner
             }
         }
@@ -890,8 +899,17 @@ impl<'a> Ctx<'a> {
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return LeafWait::SpawnFailed(format!(
+                    "task '{}': '{program}' not found — is it installed and on PATH?",
+                    job.label
+                ));
+            }
             Err(e) => {
-                return LeafWait::SpawnFailed(format!("cannot run '{program}': {e}"));
+                return LeafWait::SpawnFailed(format!(
+                    "task '{}': cannot run '{program}': {e}",
+                    job.label
+                ));
             }
         };
         contained.attach(&child);
@@ -931,27 +949,41 @@ impl<'a> Ctx<'a> {
 
     fn print_summary(&self, root: &str, code: i32, runner_error: Option<&str>) {
         let results = self.results.lock().unwrap();
+        let task_failed = results
+            .iter()
+            .any(|r| matches!(r.kind, ResultKind::Failed(_)));
         eprintln!();
-        eprintln!("✗ {root} failed");
-        eprintln!();
-        let width = results.iter().map(|r| r.label.len()).max().unwrap_or(0);
-        for r in results.iter() {
-            let (sym, status) = match r.kind {
-                ResultKind::Ok => ("✓", "ok".to_string()),
-                ResultKind::Failed(c) => ("✗", format!("exit {c}")),
-                ResultKind::Skipped => ("⊘", "skipped".to_string()),
-            };
-            let dur = r
-                .dur
-                .map(|d| format!("{:.1}s", d.as_secs_f64()))
-                .unwrap_or_default();
-            eprintln!(
-                "  {sym} {label:width$}  {status:<10} {dur}",
-                label = r.label,
-            );
+        // No task failed, so `tsr` itself is what went wrong (a program that
+        // could not be spawned, …): say so plainly, as any other runner error
+        // reads, rather than as a task failure.
+        match runner_error {
+            Some(msg) if !task_failed => eprintln!("✗ error: {msg}"),
+            _ => eprintln!("✗ {root} failed"),
+        }
+        // A lone leaf adds nothing the error line has not said already.
+        let table = task_failed || results.len() > 1;
+        if table {
+            eprintln!();
+            let width = results.iter().map(|r| r.label.len()).max().unwrap_or(0);
+            for r in results.iter() {
+                let (sym, status) = match r.kind {
+                    ResultKind::Ok => ("✓", "ok".to_string()),
+                    ResultKind::Failed(c) => ("✗", format!("exit {c}")),
+                    ResultKind::NotRun => ("✗", "not run".to_string()),
+                    ResultKind::Skipped => ("⊘", "skipped".to_string()),
+                };
+                let dur = r
+                    .dur
+                    .map(|d| format!("{:.1}s", d.as_secs_f64()))
+                    .unwrap_or_default();
+                eprintln!(
+                    "  {sym} {label:width$}  {status:<10} {dur}",
+                    label = r.label,
+                );
+            }
         }
         eprintln!();
-        if let Some(msg) = runner_error {
+        if task_failed && let Some(msg) = runner_error {
             eprintln!("  {msg}");
             eprintln!();
         }

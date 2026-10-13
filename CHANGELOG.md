@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A missing `delegate` binary (or any program that can't be spawned) was shown
+  as both a task failure and a runner error: a `✗ build failed` table with
+  `exit 64` next to `cannot run 'turbo'`. It now reads as a runner error:
+  `✗ error: task 'build': 'turbo' not found — is it installed and on PATH?`.
+  The table appears only when other tasks ran, with the leaf marked `not run`.
+  The exit code (`64`) and the NDJSON events (`failed`, `exitCode: 64`) are
+  unchanged.
+
 - Auto-detect (Node monorepos): a workspace member was matched to its runner
   using only the lockfiles in its own directory. A bun monorepo keeps its
   lockfile at the root, so its members ran under npm. The lookup now walks from

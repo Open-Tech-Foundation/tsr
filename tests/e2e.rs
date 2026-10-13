@@ -225,6 +225,57 @@ fn unknown_task_is_runner_error_64() {
 }
 
 #[test]
+fn missing_delegate_binary_is_a_plain_runner_error() {
+    // The task never ran, so this is `tsr` failing, not the task: one error
+    // line, no failure table.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.build]\ndelegate = \"tsr-no-such-binary\"\n",
+    );
+    let out = tsr(&ws, &["build"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("✗ error: task 'build': 'tsr-no-such-binary' not found"),
+        "{err}"
+    );
+    assert!(!err.contains("build failed"), "{err}");
+    assert!(!err.contains("exit 64 "), "{err}");
+}
+
+#[test]
+fn missing_binary_among_other_tasks_is_marked_not_run() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.ci]\ndeps = [\"ok\", \"gone\"]\n\
+         [tasks.ok]\nrun = \"echo fine\"\n\
+         [tasks.gone]\nrun = \"tsr-no-such-binary\"\n",
+    );
+    let out = tsr(&ws, &["ci", "--reporter-file", "events.ndjson"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("✗ error: task 'gone'"), "{err}");
+    let row = err
+        .lines()
+        .find(|l| l.contains("gone") && l.contains("not run"));
+    assert!(row.is_some(), "{err}");
+
+    // NDJSON is unchanged: still a failure with exit 64.
+    let text = fs::read_to_string(ws.join("events.ndjson")).unwrap();
+    let gone = text
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|v| v["label"] == "gone")
+        .expect(&text);
+    assert_eq!(gone["status"], "failed");
+    assert_eq!(gone["exitCode"], 64);
+}
+
+#[test]
 fn unknown_task_suggests_a_close_match() {
     let ws = workspace();
     write(&ws, "tasks.toml", "[tasks.ok]\nrun = \"true\"\n");
