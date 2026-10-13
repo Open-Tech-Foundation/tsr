@@ -183,6 +183,10 @@ struct Job {
     /// in `.env`, and a plan printed into a CI log must not carry secrets
     /// (SPEC §12).
     preview: String,
+    /// The task's `timeout`, per attempt.
+    timeout: Option<Duration>,
+    /// The task's `retries`.
+    retries: u32,
 }
 
 /// Memoisation slot so each task runs at most once (diamond-safe).
@@ -785,6 +789,8 @@ impl<'a> Ctx<'a> {
             env,
             action,
             preview,
+            timeout: task.timeout,
+            retries: task.retries,
         })
     }
 
@@ -891,39 +897,61 @@ impl<'a> Ctx<'a> {
             },
             None => None,
         };
-        let start = Instant::now();
-        let wait = self.execute_action(&job);
-        let dur = start.elapsed();
+        // A failed attempt (non-zero exit or timeout) is retried up to
+        // `retries` times. Only the last one counts: fail-fast must not fire
+        // on an attempt that a retry may still rescue.
+        let attempts = job.retries + 1;
+        let mut attempt = 1;
+        loop {
+            let start = Instant::now();
+            let deadline = job.timeout.map(|t| start + t);
+            let wait = self.execute_action(&job, deadline);
+            let dur = start.elapsed();
 
-        match wait {
-            LeafWait::Exited(0) => {
-                self.record(&job.label, ResultKind::Ok, Some(dur));
-                Status::Ok
+            let code = match wait {
+                LeafWait::Exited(0) => {
+                    self.record(&job.label, ResultKind::Ok, Some(dur));
+                    return Status::Ok;
+                }
+                LeafWait::Exited(code) => code,
+                LeafWait::TimedOut => {
+                    let limit = job.timeout.map(format_duration).unwrap_or_default();
+                    eprintln!("✗ {} timed out after {limit}", job.label);
+                    EXIT_TIMEOUT
+                }
+                LeafWait::Killed => {
+                    self.record(&job.label, ResultKind::Skipped, Some(dur));
+                    return Status::Skipped;
+                }
+                LeafWait::SpawnFailed(msg) => {
+                    // Not the command's failure: a retry would fail the same way.
+                    self.note_runner(msg);
+                    self.record(&job.label, ResultKind::NotRun, Some(dur));
+                    return Status::Runner;
+                }
+            };
+            if attempt < attempts && !self.aborted() {
+                attempt += 1;
+                eprintln!(
+                    "↻ {} exited {code} — retrying (attempt {attempt} of {attempts})",
+                    job.label
+                );
+                continue;
             }
-            LeafWait::Exited(code) => {
-                self.note_failure(code);
-                self.record(&job.label, ResultKind::Failed(code), Some(dur));
-                Status::Failed(code)
-            }
-            LeafWait::Killed => {
-                self.record(&job.label, ResultKind::Skipped, Some(dur));
-                Status::Skipped
-            }
-            LeafWait::SpawnFailed(msg) => {
-                self.note_runner(msg);
-                self.record(&job.label, ResultKind::NotRun, Some(dur));
-                Status::Runner
-            }
+            self.note_failure(code);
+            self.record(&job.label, ResultKind::Failed(code), Some(dur));
+            return Status::Failed(code);
         }
     }
 
     /// Execute a job's action, returning how it finished.
-    fn execute_action(&self, job: &Job) -> LeafWait {
+    /// `deadline` is when this attempt times out, if the task has a `timeout`.
+    fn execute_action(&self, job: &Job, deadline: Option<Instant>) -> LeafWait {
         match &job.action {
             Action::Spawn { program, args } => {
-                self.spawn_wait(program, args, &job.dir, &job.env, &job.label)
+                self.spawn_wait(program, args, &job.dir, &job.env, &job.label, deadline)
             }
-            Action::Shell(plan) => self.run_shell(plan, job),
+            Action::Shell(plan) => self.run_shell(plan, job, deadline),
         }
     }
 
@@ -933,9 +961,9 @@ impl<'a> Ctx<'a> {
     /// The sequence carries its own working directory, starting at the job's,
     /// so `cd sub && npm test` works the way it reads. `exit` ends the sequence
     /// on the spot.
-    fn run_shell(&self, plan: &ExecPlan, job: &Job) -> LeafWait {
+    fn run_shell(&self, plan: &ExecPlan, job: &Job, deadline: Option<Instant>) -> LeafWait {
         let mut cwd = job.dir.clone();
-        let mut last = match self.run_command(&plan.first, job, &mut cwd, 0) {
+        let mut last = match self.run_command(&plan.first, job, &mut cwd, 0, deadline) {
             Step::Next(c) => c,
             Step::Exit(c) => return LeafWait::Exited(c),
             Step::Stop(other) => return other,
@@ -944,10 +972,13 @@ impl<'a> Ctx<'a> {
             if self.aborted() {
                 return LeafWait::Killed;
             }
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                return LeafWait::TimedOut;
+            }
             if !sep.proceeds(last) {
                 continue;
             }
-            match self.run_command(cmd, job, &mut cwd, last) {
+            match self.run_command(cmd, job, &mut cwd, last, deadline) {
                 Step::Next(c) => last = c,
                 Step::Exit(c) => return LeafWait::Exited(c),
                 Step::Stop(other) => return other,
@@ -961,7 +992,14 @@ impl<'a> Ctx<'a> {
     /// spawned child (SPEC §8.5). Globs are resolved here, so a pattern sees
     /// whatever an earlier command in the sequence produced. `last` is the
     /// previous command's exit code, which a bare `exit` returns.
-    fn run_command(&self, cmd: &ExpandedCommand, job: &Job, cwd: &mut PathBuf, last: i32) -> Step {
+    fn run_command(
+        &self,
+        cmd: &ExpandedCommand,
+        job: &Job,
+        cwd: &mut PathBuf,
+        last: i32,
+        deadline: Option<Instant>,
+    ) -> Step {
         let argv = cmd.argv(cwd);
         let Some((program, args)) = argv.split_first() else {
             return Step::Stop(LeafWait::SpawnFailed("'run' string is empty".into()));
@@ -992,7 +1030,7 @@ impl<'a> Ctx<'a> {
             env.extend(cmd.env.iter().cloned());
             std::borrow::Cow::Owned(env)
         };
-        match self.spawn_wait(program, args, cwd, &env, &job.label) {
+        match self.spawn_wait(program, args, cwd, &env, &job.label, deadline) {
             LeafWait::Exited(c) => Step::Next(c),
             other => Step::Stop(other),
         }
@@ -1007,6 +1045,7 @@ impl<'a> Ctx<'a> {
         dir: &Path,
         env: &HashMap<String, String>,
         label: &str,
+        deadline: Option<Instant>,
     ) -> LeafWait {
         // On Windows a bare `npm`/`vite` is a `.cmd` shim, which `Command`'s own
         // PATH search never probes for; resolving it here against the job's PATH
@@ -1042,6 +1081,11 @@ impl<'a> Ctx<'a> {
                 contained.terminate(&mut child);
                 return LeafWait::Killed;
             }
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                // The same tree teardown a fail-fast uses (SPEC §12).
+                contained.terminate(&mut child);
+                return LeafWait::TimedOut;
+            }
             match child.try_wait() {
                 Ok(Some(status)) => return LeafWait::Exited(exit_code_of(status)),
                 Ok(None) => {
@@ -1069,6 +1113,12 @@ impl<'a> Ctx<'a> {
         println!("· {}", job.label);
         println!("    dir: {dir}");
         println!("    cmd: {}", job.preview);
+        if let Some(t) = job.timeout {
+            println!("    timeout: {}", format_duration(t));
+        }
+        if job.retries > 0 {
+            println!("    retries: {}", job.retries);
+        }
         if self.sel.opts.expand {
             println!("    run: {}", expanded_command(job));
             let inherited: HashMap<String, String> = std::env::vars().collect();
@@ -1169,7 +1219,32 @@ fn expanded_command(job: &Job) -> String {
 enum LeafWait {
     Exited(i32),
     Killed,
+    /// The task's `timeout` passed; its process tree was torn down.
+    TimedOut,
     SpawnFailed(String),
+}
+
+/// The exit code of an attempt that hit its `timeout` — GNU `timeout`'s.
+const EXIT_TIMEOUT: i32 = 124;
+
+/// `90s` → `1m30s`, for messages. Sub-second values print in milliseconds.
+pub(crate) fn format_duration(d: Duration) -> String {
+    let total = d.as_secs();
+    if total == 0 {
+        return format!("{}ms", d.as_millis());
+    }
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    if s > 0 || out.is_empty() {
+        out.push_str(&format!("{s}s"));
+    }
+    out
 }
 
 /// What one command of a `run` sequence leaves for the next.
@@ -1206,11 +1281,13 @@ fn isolation_for(cfg: &Config, root: &str) -> proc::Isolation {
     use std::io::IsTerminal;
 
     let interactive = std::io::stdin().is_terminal();
-    let parallel = crate::graph::reachable(cfg, root)
+    // A `timeout` can kill a child mid-run just as a failing sibling can, so it
+    // needs the same whole-tree reach.
+    let can_kill = crate::graph::reachable(cfg, root)
         .iter()
         .filter_map(|key| cfg.task(key))
-        .any(|task| task.parallel);
-    if parallel || !interactive {
+        .any(|task| task.parallel || task.timeout.is_some());
+    if can_kill || !interactive {
         proc::Isolation::Isolated
     } else {
         proc::Isolation::Inherited
@@ -1312,6 +1389,20 @@ mod slots_tests {
                 "a stopped run must not hand out a slot"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod format_duration_tests {
+    use super::*;
+
+    #[test]
+    fn prints_the_largest_units_that_fit() {
+        assert_eq!(format_duration(Duration::from_millis(250)), "250ms");
+        assert_eq!(format_duration(Duration::from_secs(45)), "45s");
+        assert_eq!(format_duration(Duration::from_secs(90)), "1m30s");
+        assert_eq!(format_duration(Duration::from_secs(300)), "5m");
+        assert_eq!(format_duration(Duration::from_secs(5400)), "1h30m");
     }
 }
 

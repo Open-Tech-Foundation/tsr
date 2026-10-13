@@ -2892,3 +2892,125 @@ fn shell_true_lists_and_previews_as_written() {
         stdout(&out)
     );
 }
+
+// --- timeout / retries ---
+
+#[test]
+fn retries_rerun_a_failed_command_until_it_passes() {
+    // Attempt 1: no flag → `rm` fails, `touch flag`, exit 1. Attempt 2: the
+    // flag is there → `rm` succeeds → exit 0. Builtins only, so portable.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.flaky]\nrun = \"rm flag && exit 0; touch flag; exit 1\"\nretries = 2\n",
+    );
+    let out = tsr(&ws, &["flaky"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("flaky exited 1 — retrying (attempt 2 of 3)"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stderr(&out).contains("attempt 3"), "{}", stderr(&out));
+}
+
+#[test]
+fn retries_give_up_with_the_last_exit_code() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.bad]\nrun = \"exit 3\"\nretries = 2\n",
+    );
+    let out = tsr(&ws, &["bad"]);
+    assert_eq!(code(&out), 3, "stderr {}", stderr(&out));
+    assert!(stderr(&out).contains("attempt 3 of 3"), "{}", stderr(&out));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_retried_failure_does_not_trip_fail_fast() {
+    // The sibling must not be killed by an attempt a retry then rescues.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.all]\nparallel = true\ndeps = [\"flaky\", \"slow\"]\n\
+         [tasks.flaky]\nrun = \"rm flag && exit 0; touch flag; exit 1\"\nretries = 1\n\
+         [tasks.slow]\nrun = \"sleep 0.4 && touch slow-done\"\n",
+    );
+    let out = tsr(&ws, &["all"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(ws.join("slow-done").exists(), "the sibling was killed");
+}
+
+#[cfg(unix)]
+#[test]
+fn timeout_kills_the_process_tree_and_exits_124() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.hang]\ntimeout = \"300ms\"\n\
+         delegate = { bin = \"sh\", args = [\"-c\", \"sleep 30 & echo $! > child.pid; wait\"] }\n",
+    );
+    let started = std::time::Instant::now();
+    let out = tsr(&ws, &["hang"]);
+    assert_eq!(code(&out), 124, "stderr {}", stderr(&out));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(
+        stderr(&out).contains("hang timed out after 300ms"),
+        "{}",
+        stderr(&out)
+    );
+    // The grandchild went down with it, not just the `sh` tsr spawned.
+    let pid = fs::read_to_string(ws.join("child.pid")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let alive = Command::new("kill")
+        .args(["-0", pid.trim()])
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "grandchild {pid} survived the timeout");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_timeout_counts_as_a_failure_for_retries() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.hang]\nrun = \"sleep 5\"\ntimeout = \"150ms\"\nretries = 1\n",
+    );
+    let out = tsr(&ws, &["hang"]);
+    assert_eq!(code(&out), 124, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("exited 124 — retrying (attempt 2 of 2)"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn timeout_and_retries_show_in_list_and_dry_run() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"echo hi\"\ntimeout = \"90s\"\nretries = 2\n",
+    );
+    let out = tsr(&ws, &["--list"]);
+    assert!(
+        stdout(&out).contains("timeout: 1m30s  ·  retries: 2"),
+        "{}",
+        stdout(&out)
+    );
+    let out = tsr(&ws, &["t", "--dry-run"]);
+    let s = stdout(&out);
+    assert!(
+        s.contains("timeout: 1m30s") && s.contains("retries: 2"),
+        "{s}"
+    );
+}

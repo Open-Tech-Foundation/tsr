@@ -50,8 +50,20 @@ Each task is a `[tasks.<name>]` table. The full field list:
 | `packages` | array | Fan out across matching packages (globs or names). **Mutually exclusive with `dir`.** |
 | `deps` | array | Tasks that must run before this one (the dependency graph). Accepts `task`, `pkg#task`, and `^task` (upstream — requires `packages`). |
 | `parallel` | bool | Run `deps` / `packages` concurrently. Default `false`. |
+| `timeout` | string \| int | Kill an attempt that runs longer than this: `"30s"`, `"5m"`, `"1h30m"`, or a number of seconds. Exits `124`. |
+| `retries` | int | Re-run a failed command (non-zero exit or timeout) up to this many more times. Default `0`. |
 | `args` | array | Default args prepended to the resolved command, before CLI passthrough. |
 | `env` | table | Per-task env; overrides `[env]`. |
+
+```toml
+[tasks.e2e]
+run = "playwright test"
+timeout = "10m"   # kill the whole process tree after 10 minutes → exit 124
+retries = 2       # up to 3 attempts; only the last one decides the result
+```
+
+A timeout or a failure that a retry then fixes doesn't trigger fail-fast. Only
+the final attempt counts.
 
 <Callout type="warning" title="dir and packages are mutually exclusive">
   Setting both `dir` and `packages` on the same task is a config error and exits

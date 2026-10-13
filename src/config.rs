@@ -78,6 +78,12 @@ pub struct Task {
     pub packages: Option<Vec<String>>,
     pub deps: Vec<String>,
     pub parallel: bool,
+    /// `timeout`: how long one attempt of this task's command may run before
+    /// its process tree is killed and the attempt fails with `124`.
+    pub timeout: Option<std::time::Duration>,
+    /// `retries`: how many more times to run a failed command (non-zero exit
+    /// or timeout) before the task fails. `0` by default.
+    pub retries: u32,
     pub args: Vec<String>,
     /// Per-task env, in declaration order (SPEC §7.1).
     pub env: Vec<(String, String)>,
@@ -457,6 +463,17 @@ fn parse_task(key: &str, item: &Item) -> Result<Task> {
                     TsrError::config(format!("task '{key}': 'parallel' must be a boolean"))
                 })?
             }
+            "timeout" => task.timeout = Some(parse_timeout(value, key)?),
+            "retries" => {
+                task.retries = value
+                    .as_integer()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| {
+                        TsrError::config(format!(
+                            "task '{key}': 'retries' must be a whole number of at least 0"
+                        ))
+                    })?
+            }
             "shell" => {
                 task.shell = value.as_bool().ok_or_else(|| {
                     TsrError::config(format!("task '{key}': 'shell' must be a boolean"))
@@ -471,6 +488,62 @@ fn parse_task(key: &str, item: &Item) -> Result<Task> {
         }
     }
     Ok(task)
+}
+
+/// `timeout = "90s"` / `"5m"` / `"1h30m"` / `"500ms"`, or a bare number of
+/// seconds (`timeout = 30`). Must be greater than zero.
+fn parse_timeout(item: &Item, key: &str) -> Result<std::time::Duration> {
+    let bad = || {
+        TsrError::config(format!(
+            "task '{key}': 'timeout' must be a duration such as \"30s\", \"5m\" or \"1h30m\" \
+             (or a number of seconds), greater than zero"
+        ))
+    };
+    let dur = match (item.as_integer(), item.as_str()) {
+        (Some(secs), _) => u64::try_from(secs)
+            .map(std::time::Duration::from_secs)
+            .map_err(|_| bad())?,
+        (_, Some(text)) => parse_duration(text).ok_or_else(bad)?,
+        _ => return Err(bad()),
+    };
+    if dur.is_zero() {
+        return Err(bad());
+    }
+    Ok(dur)
+}
+
+/// Parse `1h30m`, `90s`, `500ms` and the like: one or more `<number><unit>`
+/// pairs, units `ms`, `s`, `m`, `h`.
+pub(crate) fn parse_duration(text: &str) -> Option<std::time::Duration> {
+    let mut total = std::time::Duration::ZERO;
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    while !rest.is_empty() {
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if digits == 0 {
+            return None;
+        }
+        let n: u64 = rest[..digits].parse().ok()?;
+        rest = &rest[digits..];
+        let (unit, len) = if rest.starts_with("ms") {
+            (std::time::Duration::from_millis(1), 2)
+        } else if rest.starts_with('s') {
+            (std::time::Duration::from_secs(1), 1)
+        } else if rest.starts_with('m') {
+            (std::time::Duration::from_secs(60), 1)
+        } else if rest.starts_with('h') {
+            (std::time::Duration::from_secs(3600), 1)
+        } else {
+            return None;
+        };
+        total = total.checked_add(unit.checked_mul(u32::try_from(n).ok()?)?)?;
+        rest = &rest[len..];
+    }
+    Some(total)
 }
 
 fn parse_delegate(item: &Item, key: &str) -> Result<Delegate> {
@@ -761,6 +834,59 @@ mod tests {
 
     fn load(text: &str) -> Result<Config> {
         Config::load(&write_config(text))
+    }
+
+    #[test]
+    fn parses_durations() {
+        use std::time::Duration;
+        assert_eq!(parse_duration("30s"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_duration("5m"), Some(Duration::from_secs(300)));
+        assert_eq!(parse_duration("1h30m"), Some(Duration::from_secs(5400)));
+        assert_eq!(parse_duration("500ms"), Some(Duration::from_millis(500)));
+        assert_eq!(
+            parse_duration("1m500ms"),
+            Some(Duration::from_millis(60_500))
+        );
+        for bad in ["", "5", "m", "5x", "1.5s", "-1s", "5 m"] {
+            assert_eq!(parse_duration(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn parses_timeout_and_retries() {
+        let cfg = load(
+            "[tasks.a]\nrun = \"x\"\ntimeout = \"2m\"\nretries = 3\n\
+             [tasks.b]\nrun = \"x\"\ntimeout = 45\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.tasks["a"].timeout,
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert_eq!(cfg.tasks["a"].retries, 3);
+        assert_eq!(
+            cfg.tasks["b"].timeout,
+            Some(std::time::Duration::from_secs(45))
+        );
+        assert_eq!(cfg.tasks["b"].retries, 0);
+        for bad in [
+            "timeout = \"0s\"",
+            "timeout = 0",
+            "timeout = -5",
+            "timeout = \"soon\"",
+            "timeout = true",
+        ] {
+            let err = load(&format!("[tasks.a]\nrun = \"x\"\n{bad}\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("'timeout' must be a duration"), "{bad}: {err}");
+        }
+        for bad in ["retries = -1", "retries = \"2\"", "retries = 1.5"] {
+            let err = load(&format!("[tasks.a]\nrun = \"x\"\n{bad}\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("'retries' must be"), "{bad}: {err}");
+        }
     }
 
     #[test]

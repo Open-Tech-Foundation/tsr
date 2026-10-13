@@ -495,6 +495,12 @@ fn describe(task: &Task) -> String {
     if task.parallel {
         parts.push("parallel".to_string());
     }
+    if let Some(t) = task.timeout {
+        parts.push(format!("timeout: {}", crate::exec::format_duration(t)));
+    }
+    if task.retries > 0 {
+        parts.push(format!("retries: {}", task.retries));
+    }
     if parts.is_empty() {
         // No form fields → auto-detected native runner (SPEC §3.1 form 3).
         parts.push("auto".to_string());

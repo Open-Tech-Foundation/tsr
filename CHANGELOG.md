@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-task `timeout` and `retries`.** `timeout = "5m"` (or `"1h30m"`,
+  `"500ms"`, a number of seconds) kills an attempt's whole process tree when it
+  runs too long, and the attempt fails with exit `124`. `retries = 2` re-runs a
+  failed attempt (non-zero exit or timeout) up to twice. Only the last attempt
+  counts, so a failure that a retry fixes doesn't trip fail-fast. Spawn failures
+  are not retried. Both show in `--list` and `--dry-run`.
+
 - **`shell = true`.** Hands a task's `run` string to `sh -c` (`cmd /c` on
   Windows) instead of the mini-shell, so pipes and redirects work without the
   full `delegate = { bin = "sh", args = ["-c", …] }` table. The shell expands

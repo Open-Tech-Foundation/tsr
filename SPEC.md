@@ -112,6 +112,8 @@ deps = ["ui#build"]
 | `packages` | array | Fan out across matching packages (globs or exact names). Mutually exclusive with `dir`. |
 | `deps` | array | Tasks that must run before this one (the dependency graph). Accepts `task`, `pkg#task`, and `^task` (§5.0). |
 | `parallel` | bool | Run `deps` / `packages` concurrently. Default `false` (sequential). |
+| `timeout` | string \| int | Kill an attempt that runs longer than this (`"30s"`, `"5m"`, `"1h30m"`, `"500ms"`, or seconds); it fails with `124` (§5.3). |
+| `retries` | int | Re-run a failed command up to this many more times before the task fails. Default `0` (§5.3). |
 | `args` | array | Default args prepended to the resolved command, before CLI passthrough. |
 | `env` | table | Per-task env; overrides `[env]` (see §7). |
 | `env_file` | string \| array | `.env`-style file(s) to load for this task (see §7.2). Listed order = increasing precedence (later overrides earlier). |
@@ -204,6 +206,12 @@ In a parallel batch, "the failure" is whichever child exits non-zero first in wa
 **`--no-bail`** opts out: every batch runs to completion, siblings are neither skipped nor killed, and the summary lists every failure. The propagated exit code is still the **first** failing child's, so CI sees the same signal either way. This is the flag for "tell me everything that is broken", not just the first thing.
 
 `--no-bail` covers **task** failures only. A runner-level error (§10) still stops the run, because it means `tsr` itself could not proceed — a missing `delegate` binary will be missing for every package, so continuing would only repeat the same error.
+
+### 5.3 Timeouts and retries
+
+- **`timeout`** bounds each **attempt** of a task's command — every leaf of a `packages` fan-out separately. When it passes, the attempt's whole process tree is torn down exactly as a fail-fast does (§12), `✗ <label> timed out after <t>` is printed, and the attempt fails with **`124`** (GNU `timeout`'s code). In a `run` sequence the deadline is checked while a child runs and between commands; an in-process builtin is never interrupted mid-operation. A task with a `timeout` gets process-tree isolation even in an interactive, sequential run, since it is a way to kill a child mid-run.
+- **`retries = N`** re-runs a failed attempt — non-zero exit or timeout — up to `N` more times, printing `↻ <label> exited <code> — retrying (attempt k of N+1)`. A command that could not be spawned is a runner error and is not retried. Only the **last** attempt counts: fail-fast fires on it, not on an attempt a retry may still rescue, and a run that is already aborting does not retry.
+
 
 ---
 
@@ -520,6 +528,7 @@ Affected = the packages the changed files live in, **plus every package that tra
 |------|---------|
 | `0` | Success. |
 | *child's code* | On task failure, the first failed child's **exact** exit code is propagated verbatim (`1`, `2`, `130`, …), so CI sees the real signal. |
+| `124` | A task's `timeout` expired (§5.3) — a task failure, propagated like a child's own code. |
 | `64` | **Runner-level** error: config parse failure, `dir`+`packages` both set, unknown task name, `delegate` binary not found, undefined `$VAR`, rejected mini-shell metacharacter, or a rejected security guard (§12). A failing **builtin** (§8.5) is a task failure, not a runner error, so it propagates its own `1`/`2`. |
 | `130` | The run was **interrupted** (Ctrl-C / `SIGTERM`, §12.4). Outranks whatever a killed child reported: the run ended because the user stopped it. |
 

@@ -14,6 +14,7 @@ pipelines see the real signal.
 |------|---------|
 | `0` | Success. |
 | *child's code* | On task failure, the first failed child's **exact** exit code is propagated verbatim (`1`, `2`, `130`, …). |
+| `124` | A task's `timeout` expired. Like a child's own code, this is a task failure. |
 | `64` | **Runner-level** error. |
 | `130` | The run was **interrupted** (Ctrl-C / `SIGTERM`). |
 
