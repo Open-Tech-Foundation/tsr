@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and always fails. It now runs `go run .`, with passthrough after the package
   as program arguments. `build` and `test` already defaulted to `.` and are
   unchanged.
+
+- NDJSON events: `durationMs` was the raw `f64` product, so the file sink could
+  hold values like `0.00033299999999999996`. It is now rounded to three decimals
+  (microseconds).
+
 - CI (Windows): the `PATH` cwd-smuggling tests spelled their values with a
   colon, but `PATH` is split on `;` there, so `":$PATH"` is a single ordinary
   entry and the expected rejection never came. The guard itself was correct on

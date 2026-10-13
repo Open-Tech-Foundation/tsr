@@ -1628,6 +1628,14 @@ fn reporter_file_works_without_the_ndjson_reporter() {
 
     let text = fs::read_to_string(ws.join("events.ndjson")).unwrap();
     assert!(text.contains("\"type\":\"summary\""), "{text}");
+
+    // Durations are rounded to three decimals — no `0.33299999999999996`.
+    for line in text.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        let ms = v["durationMs"].to_string();
+        let decimals = ms.split_once('.').map_or(0, |(_, frac)| frac.len());
+        assert!(decimals <= 3, "durationMs not rounded: {line}");
+    }
 }
 
 #[test]

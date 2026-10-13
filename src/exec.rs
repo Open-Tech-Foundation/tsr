@@ -259,7 +259,7 @@ impl<'a> Ctx<'a> {
                 "label": label,
                 "status": kind.as_str(),
                 "exitCode": match kind { ResultKind::Failed(c) => Some(c), _ => None },
-                "durationMs": dur.map(|d| d.as_secs_f64() * 1000.0),
+                "durationMs": dur.map(millis),
             }));
         }
         self.results.lock().unwrap().push(JobResult {
@@ -315,7 +315,7 @@ impl<'a> Ctx<'a> {
             "failed": count(|k| matches!(k, ResultKind::Failed(_))),
             "skipped": count(|k| matches!(k, ResultKind::Skipped)),
             "runnerError": runner_error,
-            "durationMs": started.elapsed().as_secs_f64() * 1000.0,
+            "durationMs": millis(started.elapsed()),
         }));
     }
 
@@ -1029,6 +1029,14 @@ fn strip_error(e: &TsrError) -> String {
         .unwrap_or(s)
 }
 
+/// A duration in milliseconds for the NDJSON events, rounded to the microsecond.
+/// The raw `f64` product carries binary noise (`0.33299999999999996`) that a
+/// consumer would have to round anyway; three decimals is the precision that
+/// means anything for a spawned process.
+fn millis(d: Duration) -> f64 {
+    (d.as_secs_f64() * 1_000_000.0).round() / 1000.0
+}
+
 /// Extract a child's exit code, mapping signal death to `128 + signal` on unix.
 fn exit_code_of(status: std::process::ExitStatus) -> i32 {
     #[cfg(unix)]
@@ -1043,6 +1051,26 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
     #[cfg(not(unix))]
     {
         status.code().unwrap_or(1)
+    }
+}
+
+#[cfg(test)]
+mod millis_tests {
+    use super::*;
+
+    #[test]
+    fn rounds_to_three_decimals_without_float_noise() {
+        // 333ns is the value from the report: 0.000333ms rounds to 0.
+        assert_eq!(millis(Duration::from_nanos(333)), 0.0);
+        assert_eq!(
+            serde_json::json!(millis(Duration::from_nanos(333_000))).to_string(),
+            "0.333"
+        );
+        assert_eq!(
+            serde_json::json!(millis(Duration::from_nanos(1_234_567_891))).to_string(),
+            "1234.568"
+        );
+        assert_eq!(millis(Duration::from_secs(2)), 2000.0);
     }
 }
 
