@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Auto-detect (Go): `tsr run` mapped to a bare `go run`, which lists no files
+  and always fails. It now runs `go run .`, with passthrough after the package
+  as program arguments. `build` and `test` already defaulted to `.` and are
+  unchanged.
 - CI (Windows): the `PATH` cwd-smuggling tests spelled their values with a
   colon, but `PATH` is split on `;` there, so `":$PATH"` is a single ordinary
   entry and the expected rejection never came. The guard itself was correct on

@@ -26,13 +26,15 @@ impl Ecosystem {
     ///
     /// - npm/bun → `npm run <task>` / `bun run <task>`
     /// - cargo   → `cargo <task>`   (`test`/`build`/`run` are native subcommands)
-    /// - go      → `go <task>`
+    /// - go      → `go <task>`, except `run` → `go run .` (a bare `go run`
+    ///   names no package and always fails; `build`/`test` default to `.`)
     /// - python  → `uv run <task>`
     pub fn native_command(self, task: &str) -> (String, Vec<String>) {
         match self {
             Ecosystem::Npm => ("npm".into(), vec!["run".into(), task.into()]),
             Ecosystem::Bun => ("bun".into(), vec!["run".into(), task.into()]),
             Ecosystem::Cargo => ("cargo".into(), vec![task.into()]),
+            Ecosystem::Go if task == "run" => ("go".into(), vec!["run".into(), ".".into()]),
             Ecosystem::Go => ("go".into(), vec![task.into()]),
             Ecosystem::Python => ("uv".into(), vec!["run".into(), task.into()]),
         }
@@ -611,6 +613,11 @@ mod tests {
         assert_eq!(
             Ecosystem::Go.native_command("build"),
             ("go".into(), vec!["build".into()])
+        );
+        // `go run` needs a package argument; `build`/`test` do not.
+        assert_eq!(
+            Ecosystem::Go.native_command("run"),
+            ("go".into(), vec!["run".into(), ".".into()])
         );
         assert_eq!(
             Ecosystem::Python.native_command("lint"),

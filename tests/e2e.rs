@@ -616,6 +616,24 @@ fn configless_walks_up_to_the_nearest_package() {
 }
 
 #[test]
+fn configless_go_run_names_the_current_package() {
+    // A bare `go run` lists no files and always fails, so the Go `run` task maps
+    // to `go run .`; passthrough lands after the package, as program args.
+    let ws = workspace();
+    let bin = ws.join("shims");
+    fs::create_dir_all(&bin).unwrap();
+    shim(&bin, "go");
+    write(&ws, "go.mod", "module example.com/m\n");
+    let out = tsr_with_path(&ws, &["run", "--", "--port", "8080"], &bin);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("INVOKED go run . --port 8080"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn configless_without_any_marker_is_error_64() {
     // No tasks.toml and no ecosystem marker: a clear error, not a silent success.
     let ws = workspace();

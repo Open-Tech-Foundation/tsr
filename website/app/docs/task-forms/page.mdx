@@ -71,6 +71,9 @@ marker file and maps the task name to that ecosystem's native runner:
 | `go.mod` | go | `go test` |
 | `pyproject.toml` | uv | `uv run test` |
 
+One exception: for Go, `tsr run` runs `go run .`, since a bare `go run` names no
+package and always fails.
+
 This is the core "wrapper" behaviour: a bare `[tasks.test]` just works across a
 polyglot repo with no per-package config.
 
