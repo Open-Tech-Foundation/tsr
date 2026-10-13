@@ -133,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed: the npm-migration guide said globs are rejected; they are
     supported.
   - Fixed: four in-page links pointed at heading anchors that don't exist.
+  - The hero's "A command runner, not a build system" chip now uses the
+    theme's green (tinted background, hairline border, pulsing status dot)
+    instead of hard-coded orange on black, so it also fits the light theme.
 
 - Docs: a new "Re-run on file changes" guide shows how to compose `tsr` with
   a watcher (`watchexec -- tsr test`) or forward a tool's own `--watch`. The
