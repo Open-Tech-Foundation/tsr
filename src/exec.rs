@@ -694,6 +694,7 @@ impl<'a> Ctx<'a> {
                     RunPlan::Direct(argv) => ExecPlan {
                         first: ExpandedCommand {
                             args: argv.into_iter().map(Arg::Literal).collect(),
+                            env: Vec::new(),
                         },
                         rest: Vec::new(),
                     },
@@ -835,17 +836,25 @@ impl<'a> Ctx<'a> {
     /// Execute a job's action, returning how it finished.
     fn execute_action(&self, job: &Job) -> LeafWait {
         match &job.action {
-            Action::Spawn { program, args } => self.spawn_wait(program, args, job),
+            Action::Spawn { program, args } => {
+                self.spawn_wait(program, args, &job.dir, &job.env, &job.label)
+            }
             Action::Shell(plan) => self.run_shell(plan, job),
         }
     }
 
     /// Run a `run` string's command sequence with `&&`/`||`/`;` semantics
     /// (SPEC §8.1), checking the abort flag between commands.
+    ///
+    /// The sequence carries its own working directory, starting at the job's,
+    /// so `cd sub && npm test` works the way it reads. `exit` ends the sequence
+    /// on the spot.
     fn run_shell(&self, plan: &ExecPlan, job: &Job) -> LeafWait {
-        let mut last = match self.run_command(&plan.first, job) {
-            LeafWait::Exited(c) => c,
-            other => return other,
+        let mut cwd = job.dir.clone();
+        let mut last = match self.run_command(&plan.first, job, &mut cwd, 0) {
+            Step::Next(c) => c,
+            Step::Exit(c) => return LeafWait::Exited(c),
+            Step::Stop(other) => return other,
         };
         for (sep, cmd) in &plan.rest {
             if self.aborted() {
@@ -854,45 +863,76 @@ impl<'a> Ctx<'a> {
             if !sep.proceeds(last) {
                 continue;
             }
-            match self.run_command(cmd, job) {
-                LeafWait::Exited(c) => last = c,
-                other => return other,
+            match self.run_command(cmd, job, &mut cwd, last) {
+                Step::Next(c) => last = c,
+                Step::Exit(c) => return LeafWait::Exited(c),
+                Step::Stop(other) => return other,
             }
         }
         LeafWait::Exited(last)
     }
 
-    /// Run one command of a `run` string: a builtin in-process, anything else
-    /// as a spawned child (SPEC §8.5). Globs are resolved here, so a pattern
-    /// sees whatever an earlier command in the sequence produced.
-    fn run_command(&self, cmd: &ExpandedCommand, job: &Job) -> LeafWait {
-        let argv = cmd.argv(&job.dir);
+    /// Run one command of a `run` string in `cwd`: `cd` and `exit`, which act
+    /// on the sequence itself; another builtin in-process; anything else as a
+    /// spawned child (SPEC §8.5). Globs are resolved here, so a pattern sees
+    /// whatever an earlier command in the sequence produced. `last` is the
+    /// previous command's exit code, which a bare `exit` returns.
+    fn run_command(&self, cmd: &ExpandedCommand, job: &Job, cwd: &mut PathBuf, last: i32) -> Step {
+        let argv = cmd.argv(cwd);
         let Some((program, args)) = argv.split_first() else {
-            return LeafWait::SpawnFailed("'run' string is empty".into());
+            return Step::Stop(LeafWait::SpawnFailed("'run' string is empty".into()));
         };
+        match program.as_str() {
+            "cd" => {
+                return Step::Next(match builtins::cd(args, cwd, &self.bounds) {
+                    Ok(dir) => {
+                        *cwd = dir;
+                        0
+                    }
+                    Err(code) => code,
+                });
+            }
+            "exit" => return Step::Exit(builtins::exit_code(args, last)),
+            _ => {}
+        }
         if builtins::is_builtin(program) {
             // Builtins are in-process and always fast, so there is no child to
             // poll; an abort is honoured by the caller's between-command check.
-            return LeafWait::Exited(builtins::run(program, args, &job.dir, &self.bounds));
+            return Step::Next(builtins::run(program, args, cwd, &self.bounds));
         }
-        self.spawn_wait(program, args, job)
+        // `NAME=value` prefixes apply to this one child only.
+        let env = if cmd.env.is_empty() {
+            std::borrow::Cow::Borrowed(&job.env)
+        } else {
+            let mut env = job.env.clone();
+            env.extend(cmd.env.iter().cloned());
+            std::borrow::Cow::Owned(env)
+        };
+        match self.spawn_wait(program, args, cwd, &env, &job.label) {
+            LeafWait::Exited(c) => Step::Next(c),
+            other => Step::Stop(other),
+        }
     }
 
-    /// Spawn one child and wait, polling the abort flag so a fail-fast can kill
-    /// it mid-run (SPEC §5.2).
-    fn spawn_wait(&self, program: &str, args: &[String], job: &Job) -> LeafWait {
+    /// Spawn one child in `dir` with exactly `env`, and wait, polling the abort
+    /// flag so a fail-fast can kill it mid-run (SPEC §5.2).
+    fn spawn_wait(
+        &self,
+        program: &str,
+        args: &[String],
+        dir: &Path,
+        env: &HashMap<String, String>,
+        label: &str,
+    ) -> LeafWait {
         // On Windows a bare `npm`/`vite` is a `.cmd` shim, which `Command`'s own
         // PATH search never probes for; resolving it here against the job's PATH
         // is what makes those spawn at all (SPEC §9.2).
-        let resolved = env::resolve_program(program, &job.env);
+        let resolved = env::resolve_program(program, env);
         let mut cmd = match &resolved {
             Some(path) => Command::new(path),
             None => Command::new(program),
         };
-        cmd.args(args)
-            .current_dir(&job.dir)
-            .env_clear()
-            .envs(&job.env);
+        cmd.args(args).current_dir(dir).env_clear().envs(env);
         // Contain the child's whole process tree when this run can abort one
         // (SPEC §12) — killing `npm run dev` must not leave `vite` holding a port.
         let mut contained = proc::contain(&mut cmd, self.isolation);
@@ -901,14 +941,12 @@ impl<'a> Ctx<'a> {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return LeafWait::SpawnFailed(format!(
-                    "task '{}': '{program}' not found — is it installed and on PATH?",
-                    job.label
+                    "task '{label}': '{program}' not found — is it installed and on PATH?"
                 ));
             }
             Err(e) => {
                 return LeafWait::SpawnFailed(format!(
-                    "task '{}': cannot run '{program}': {e}",
-                    job.label
+                    "task '{label}': cannot run '{program}': {e}"
                 ));
             }
         };
@@ -996,6 +1034,16 @@ enum LeafWait {
     Exited(i32),
     Killed,
     SpawnFailed(String),
+}
+
+/// What one command of a `run` sequence leaves for the next.
+enum Step {
+    /// It exited with this code; the separator decides what runs next.
+    Next(i32),
+    /// `exit`: the sequence ends here with this code.
+    Exit(i32),
+    /// It did not finish normally (killed, or could not be spawned).
+    Stop(LeafWait),
 }
 
 /// Append extra args (task `args` + CLI passthrough) to the final command of a

@@ -2244,3 +2244,153 @@ fn a_world_writable_env_file_is_refused() {
     assert!(stderr(&out).contains("world-writable"), "{}", stderr(&out));
     assert!(!ws.join("ran.txt").exists());
 }
+
+// --- cd / exit / NAME=value in the mini-shell (SPEC §8.5) ---
+
+#[test]
+fn cd_moves_the_rest_of_the_sequence() {
+    let ws = workspace();
+    fs::create_dir_all(ws.join("sub/deep")).unwrap();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"cd sub && touch made.txt && cd deep && pwd\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(ws.join("sub/made.txt").is_file());
+    assert!(!ws.join("made.txt").exists());
+    // `pwd` prints the platform's separator.
+    let pwd = stdout(&out).trim_end().replace('\\', "/");
+    assert!(pwd.ends_with("sub/deep"), "{pwd}");
+}
+
+#[test]
+fn cd_does_not_leak_into_the_next_task() {
+    let ws = workspace();
+    fs::create_dir_all(ws.join("sub")).unwrap();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.a]\nrun = \"cd sub\"\n[tasks.b]\nrun = \"touch here.txt\"\n\
+         [tasks.ci]\ndeps = [\"a\", \"b\"]\n",
+    );
+    let out = tsr(&ws, &["ci"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert!(ws.join("here.txt").is_file());
+}
+
+#[test]
+fn cd_out_of_the_workspace_fails_the_task() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"cd .. && touch escaped.txt\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 1, "stderr {}", stderr(&out));
+    assert!(stderr(&out).contains("cd: refusing"), "{}", stderr(&out));
+    assert!(!ws.parent().unwrap().join("escaped.txt").exists());
+}
+
+#[test]
+fn exit_ends_the_sequence_with_its_code() {
+    let cases: &[(&str, i32)] = &[
+        ("exit 3", 3),
+        ("exit 3 && touch no.txt", 3),
+        ("exit 0; touch no.txt", 0),
+        ("false; exit", 1),
+        ("true && exit", 0),
+        ("false || exit 4", 4),
+    ];
+    for (run, expected) in cases {
+        let ws = workspace();
+        write(&ws, "tasks.toml", &format!("[tasks.t]\nrun = \"{run}\"\n"));
+        let out = tsr(&ws, &["t"]);
+        assert_eq!(code(&out), *expected, "{run}: stderr {}", stderr(&out));
+        assert!(
+            !ws.join("no.txt").exists(),
+            "{run}: kept running after exit"
+        );
+    }
+}
+
+#[test]
+fn exit_is_a_builtin_not_a_missing_binary() {
+    // It used to spawn a program called `exit` and fail with "No such file".
+    let ws = workspace();
+    write(&ws, "tasks.toml", "[tasks.t]\nrun = \"exit 3\"\n");
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 3);
+    assert!(!stderr(&out).contains("not found"), "{}", stderr(&out));
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_prefix_sets_env_for_that_command_only() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"GREETING=hello sh -c 'echo [$GREETING]' && sh -c 'echo [$GREETING]'\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let text = stdout(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines, ["[hello]", "[]"], "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_prefix_expands_variables_and_combines_with_cd() {
+    let ws = workspace();
+    fs::create_dir_all(ws.join("sub")).unwrap();
+    write(
+        &ws,
+        "tasks.toml",
+        "[env]\nNAME = \"world\"\n\
+         [tasks.t]\nrun = \"cd sub && MSG=\\\"hi $NAME\\\" sh -c 'echo $MSG; pwd'\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("hi world"), "{text}");
+    assert!(text.trim_end().ends_with("/sub"), "{text}");
+}
+
+#[test]
+fn assignment_prefix_answers_to_the_env_guard() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"LD_PRELOAD=./evil.so touch ran.txt\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("task 't' run sets 'LD_PRELOAD'"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!ws.join("ran.txt").exists());
+}
+
+#[test]
+fn bare_assignment_is_a_config_error() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.t]\nrun = \"FOO=bar && echo hi\"\n",
+    );
+    let out = tsr(&ws, &["t"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no command to apply to"),
+        "{}",
+        stderr(&out)
+    );
+}

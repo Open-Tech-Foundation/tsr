@@ -363,6 +363,8 @@ A `run` string is parsed into an **AST** (program → command → word → part)
 - **`$VAR` / `${VAR}`** — expansion from the merged env (§7). `${...}` takes a plain variable name only; parameter expansion (`${VAR:-default}`, `${#VAR}`, …) is rejected with a specific error.
 - **`&&` `||` `;`** — sequencing with correct exit-code semantics (`&&` on `0`, `||` on non-zero, `;` always).
 - **Quoting** — `'single'` (literal, no expansion) and `"double"` (expansion applies). Quoted text is never globbed.
+- **`NAME=value` prefixes** — `NODE_ENV=production vite build` sets the variable for that one command, as in POSIX. The value is expanded but never globbed, and a later `$NAME` in the same command still sees the old value. An assignment with no command after it (`FOO=bar && …`) is rejected at load: variables expand before the sequence runs, so it could never reach a later command — set it in the task's `env` instead. A prefix answers to the same guards as `env` (§12.2): `LD_PRELOAD=… cmd` is refused without `--allow-unsafe-env`.
+- **`cd` and `exit`** — sequence builtins (§8.5).
 - **Globs** — `*`, `?`, `[...]` and `**` match against the filesystem, relative to the task's `dir` (§3.2), following `sh` rules: `*` does not cross a `/` and does not match a leading dot, while `**` spans directories (including zero of them, so `a/**/*.js` matches `a/x.js`); case sensitivity follows the platform. A pattern that matches nothing stays literal, exactly as in `sh`. Matches are returned with `/` separators on every platform, including Windows, so one `run` string produces one argv everywhere.
 
 Two rules keep globbing predictable:
@@ -414,6 +416,13 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 | `echo` | leading `-n` |
 | `pwd` | — |
 | `true` / `false` | — (operands ignored) |
+| `cd <dir>` | — |
+| `exit [N]` | — |
+
+`cd` and `exit` act on the `run` sequence itself:
+
+- **`cd <dir>`** changes the working directory for the **rest of that `run` string** — globs, builtins and spawned commands after it all see the new directory. It never outlives the string: the next task (or the next package in a fan-out) starts in its own `dir` as usual. The target must exist and stay inside the workspace (§12.1); otherwise `cd` fails with `1`. With no operand or more than one, `2` — there is no `$HOME` to fall back on.
+- **`exit [N]`** ends the sequence immediately with code `N` (`0`–`255`), or with the previous command's code when `N` is omitted, as in `sh`. A non-zero code fails the task like any other. A bad operand ends it with `2`.
 
 - **A builtin always wins** over a binary of the same name on `PATH`, on every platform. One `run` string, one behaviour. `delegate` is the escape hatch when a task genuinely needs the platform's own tool (§8.3).
 - Builtins apply to **`run` strings only** — never to `delegate` or an auto-detected native runner (§3.1).

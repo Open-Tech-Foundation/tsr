@@ -157,7 +157,7 @@ fn append(mut base: PathBuf, tail: &[OsString]) -> PathBuf {
 }
 
 /// Purely textual normalisation, for a path with no existing prefix at all.
-fn lexical(path: &Path) -> PathBuf {
+pub(crate) fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {

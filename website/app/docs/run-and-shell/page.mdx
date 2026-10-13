@@ -38,11 +38,27 @@ extension is never something you have to spell out.
   applies). Quoted text is never globbed.
 - **Globs** — `*`, `?`, `[...]`, `**` match real files, relative to the task's
   `dir`.
+- **`NAME=value` prefixes** — set a variable for one command, as in `sh`.
+- **`cd` and `exit`** — move the rest of the string to another directory, or
+  end it with a code.
 
 ```toml
 [tasks.deploy]
 run = "build && deploy --target $TARGET || notify 'deploy failed'"
+
+[tasks.e2e]
+run = "cd apps/web && NODE_ENV=test playwright test"
 ```
+
+### `NAME=value` prefixes
+
+`NODE_ENV=production vite build` sets `NODE_ENV` for `vite build` only. The
+value is expanded (`TOKEN=$SECRET deploy`) but never globbed. An assignment on
+its own (`FOO=bar && …`) is rejected when the config loads, because variables
+resolve before the sequence starts and the value could never reach a later
+command. Use the task's `env` for that. Prefixes pass through the same
+[guards](/docs/security) as `env`, so `LD_PRELOAD=… cmd` needs
+`--allow-unsafe-env`.
 
 <Callout type="note" title="`${...}` takes a plain name">
   Parameter expansion — <code>&#36;&#123;VAR:-default&#125;</code>, <code>&#36;&#123;#VAR&#125;</code>{" "}
@@ -84,6 +100,8 @@ operations tasks actually use, in-process:
 | `echo` | leading `-n` |
 | `pwd` | — |
 | `true` / `false` | — (operands ignored) |
+| `cd <dir>` | — |
+| `exit [N]` | — |
 
 ```toml
 [tasks.clean]
@@ -98,6 +116,12 @@ resolve against the task's `dir`. A builtin exits `0` on success, `1` on a faile
 operation, and `2` on a usage error. As in POSIX, `rm -f` with nothing to remove
 succeeds silently — which is what makes `rm -rf dist/*` idempotent once `dist`
 is already empty.
+
+`cd <dir>` changes the directory for the **rest of that `run` string** only. The
+next task, or the next package in a fan-out, starts in its own `dir` as usual.
+The target has to exist and stay inside the workspace. `exit [N]` ends the
+string right away with code `N`, or with the previous command's code when `N` is
+left out, so `run = "exit 3"` fails the task with `3`.
 
 `true` and `false` are here for a reason: `cmd || true` is the standard "this
 step must not fail the build" idiom, and on Windows there is no `/bin/true` to

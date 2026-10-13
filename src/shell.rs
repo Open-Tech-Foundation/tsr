@@ -70,10 +70,21 @@ pub struct Word {
     pub parts: Vec<Part>,
 }
 
-/// A single command: the words that become its argv.
+/// A single command: the words that become its argv, and any `NAME=value`
+/// words in front of them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Command {
+    /// Leading `NAME=value` assignments, set in this command's environment only
+    /// (POSIX). Never globbed.
+    pub assigns: Vec<Assign>,
     pub words: Vec<Word>,
+}
+
+/// One `NAME=value` prefix on a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assign {
+    pub name: String,
+    pub value: Word,
 }
 
 /// A parsed `run` string: a command sequence joined by separators.
@@ -114,9 +125,12 @@ pub enum Arg {
 
 /// A command whose words have been expanded against the env. Globs are *not*
 /// resolved yet — see [`ExpandedCommand::argv`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExpandedCommand {
     pub args: Vec<Arg>,
+    /// The command's `NAME=value` prefixes, expanded, layered over the job env
+    /// for this command only.
+    pub env: Vec<(String, String)>,
 }
 
 impl ExpandedCommand {
@@ -156,7 +170,10 @@ pub fn parse(input: &str) -> Result<RunPlan> {
     // Direct fast-path: one command whose every word is already a literal. This
     // is a structural property of the AST — quoting alone (`echo 'a b'`) still
     // qualifies, because quotes affect *parsing*, not run-time work.
-    if program.rest.is_empty() && program.first.words.iter().all(Word::is_static) {
+    if program.rest.is_empty()
+        && program.first.assigns.is_empty()
+        && program.first.words.iter().all(Word::is_static)
+    {
         let argv: Vec<String> = program.first.words.iter().map(Word::literal).collect();
         return Ok(RunPlan::Direct(argv));
     }
@@ -184,6 +201,45 @@ impl Word {
             .collect()
     }
 
+    /// The word as written, with variables shown as `${NAME}`: what a
+    /// load-time check sees before anything is expanded.
+    pub fn source(&self) -> String {
+        self.parts
+            .iter()
+            .map(|p| match p {
+                Part::Bare(s) | Part::Quoted(s) => s.clone(),
+                Part::Var(v) => format!("${{{}}}", v.name),
+            })
+            .collect()
+    }
+
+    /// Split a leading `NAME=` off this word, if it is an assignment: the first
+    /// part is unquoted text and everything before its first `=` is a valid
+    /// variable name. Quoting the name (`"A"=b`) makes it an ordinary word, as
+    /// in `sh`.
+    fn as_assign(&self) -> Option<Assign> {
+        let Some(Part::Bare(first)) = self.parts.first() else {
+            return None;
+        };
+        let (name, rest) = first.split_once('=')?;
+        let valid = name.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic())
+            && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
+        if !valid {
+            return None;
+        }
+        let mut value = Word::default();
+        if !rest.is_empty() {
+            value.push(Part::Bare(rest.to_string()));
+        }
+        for part in &self.parts[1..] {
+            value.push(part.clone());
+        }
+        Some(Assign {
+            name: name.to_string(),
+            value,
+        })
+    }
+
     /// Append a part, coalescing adjacent same-kind literals for a tidier AST.
     fn push(&mut self, part: Part) {
         match (self.parts.last_mut(), &part) {
@@ -208,12 +264,18 @@ impl Program {
         Ok(ExecPlan { first, rest })
     }
 
+    /// Every command in the sequence, in order.
+    pub fn commands(&self) -> impl Iterator<Item = &Command> {
+        std::iter::once(&self.first).chain(self.rest.iter().map(|(_, c)| c))
+    }
+
     /// All variable references in the program, in source order (for load-time
     /// checking and diagnostics).
     pub fn referenced_vars(&self) -> Vec<VarRef> {
         let mut out = Vec::new();
-        for cmd in std::iter::once(&self.first).chain(self.rest.iter().map(|(_, c)| c)) {
-            for word in &cmd.words {
+        for cmd in self.commands() {
+            let values = cmd.assigns.iter().map(|a| &a.value);
+            for word in values.chain(&cmd.words) {
                 for part in &word.parts {
                     if let Part::Var(v) = part {
                         out.push(v.clone());
@@ -270,6 +332,11 @@ fn expand_command(
     cmd: &Command,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ExpandedCommand> {
+    let mut env = Vec::with_capacity(cmd.assigns.len());
+    for assign in &cmd.assigns {
+        // An assignment value is expanded but never globbed (POSIX).
+        env.push((assign.name.clone(), render(&assign.value, lookup)?.text));
+    }
     let mut args = Vec::with_capacity(cmd.words.len());
     for word in &cmd.words {
         let r = render(word, lookup)?;
@@ -282,7 +349,7 @@ fn expand_command(
             Arg::Literal(r.text)
         });
     }
-    Ok(ExpandedCommand { args })
+    Ok(ExpandedCommand { args, env })
 }
 
 /// Characters that make a bare word a glob pattern.
@@ -470,7 +537,25 @@ impl Lexer {
         for word in &words {
             reject_brace_list(word)?;
         }
-        Ok(Command { words })
+        // Leading `NAME=value` words are assignments for this command (POSIX);
+        // the first word that is not one starts the argv.
+        let n = words.iter().take_while(|w| w.as_assign().is_some()).count();
+        let assigns: Vec<Assign> = words[..n].iter().filter_map(Word::as_assign).collect();
+        let words = words.split_off(n);
+        if words.is_empty()
+            && let Some(a) = assigns.first()
+        {
+            // In `sh` a bare assignment sets a shell variable for later
+            // commands. Here variables expand once, before the sequence runs, so
+            // that could never work — say so rather than silently dropping it.
+            return Err(TsrError::config(format!(
+                "'run' string: '{}=…' has no command to apply to — a NAME=value prefix \
+                 sets the variable for the command after it only; set it in the task's \
+                 `env` to use it across the whole string",
+                a.name
+            )));
+        }
+        Ok(Command { assigns, words })
     }
 
     /// After a command, consume a separator if present.
@@ -770,6 +855,88 @@ mod tests {
     }
 
     // --- classification ---
+
+    fn expand_cmds(input: &str, env: &[(&str, &str)]) -> Vec<ExpandedCommand> {
+        let map: HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let plan = shell(input).expand(&|k| map.get(k).cloned()).unwrap();
+        std::iter::once(plan.first)
+            .chain(plan.rest.into_iter().map(|(_, c)| c))
+            .collect()
+    }
+
+    fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+        v.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn leading_assignments_become_command_env() {
+        let cmds = expand_cmds("FOO=bar BAZ=\"a b\" node app.js", &[]);
+        assert_eq!(cmds[0].env, pairs(&[("FOO", "bar"), ("BAZ", "a b")]));
+        assert_eq!(
+            cmds[0].args,
+            vec![Arg::Literal("node".into()), Arg::Literal("app.js".into())]
+        );
+    }
+
+    #[test]
+    fn assignments_apply_per_command_in_a_sequence() {
+        let cmds = expand_cmds("A=1 x && y && B=$V z", &[("V", "val")]);
+        assert_eq!(cmds[0].env, pairs(&[("A", "1")]));
+        assert!(cmds[1].env.is_empty());
+        assert_eq!(cmds[2].env, pairs(&[("B", "val")]));
+    }
+
+    #[test]
+    fn assignment_values_are_never_globbed() {
+        let dir = std::env::temp_dir();
+        let cmds = expand_cmds("PAT=*.js EMPTY= run", &[]);
+        assert_eq!(cmds[0].env, pairs(&[("PAT", "*.js"), ("EMPTY", "")]));
+        assert_eq!(cmds[0].argv(&dir), vec!["run".to_string()]);
+    }
+
+    #[test]
+    fn only_leading_valid_names_are_assignments() {
+        // After the program name, `a=b` is an ordinary argument.
+        assert_eq!(direct("echo a=b"), vec!["echo", "a=b"]);
+        // A quoted or invalid name is not an assignment, as in `sh`.
+        assert_eq!(direct("'A'=b cmd"), vec!["A=b", "cmd"]);
+        assert_eq!(direct("1A=b cmd"), vec!["1A=b", "cmd"]);
+        assert_eq!(direct("=b cmd"), vec!["=b", "cmd"]);
+    }
+
+    #[test]
+    fn a_static_command_with_an_assignment_is_not_direct() {
+        // The direct path has no env to carry the assignment in.
+        assert_eq!(
+            shell("NODE_ENV=production vite build").first.assigns.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_assignment_with_no_command_is_rejected() {
+        for input in ["FOO=bar", "FOO=bar && echo hi", "echo hi; A=1 B=2"] {
+            let err = parse(input).unwrap_err().to_string();
+            assert!(err.contains("has no command to apply to"), "{input}: {err}");
+        }
+    }
+
+    #[test]
+    fn assignment_values_count_as_variable_references() {
+        let vars = shell("TOKEN=$SECRET deploy").referenced_vars();
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "SECRET");
+        // The source form keeps the reference visible for load-time checks.
+        assert_eq!(
+            shell("PATH=./bin:$PATH x").first.assigns[0].value.source(),
+            "./bin:${PATH}"
+        );
+    }
 
     #[test]
     fn plain_string_is_direct_spawn() {

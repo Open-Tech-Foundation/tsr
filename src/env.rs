@@ -495,6 +495,18 @@ pub fn validate_guarded_vars(cfg: &Config, keys: &[String], allow: bool) -> Resu
         sources.push((format!("task '{}' env", task.key), &task.env));
         let loaded = load_env_files(&task_base_dir(&cfg.root, task), &task.env_files, &bounds);
         task_files.push((format!("task '{}' env_file", task.key), loaded));
+        // A `NAME=value` prefix in the `run` string sets a child's env just as
+        // surely as `env` does, so it answers to the same guard.
+        if let Some(run) = &task.run
+            && let Ok(shell::RunPlan::Shell(program)) = shell::parse(run)
+        {
+            let prefixes: Vec<(String, String)> = program
+                .commands()
+                .flat_map(|c| &c.assigns)
+                .map(|a| (a.name.clone(), a.value.source()))
+                .collect();
+            task_files.push((format!("task '{}' run", task.key), prefixes));
+        }
     }
     for (label, pairs) in &task_files {
         sources.push((label.clone(), pairs));

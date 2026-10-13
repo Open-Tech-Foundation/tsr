@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`cd`, `exit` and `NAME=value` in `run` strings.** Ported npm scripts no
+  longer have to move to `delegate = { bin = "sh", … }` and lose portability:
+  - `cd <dir>` changes the directory for the rest of that `run` string, so
+    `cd apps/web && npm test` works. It stays inside the workspace and never
+    carries over to the next task.
+  - `exit [N]` ends the string with code `N`, or with the previous command's
+    code. It used to try to spawn a program called `exit` and fail with
+    "No such file".
+  - `NODE_ENV=production vite build` sets the variable for that one command, as
+    in POSIX. Prefixes go through the same `LD_PRELOAD`/`PATH` guards as `env`.
+    An assignment with no command after it is a config error, because it could
+    never reach a later command.
+
 - **"Did you mean…?" for unknown tasks.** `tsr okk` with an `ok` task defined
   now reports `unknown task 'okk' — did you mean 'ok'?`, and so does a `deps`
   entry naming a task that does not exist. The closest defined name is offered

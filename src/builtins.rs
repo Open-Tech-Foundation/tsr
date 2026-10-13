@@ -60,6 +60,65 @@ pub fn run(name: &str, args: &[String], cwd: &Path, bounds: &Bounds) -> i32 {
     }
 }
 
+// --- sequence builtins ---
+//
+// `cd` and `exit` act on the `run` sequence itself — its working directory, or
+// whether it goes on — so the executor dispatches them directly instead of
+// through [`run`]. They live here because they are still builtins: one
+// behaviour on every platform, never a binary on `PATH`.
+
+/// `cd <dir>`: the directory the rest of the `run` sequence runs in, or the
+/// exit code to report. The target must exist, be a directory, and stay inside
+/// the workspace (SPEC §12.1) — `cd ..` out of the root would otherwise hand
+/// every later command, builtins included, a cwd outside the boundary.
+///
+/// The new directory is joined textually rather than canonicalised: a
+/// canonical Windows path is `\\?\`-prefixed, which `cmd.exe` (and so every
+/// `.cmd` shim) refuses as a working directory.
+pub fn cd(args: &[String], cwd: &Path, bounds: &Bounds) -> Result<PathBuf, i32> {
+    let [dir] = args else {
+        errln(format_args!(
+            "cd: expected exactly one directory, got {}",
+            args.len()
+        ));
+        return Err(USAGE);
+    };
+    if !bounds.permits_operand(cwd, dir) {
+        errln(format_args!(
+            "cd: refusing to enter '{dir}': outside the workspace at '{}' — \
+             add it to `[security] allow_paths` if that is intended",
+            bounds.root().display()
+        ));
+        return Err(FAIL);
+    }
+    let target = crate::confine::lexical(&cwd.join(dir));
+    if !target.is_dir() {
+        errln(format_args!("cd: '{dir}': no such directory"));
+        return Err(FAIL);
+    }
+    Ok(target)
+}
+
+/// `exit [N]`: the code the `run` sequence ends with — `N`, or `last` (the
+/// previous command's) when no operand is given, as in `sh`. A bad operand
+/// still ends the sequence, with the usage code.
+pub fn exit_code(args: &[String], last: i32) -> i32 {
+    match args {
+        [] => last,
+        [n] => match n.parse::<u8>() {
+            Ok(code) => i32::from(code),
+            Err(_) => {
+                errln(format_args!("exit: '{n}': expected a code from 0 to 255"));
+                USAGE
+            }
+        },
+        _ => {
+            errln(format_args!("exit: too many arguments"));
+            USAGE
+        }
+    }
+}
+
 // --- shared helpers ---
 
 /// Resolve an operand against the job directory and confirm it stays inside the
@@ -499,6 +558,66 @@ mod tests {
         // POSIX: operands are ignored rather than parsed as flags.
         assert_eq!(call("true", &["--anything", "x"], &dir), 0);
         assert_eq!(call("false", &["--anything", "x"], &dir), FAIL);
+    }
+
+    // --- cd / exit ---
+
+    #[test]
+    fn cd_enters_a_directory_inside_the_workspace() {
+        let root = scratch();
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        let bounds = Bounds::new(&root, &[]);
+        let dir = cd(&args(&["a/b"]), &root, &bounds).unwrap();
+        assert_eq!(dir, root.join("a/b"));
+        // Relative to wherever the sequence already is, and `..` is fine
+        // while it stays inside.
+        let up = cd(&args(&[".."]), &dir, &bounds).unwrap();
+        assert_eq!(up, root.join("a"));
+    }
+
+    #[test]
+    fn cd_refuses_missing_files_and_bad_usage() {
+        let root = scratch();
+        write(&root, "file.txt", "x");
+        let bounds = Bounds::new(&root, &[]);
+        assert_eq!(cd(&args(&["nope"]), &root, &bounds), Err(FAIL));
+        assert_eq!(cd(&args(&["file.txt"]), &root, &bounds), Err(FAIL));
+        assert_eq!(cd(&args(&[]), &root, &bounds), Err(USAGE));
+        assert_eq!(cd(&args(&["a", "b"]), &root, &bounds), Err(USAGE));
+    }
+
+    #[test]
+    fn cd_cannot_leave_the_workspace() {
+        let root = scratch();
+        let bounds = Bounds::new(&root, &[]);
+        assert_eq!(cd(&args(&[".."]), &root, &bounds), Err(FAIL));
+        let outside = std::env::temp_dir();
+        assert_eq!(
+            cd(&args(&[outside.to_str().unwrap()]), &root, &bounds),
+            Err(FAIL)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cd_judges_a_symlink_by_where_it_lands() {
+        let root = scratch();
+        let outside = scratch();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let bounds = Bounds::new(&root, &[]);
+        assert_eq!(cd(&args(&["link"]), &root, &bounds), Err(FAIL));
+    }
+
+    #[test]
+    fn exit_code_takes_an_operand_or_the_last_status() {
+        assert_eq!(exit_code(&args(&[]), 0), 0);
+        assert_eq!(exit_code(&args(&[]), 7), 7);
+        assert_eq!(exit_code(&args(&["3"]), 0), 3);
+        assert_eq!(exit_code(&args(&["255"]), 0), 255);
+        assert_eq!(exit_code(&args(&["256"]), 0), USAGE);
+        assert_eq!(exit_code(&args(&["-1"]), 0), USAGE);
+        assert_eq!(exit_code(&args(&["abc"]), 0), USAGE);
+        assert_eq!(exit_code(&args(&["1", "2"]), 0), USAGE);
     }
 
     #[test]
