@@ -309,6 +309,36 @@ fn list_shows_tasks() {
 }
 
 #[test]
+fn list_shows_broken_tasks_instead_of_failing() {
+    // One invalid task must not hide the rest of the list.
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.ok]\nrun = \"echo fine\"\n[tasks.bad]\nrun = \"cat a | grep b\"\n",
+    );
+    let out = tsr(&ws, &["--list"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("ok") && s.contains("run: echo fine"), "{s}");
+    let bad = s
+        .lines()
+        .find(|l| l.trim_start().starts_with("bad"))
+        .expect(&s);
+    assert!(bad.contains("✗"), "{s}");
+    assert!(
+        stderr(&out).contains("1 task with config errors"),
+        "{}",
+        stderr(&out)
+    );
+
+    // Runs stay strict: the broken config still refuses to start.
+    let out = tsr(&ws, &["ok"]);
+    assert_eq!(code(&out), 64, "stderr {}", stderr(&out));
+    assert!(stderr(&out).contains("task 'bad'"), "{}", stderr(&out));
+}
+
+#[test]
 fn a_task_named_list_is_not_shadowed_by_a_builtin() {
     // Builtins are flags (`--list`), so the bare word `list` runs the task.
     let ws = workspace();

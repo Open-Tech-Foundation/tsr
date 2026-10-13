@@ -244,6 +244,16 @@ Available tasks:
   test   packages: apps/*
 ```
 
+A task with a config error doesn't stop the listing. It shows in place, marked
+`✗` with its error, and a note on stderr counts the broken tasks. Runs stay
+strict, so every `tsr <task>` exits `64` until the broken task is fixed.
+
+```text
+Available tasks:
+  bad  ✗ 'run' string uses '|' (pipe), which is unsupported — use `delegate` or a script file
+  ok   run: echo fine
+```
+
 With no `tasks.toml`, there is nothing declared to list, so `--list` instead
 reports the detected package and reminds you that scripts run directly (e.g.
 `tsr dev`).

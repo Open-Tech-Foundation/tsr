@@ -61,7 +61,10 @@ fn run() -> error::Result<i32> {
         Cli::List => {
             let cwd = cwd()?;
             match config::locate(&cwd) {
-                Some(path) => cli::list(&Config::load(&path)?),
+                Some(path) => {
+                    let (cfg, broken) = Config::load_lenient(&path)?;
+                    cli::list(&cfg, &broken);
+                }
                 None => cli::list_configless(&cwd),
             }
             Ok(0)

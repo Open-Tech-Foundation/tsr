@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`tsr --list` survives a broken task.** One invalid task, such as a `run`
+  with a pipe, made `--list` fail with exit `64` and show nothing. The list now
+  shows every task, marks a broken one `✗` with its error, counts the broken
+  tasks on stderr, and exits `0`. Runs stay strict: a config with a broken task
+  still refuses to start any task. Document-level errors (invalid TOML, a bad
+  `[workspace]`) still fail the listing.
+
 - **Bare Python task names no longer guess.** A bare task in a Python project
   mapped to `uv run <task>`, so `tsr test` looked for an executable called
   `test` and exited `1` with nothing useful to say. A bare name now runs only

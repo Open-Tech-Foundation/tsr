@@ -104,6 +104,39 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Load a `tasks.toml` for **listing** (`tsr --list`): a task that fails
+    /// to parse or validate is set aside with its error instead of failing the
+    /// whole load, so one broken task does not hide every other one.
+    ///
+    /// Runs keep the strict [`Config::load`] (SPEC §3.3): a config with a broken
+    /// task should not start a build at all. Errors that are not about one task
+    /// (invalid TOML, a bad `[workspace]` / `[env]` / `[security]`) still fail.
+    ///
+    /// Returns the config holding only the valid tasks, and each broken task's
+    /// key mapped to its error message.
+    pub fn load_lenient(path: &Path) -> Result<(Config, BTreeMap<String, String>)> {
+        check_writability(path)?;
+        let text = fs::read_to_string(path)
+            .map_err(|e| TsrError::config(format!("cannot read '{}': {e}", path.display())))?;
+        let root = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut broken = BTreeMap::new();
+        let mut cfg = parse_with(&text, root, Some(&mut broken))?;
+        cfg.validate_workspace()?;
+        let bounds = cfg.bounds();
+        cfg.tasks
+            .retain(|key, task| match validate_task(&cfg.root, &bounds, task) {
+                Ok(()) => true,
+                Err(e) => {
+                    broken.insert(key.clone(), task_error_detail(key, &e));
+                    false
+                }
+            });
+        Ok((cfg, broken))
+    }
+
     /// Look up a task by its full key.
     pub fn task(&self, key: &str) -> Option<&Task> {
         self.tasks.get(key)
@@ -317,6 +350,16 @@ fn find_config(start: &Path) -> Option<PathBuf> {
 
 /// Parse TOML text into the typed [`Config`] model (no cross-field validation).
 fn parse(text: &str, root: PathBuf) -> Result<Config> {
+    parse_with(text, root, None)
+}
+
+/// [`parse`], optionally collecting each task that fails to parse into `broken`
+/// (key → message) rather than failing the whole document.
+fn parse_with(
+    text: &str,
+    root: PathBuf,
+    mut broken: Option<&mut BTreeMap<String, String>>,
+) -> Result<Config> {
     let doc: DocumentMut = text
         .parse()
         .map_err(|e| TsrError::config(format!("invalid TOML in '{CONFIG_FILE}': {e}")))?;
@@ -343,8 +386,15 @@ fn parse(text: &str, root: PathBuf) -> Result<Config> {
     let mut tasks = BTreeMap::new();
     if let Some(tbl) = doc.get("tasks").and_then(Item::as_table_like) {
         for (key, item) in tbl.iter() {
-            let task = parse_task(key, item)?;
-            tasks.insert(key.to_string(), task);
+            match (parse_task(key, item), broken.as_deref_mut()) {
+                (Ok(task), _) => {
+                    tasks.insert(key.to_string(), task);
+                }
+                (Err(e), Some(broken)) => {
+                    broken.insert(key.to_string(), task_error_detail(key, &e));
+                }
+                (Err(e), None) => return Err(e),
+            }
         }
     }
 
@@ -490,6 +540,16 @@ impl Config {
     /// Structural validation performed once at load time (SPEC §3.3, §4).
     /// `$VAR` resolution is validated later, against the merged env (SPEC §7.3).
     fn validate(&self) -> Result<()> {
+        self.validate_workspace()?;
+        let bounds = self.bounds();
+        for task in self.tasks.values() {
+            validate_task(&self.root, &bounds, task)?;
+        }
+        Ok(())
+    }
+
+    /// The checks that are not about any one task.
+    fn validate_workspace(&self) -> Result<()> {
         // Every directory the config points `tsr` at must stay inside the
         // workspace (SPEC §12.1). Checked here, at load, rather than at use:
         // a config that would step outside should fail before the first task
@@ -500,61 +560,71 @@ impl Config {
             // `../*` escapes before the wildcard is reached.
             bounds.check("workspace.members", &self.root, glob_prefix(member))?;
         }
-
-        for task in self.tasks.values() {
-            validate_task_key(&task.key)?;
-
-            if let Some(dir) = &task.dir {
-                bounds.check(&format!("task '{}': dir", task.key), &self.root, dir)?;
-            }
-            let base = match &task.dir {
-                Some(d) => self.root.join(d),
-                None => self.root.clone(),
-            };
-            for file in &task.env_files {
-                bounds.check(&format!("task '{}': env_file", task.key), &base, file)?;
-            }
-            for pattern in task.packages.iter().flatten() {
-                bounds.check(
-                    &format!("task '{}': packages", task.key),
-                    &self.root,
-                    glob_prefix(pattern),
-                )?;
-            }
-
-            if task.dir.is_some() && task.packages.is_some() {
-                return Err(TsrError::config(format!(
-                    "task '{}': 'dir' and 'packages' are mutually exclusive",
-                    task.key
-                )));
-            }
-
-            for dep in &task.deps {
-                validate_dep_ref(&task.key, dep)?;
-                // `^` means "in *this package's* dependencies", so it needs a
-                // package to be relative to. Only a `packages` fan-out supplies
-                // one — a task that runs once in a single directory has no
-                // upstream to speak of (SPEC §5).
-                if upstream_dep(dep).is_some() && task.packages.is_none() {
-                    return Err(TsrError::config(format!(
-                        "task '{}': upstream dep '{dep}' requires 'packages' — '^' resolves \
-                         against the package each fan-out runs in",
-                        task.key
-                    )));
-                }
-            }
-
-            // Reject unsupported mini-shell metacharacters at load time (SPEC
-            // §8.2/§8.4). `$VAR` resolution is checked later, once the env is
-            // merged (SPEC §7.3).
-            if let Some(run) = &task.run {
-                crate::shell::parse(run).map_err(|e| {
-                    TsrError::config(format!("task '{}': {}", task.key, strip_prefix(&e)))
-                })?;
-            }
-        }
         Ok(())
     }
+}
+
+/// One task's structural checks (SPEC §3.3, §4, §12.1).
+fn validate_task(root: &Path, bounds: &crate::confine::Bounds, task: &Task) -> Result<()> {
+    validate_task_key(&task.key)?;
+
+    if let Some(dir) = &task.dir {
+        bounds.check(&format!("task '{}': dir", task.key), root, dir)?;
+    }
+    let base = match &task.dir {
+        Some(d) => root.join(d),
+        None => root.to_path_buf(),
+    };
+    for file in &task.env_files {
+        bounds.check(&format!("task '{}': env_file", task.key), &base, file)?;
+    }
+    for pattern in task.packages.iter().flatten() {
+        bounds.check(
+            &format!("task '{}': packages", task.key),
+            root,
+            glob_prefix(pattern),
+        )?;
+    }
+
+    if task.dir.is_some() && task.packages.is_some() {
+        return Err(TsrError::config(format!(
+            "task '{}': 'dir' and 'packages' are mutually exclusive",
+            task.key
+        )));
+    }
+
+    for dep in &task.deps {
+        validate_dep_ref(&task.key, dep)?;
+        // `^` means "in *this package's* dependencies", so it needs a
+        // package to be relative to. Only a `packages` fan-out supplies
+        // one — a task that runs once in a single directory has no
+        // upstream to speak of (SPEC §5).
+        if upstream_dep(dep).is_some() && task.packages.is_none() {
+            return Err(TsrError::config(format!(
+                "task '{}': upstream dep '{dep}' requires 'packages' — '^' resolves \
+                 against the package each fan-out runs in",
+                task.key
+            )));
+        }
+    }
+
+    // Reject unsupported mini-shell metacharacters at load time (SPEC
+    // §8.2/§8.4). `$VAR` resolution is checked later, once the env is
+    // merged (SPEC §7.3).
+    if let Some(run) = &task.run {
+        crate::shell::parse(run)
+            .map_err(|e| TsrError::config(format!("task '{}': {}", task.key, strip_prefix(&e))))?;
+    }
+    Ok(())
+}
+
+/// A task's error message without the banner or the `task '<key>': ` lead-in,
+/// for showing next to the task's own name.
+fn task_error_detail(key: &str, e: &TsrError) -> String {
+    let s = strip_prefix(e);
+    s.strip_prefix(&format!("task '{key}': "))
+        .map(str::to_string)
+        .unwrap_or(s)
 }
 
 /// Strip the leading "✗ config error: " that `Display` adds, so a wrapped
@@ -646,6 +716,36 @@ mod tests {
 
     fn load(text: &str) -> Result<Config> {
         Config::load(&write_config(text))
+    }
+
+    #[test]
+    fn lenient_load_sets_broken_tasks_aside() {
+        let path = write_config(
+            "[tasks.ok]\nrun = \"true\"\n\
+             [tasks.pipe]\nrun = \"cat a | grep b\"\n\
+             [tasks.typed]\nparallel = \"yes\"\n\
+             [tasks.both]\ndir = \"a\"\npackages = [\"b/*\"]\n",
+        );
+        // The strict load used for runs still rejects the whole file.
+        assert!(Config::load(&path).is_err());
+
+        let (cfg, broken) = Config::load_lenient(&path).unwrap();
+        assert_eq!(cfg.tasks.keys().collect::<Vec<_>>(), ["ok"]);
+        assert_eq!(broken.keys().collect::<Vec<_>>(), ["both", "pipe", "typed"]);
+        // Messages drop the `task '<key>': ` lead-in; the key is shown beside them.
+        assert!(
+            broken["typed"].starts_with("'parallel' must be a boolean"),
+            "{broken:?}"
+        );
+        assert!(broken["both"].contains("mutually exclusive"), "{broken:?}");
+        assert!(!broken["pipe"].contains("task 'pipe'"), "{broken:?}");
+    }
+
+    #[test]
+    fn lenient_load_still_fails_on_document_level_errors() {
+        assert!(Config::load_lenient(&write_config("[tasks.a\n")).is_err());
+        let path = write_config("[workspace]\nmembers = [\"../*\"]\n[tasks.a]\nrun = \"x\"\n");
+        assert!(Config::load_lenient(&path).is_err());
     }
 
     #[test]

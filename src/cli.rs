@@ -298,15 +298,39 @@ pub fn init(dir: &std::path::Path) -> Result<()> {
 }
 
 /// Print the tasks defined in the config, with a one-line form descriptor.
-pub fn list(cfg: &Config) {
-    if cfg.tasks.is_empty() {
+///
+/// `broken` holds the tasks [`Config::load_lenient`] set aside, keyed to their
+/// error. They are listed in place with a `✗`, so one bad task neither hides
+/// the rest nor goes unnoticed; running one still fails with exit `64`.
+pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
+    if cfg.tasks.is_empty() && broken.is_empty() {
         println!("No tasks defined in tasks.toml.");
         return;
     }
-    let width = cfg.tasks.keys().map(String::len).max().unwrap_or(0);
+    let width = cfg
+        .tasks
+        .keys()
+        .chain(broken.keys())
+        .map(String::len)
+        .max()
+        .unwrap_or(0);
+    let mut rows: Vec<(&String, String)> = cfg
+        .tasks
+        .iter()
+        .map(|(key, task)| (key, describe(task)))
+        .chain(broken.iter().map(|(key, err)| (key, format!("✗ {err}"))))
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
     println!("Available tasks:");
-    for (key, task) in &cfg.tasks {
-        println!("  {key:width$}  {}", describe(task));
+    for (key, desc) in rows {
+        println!("  {key:width$}  {desc}");
+    }
+    if !broken.is_empty() {
+        let n = broken.len();
+        let s = if n == 1 { "" } else { "s" };
+        eprintln!(
+            "\n✗ {n} task{s} with config errors (marked ✗). Every run fails until they are fixed."
+        );
     }
 }
 
