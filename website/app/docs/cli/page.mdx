@@ -13,6 +13,7 @@ tsr [-- <args>...]                    run the [workspace] default task
 tsr --list                            list the tasks defined in tasks.toml
 tsr --config                          edit tasks.toml in an interactive TUI
 tsr --init                            create a starter tasks.toml here
+tsr --completions <shell>             print a bash / zsh / fish completion script
 tsr --help | --version
 ```
 
@@ -42,6 +43,7 @@ These options may follow a task name. Each value-taking one accepts
 | [`--list`](#tsr-list) | List the tasks in `tasks.toml`. |
 | [`--config`](#tsr-config) | Edit `tasks.toml` in an interactive TUI. |
 | [`--init`](#tsr-init) | Scaffold a starter `tasks.toml`. |
+| [`--completions <shell>`](#tsr---completions-shell) | Print a shell completion script. |
 | `--help` / `-h` · `--version` / `-V` | Usage and version. |
 
 ## `tsr <task>`
@@ -381,6 +383,23 @@ already does — `tsr dev` would stop running your real `npm run dev`. Uncomment
 the example you want, or run [`tsr --config`](#tsr-config) to add tasks
 interactively. A bare `[tasks.<name>]` (form 3) re-enables auto-detection for
 that task.
+
+## `tsr --completions <shell>`
+
+Prints a completion script for `bash`, `zsh` or `fish`. It completes flags,
+option values, and your task names, which it reads fresh from the current
+directory each time, so new tasks show up without regenerating anything.
+
+```sh
+# bash — add to ~/.bashrc
+source <(tsr --completions bash)
+
+# zsh — add to ~/.zshrc (after compinit)
+source <(tsr --completions zsh)
+
+# fish — add to ~/.config/fish/config.fish
+tsr --completions fish | source
+```
 
 ## `tsr --help` · `tsr --version`
 

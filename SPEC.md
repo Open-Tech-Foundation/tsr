@@ -242,14 +242,17 @@ tsr <task> --since <ref>    run only in packages affected since a git ref
 tsr --list                  list the tasks defined in tasks.toml
 tsr --config                edit tasks.toml in an interactive TUI
 tsr --init                  create a starter tasks.toml here
+tsr --completions <shell>   print a bash / zsh / fish completion script
 tsr --help | --version
 ```
 
 The **first positional argument is always a task name**. Every builtin is a flag
-(`--list`, `--config`, `--init`, `--help`, `--version`), never a bare subcommand,
+(`--list`, `--config`, `--init`, `--completions`, `--help`, `--version`), never a bare subcommand,
 so a task named `list` or `init` is never shadowed — `tsr list` runs the user's
 `list` task. This keeps the entire bare-word namespace available for
 tasks/scripts, which is the point of the tool.
+
+**Shell completion.** `tsr --completions bash|zsh|fish` prints a completion script (`source <(tsr --completions bash)`, `source <(tsr --completions zsh)`, `tsr --completions fish | source`). It completes the builtin flags, the options below and their values, and task names — which it fetches at completion time from `tsr --list-names`, a plain one-name-per-line listing of the tasks in `tasks.toml` (broken ones included), or configless, of the package's scripts. `--list-names` exists for the scripts and is not in the usage text.
 
 The options below may follow a task name. Every one is a flag, never a bare word,
 so none shadows anything; anything else after a task name is still the "forward

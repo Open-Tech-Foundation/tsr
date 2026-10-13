@@ -3,6 +3,7 @@
 mod builtins;
 mod changed;
 mod cli;
+mod complete;
 mod config;
 mod confine;
 mod detect;
@@ -66,6 +67,36 @@ fn run() -> error::Result<i32> {
                     cli::list(&cfg, &broken);
                 }
                 None => cli::list_configless(&cwd),
+            }
+            Ok(0)
+        }
+        Cli::Completions(shell) => {
+            print!("{}", complete::render(shell));
+            Ok(0)
+        }
+        Cli::ListNames => {
+            // For completion scripts: bare task names, one per line.
+            let cwd = cwd()?;
+            let names: Vec<String> = match config::locate(&cwd) {
+                Some(path) => {
+                    let (cfg, broken) = Config::load_lenient(&path)?;
+                    let mut names: Vec<String> =
+                        cfg.tasks.into_keys().chain(broken.into_keys()).collect();
+                    names.sort();
+                    names
+                }
+                None => config::nearest_package_root(&cwd)
+                    .and_then(|root| {
+                        let eco = detect::detect(&root)?;
+                        detect::scripts(&root, eco)
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect(),
+            };
+            for name in names {
+                println!("{name}");
             }
             Ok(0)
         }

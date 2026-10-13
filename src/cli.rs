@@ -17,6 +17,7 @@ USAGE:
     tsr --list                  list the tasks defined in tasks.toml
     tsr --config                edit tasks.toml in an interactive TUI
     tsr --init                  create a starter tasks.toml here
+    tsr --completions <shell>   print a bash / zsh / fish completion script
     tsr --help | --version
 
 OPTIONS (after a task name):
@@ -144,6 +145,11 @@ pub enum Cli {
         passthrough: Vec<String>,
     },
     List,
+    /// `--list-names`: bare task names, for completion scripts. Undocumented in
+    /// the usage text; it exists for the scripts `--completions` prints.
+    ListNames,
+    /// `--completions <shell>`.
+    Completions(crate::complete::Shell),
     Init,
     Config,
     Help,
@@ -171,6 +177,18 @@ pub fn parse(args: &[String]) -> Result<Cli> {
             }
             Ok(Cli::List)
         }
+        Some("--list-names") => {
+            if head.len() > 1 {
+                return Err(TsrError::runtime("'--list-names' takes no arguments"));
+            }
+            Ok(Cli::ListNames)
+        }
+        Some("--completions") => match &head[1..] {
+            [shell] => Ok(Cli::Completions(crate::complete::Shell::parse(shell)?)),
+            _ => Err(TsrError::runtime(
+                "'--completions' takes one shell: bash, zsh or fish",
+            )),
+        },
         Some("--init") => {
             if head.len() > 1 {
                 return Err(TsrError::runtime("'--init' takes no arguments"));
@@ -570,6 +588,19 @@ mod tests {
         };
         assert_eq!(opts.filter, ["web", "packages/*", "@acme/ui"]);
         assert_eq!(parse_err(&["build", "--filter"]).exit_code(), 64);
+    }
+
+    #[test]
+    fn parses_completions_and_list_names() {
+        assert_eq!(
+            parse_ok(&["--completions", "zsh"]),
+            Cli::Completions(crate::complete::Shell::Zsh)
+        );
+        assert_eq!(parse_err(&["--completions"]).exit_code(), 64);
+        assert_eq!(parse_err(&["--completions", "pwsh"]).exit_code(), 64);
+        assert_eq!(parse_err(&["--completions", "bash", "zsh"]).exit_code(), 64);
+        assert_eq!(parse_ok(&["--list-names"]), Cli::ListNames);
+        assert_eq!(parse_err(&["--list-names", "x"]).exit_code(), 64);
     }
 
     #[test]

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Shell completion.** `tsr --completions bash|zsh|fish` prints a script that
+  completes flags, option values and task names. Names are fetched at
+  completion time from a new `tsr --list-names`, so they follow whichever
+  `tasks.toml` (or configless package) you're in.
+
 - **Per-task `timeout` and `retries`.** `timeout = "5m"` (or `"1h30m"`,
   `"500ms"`, a number of seconds) kills an attempt's whole process tree when it
   runs too long, and the attempt fails with exit `124`. `retries = 2` re-runs a

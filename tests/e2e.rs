@@ -2969,6 +2969,7 @@ fn timeout_kills_the_process_tree_and_exits_124() {
     std::thread::sleep(std::time::Duration::from_millis(100));
     let alive = Command::new("kill")
         .args(["-0", pid.trim()])
+        .stderr(std::process::Stdio::null())
         .status()
         .unwrap()
         .success();
@@ -3013,4 +3014,106 @@ fn timeout_and_retries_show_in_list_and_dry_run() {
         s.contains("timeout: 1m30s") && s.contains("retries: 2"),
         "{s}"
     );
+}
+
+// --- completions ---
+
+#[test]
+fn list_names_prints_bare_task_names() {
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.dev]\nrun = \"vite\"\n[tasks.\"build:prod\"]\nrun = \"x\"\n\
+         [tasks.bad]\nrun = \"a | b\"\n",
+    );
+    let out = tsr(&ws, &["--list-names"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    assert_eq!(stdout(&out), "bad\nbuild:prod\ndev\n");
+
+    // Configless: the package's own scripts.
+    let ws = workspace();
+    write(
+        &ws,
+        "package.json",
+        r#"{"scripts":{"lint":"eslint","test":"vitest"}}"#,
+    );
+    let out = tsr(&ws, &["--list-names"]);
+    assert_eq!(stdout(&out), "lint\ntest\n");
+}
+
+#[test]
+fn completions_print_a_script_per_shell() {
+    let ws = workspace();
+    for (shell, marker) in [
+        ("bash", "complete -F _tsr tsr"),
+        ("zsh", "#compdef tsr"),
+        ("fish", "complete -c tsr"),
+    ] {
+        let out = tsr(&ws, &["--completions", shell]);
+        assert_eq!(code(&out), 0, "{shell}: stderr {}", stderr(&out));
+        assert!(stdout(&out).contains(marker), "{shell}: {}", stdout(&out));
+    }
+    assert_eq!(code(&tsr(&ws, &["--completions", "pwsh"])), 64);
+}
+
+/// Whether `shell` is installed, for the syntax checks below.
+#[cfg(unix)]
+fn has_shell(shell: &str) -> bool {
+    Command::new(shell)
+        .arg("-c")
+        .arg("true")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+#[cfg(unix)]
+#[test]
+fn completion_scripts_parse_in_their_shell() {
+    let ws = workspace();
+    for (shell, check) in [("bash", "-n"), ("zsh", "-n"), ("fish", "--no-execute")] {
+        if !has_shell(shell) {
+            continue;
+        }
+        let script = stdout(&tsr(&ws, &["--completions", shell]));
+        let path = ws.join(format!("tsr.{shell}"));
+        fs::write(&path, script).unwrap();
+        let out = Command::new(shell).arg(check).arg(&path).output().unwrap();
+        assert!(out.status.success(), "{shell}: {}", stderr(&out));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_completion_offers_task_names_and_options() {
+    if !has_shell("bash") {
+        return;
+    }
+    let ws = workspace();
+    write(
+        &ws,
+        "tasks.toml",
+        "[tasks.dev]\nrun = \"vite\"\n[tasks.deploy]\nrun = \"x\"\n[tasks.test]\nrun = \"y\"\n",
+    );
+    let bin_dir = Path::new(BIN).parent().unwrap();
+    let complete = |words: &str, cword: usize| {
+        let script = format!(
+            "source <(tsr --completions bash); COMP_WORDS=({words}); COMP_CWORD={cword}; \
+             _tsr; printf '%s\\n' \"${{COMPREPLY[@]}}\""
+        );
+        let path = std::env::var("PATH").unwrap_or_default();
+        let out = Command::new("bash")
+            .args(["--norc", "-c", &script])
+            .current_dir(&ws)
+            .env("PATH", format!("{}:{path}", bin_dir.display()))
+            .output()
+            .unwrap();
+        let mut got: Vec<String> = stdout(&out).lines().map(str::to_string).collect();
+        got.sort();
+        got
+    };
+    assert_eq!(complete("tsr de", 1), ["deploy", "dev"]);
+    assert_eq!(complete("tsr --li", 1), ["--list"]);
+    assert_eq!(complete("tsr dev --dr", 2), ["--dry-run"]);
+    assert_eq!(complete("tsr dev --reporter ", 3), ["human", "ndjson"]);
 }
