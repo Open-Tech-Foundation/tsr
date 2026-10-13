@@ -65,6 +65,7 @@ marker file and maps the task name to that ecosystem's native runner:
 
 | Marker file | Ecosystem | `tsr test` runs |
 |-------------|-----------|-----------------|
+| `deno.json` / `deno.jsonc` | deno | `deno task test` |
 | `package.json` (+ bun lockfile) | bun | `bun run test` |
 | `package.json` (+ `pnpm-lock.yaml`) | pnpm | `pnpm run test` |
 | `package.json` (+ `yarn.lock`) | yarn | `yarn run test` |
@@ -72,6 +73,7 @@ marker file and maps the task name to that ecosystem's native runner:
 | `Cargo.toml` | cargo | `cargo test` |
 | `go.mod` | go | `go test` |
 | `pyproject.toml` | uv | `uv run test`, only if `test` is a `.py` file or a `[project.scripts]` entry |
+| `Makefile` (and nothing else above) | make | `make test` |
 
 For a Node package, the nearest lockfile between the package and the workspace
 root decides the runner. A monorepo keeps one lockfile at its root, so every

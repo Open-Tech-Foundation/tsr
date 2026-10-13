@@ -22,7 +22,19 @@ pub enum Ecosystem {
     Go,
     /// `pyproject.toml` present.
     Python,
+    /// `deno.json` / `deno.jsonc` present. Checked before `package.json`: Deno
+    /// reads `package.json` too, and `deno task` falls back to its scripts.
+    Deno,
+    /// Only a `Makefile` (`makefile`, `GNUmakefile`). Checked last, so a Cargo
+    /// or Go repo that also keeps a Makefile stays Cargo or Go.
+    Make,
 }
+
+/// The file names `make` itself looks for, in its own order.
+const MAKEFILES: [&str; 3] = ["GNUmakefile", "makefile", "Makefile"];
+
+/// Deno's two config names.
+const DENO_CONFIGS: [&str; 2] = ["deno.json", "deno.jsonc"];
 
 impl Ecosystem {
     /// Map a bare task name to `(program, args)` for this ecosystem's native
@@ -32,6 +44,8 @@ impl Ecosystem {
     /// - cargo   → `cargo <task>`   (`test`/`build`/`run` are native subcommands)
     /// - go      → `go <task>`, except `run` → `go run .` (a bare `go run`
     ///   names no package and always fails; `build`/`test` default to `.`)
+    /// - deno    → `deno task <task>`
+    /// - make    → `make <task>`
     /// - python  → `uv run <task>`, valid only for a [`python_target`]; the
     ///   caller rejects any other name before getting here
     pub fn native_command(self, task: &str) -> (String, Vec<String>) {
@@ -44,6 +58,8 @@ impl Ecosystem {
             Ecosystem::Go if task == "run" => ("go".into(), vec!["run".into(), ".".into()]),
             Ecosystem::Go => ("go".into(), vec![task.into()]),
             Ecosystem::Python => ("uv".into(), vec!["run".into(), task.into()]),
+            Ecosystem::Deno => ("deno".into(), vec!["task".into(), task.into()]),
+            Ecosystem::Make => ("make".into(), vec![task.into()]),
         }
     }
 }
@@ -64,6 +80,9 @@ pub fn detect(dir: &Path) -> Option<Ecosystem> {
 ///
 /// Returns `None` when no recognised marker is present.
 pub fn detect_within(dir: &Path, root: &Path) -> Option<Ecosystem> {
+    if DENO_CONFIGS.iter().any(|f| dir.join(f).is_file()) {
+        return Some(Ecosystem::Deno);
+    }
     if dir.join("package.json").is_file() {
         return Some(node_runner(dir, root));
     }
@@ -75,6 +94,9 @@ pub fn detect_within(dir: &Path, root: &Path) -> Option<Ecosystem> {
     }
     if dir.join("pyproject.toml").is_file() {
         return Some(Ecosystem::Python);
+    }
+    if MAKEFILES.iter().any(|f| dir.join(f).is_file()) {
+        return Some(Ecosystem::Make);
     }
     None
 }
@@ -174,8 +196,141 @@ pub fn scripts(dir: &Path, eco: Ecosystem) -> Option<Vec<(String, String)>> {
             }
             Some(out)
         }
+        Ecosystem::Deno => {
+            // A task is a command string, or `{ command, description, … }`.
+            let doc = deno_doc(dir);
+            let tasks = doc
+                .as_ref()
+                .and_then(|d| d.get("tasks"))
+                .and_then(serde_json::Value::as_object);
+            Some(
+                tasks
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, v)| {
+                        let text = v
+                            .as_str()
+                            .or_else(|| v.get("description").and_then(|d| d.as_str()))
+                            .or_else(|| v.get("command").and_then(|d| d.as_str()))
+                            .unwrap_or_default();
+                        (k.clone(), text.to_string())
+                    })
+                    .collect(),
+            )
+        }
+        Ecosystem::Make => Some(make_targets(dir)),
         Ecosystem::Cargo | Ecosystem::Go => None,
     }
+}
+
+/// Parse the package's `deno.json`, or its `deno.jsonc` with comments and
+/// trailing commas stripped. `None` when neither reads as JSON.
+fn deno_doc(dir: &Path) -> Option<serde_json::Value> {
+    if let Some(doc) = json_doc(&dir.join("deno.json")) {
+        return Some(doc);
+    }
+    let text = std::fs::read_to_string(dir.join("deno.jsonc")).ok()?;
+    serde_json::from_str(&strip_jsonc(&text)).ok()
+}
+
+/// Reduce JSONC to JSON: drop `//` and `/* */` comments and trailing commas,
+/// leaving string contents alone.
+fn strip_jsonc(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut in_string = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' && i + 1 < chars.len() {
+                out.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match (c, chars.get(i + 1)) {
+            ('"', _) => {
+                in_string = true;
+                out.push(c);
+                i += 1;
+            }
+            ('/', Some('/')) => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                i += 2;
+                while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            (',', _) => {
+                // A comma followed only by whitespace/comments and a closer.
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                if !matches!(chars.get(j), Some('}' | ']')) {
+                    out.push(c);
+                }
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The targets a Makefile declares that `tsr` can name: explicit rules whose
+/// target is a legal task name (SPEC §4.1). Special targets (`.PHONY`),
+/// pattern rules (`%.o`), variable assignments (`X := y`) and recipe lines are
+/// skipped. A `## text` comment after the prerequisites — the common `make
+/// help` convention — becomes the target's description.
+fn make_targets(dir: &Path) -> Vec<(String, String)> {
+    let Some(text) = MAKEFILES
+        .iter()
+        .find_map(|f| std::fs::read_to_string(dir.join(f)).ok())
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with(['\t', ' ', '#', '.']) {
+            continue;
+        }
+        let Some((head, rest)) = line.split_once(':') else {
+            continue;
+        };
+        // `X := y`, `X ::= y` are assignments, not rules.
+        if rest.starts_with('=') || rest.starts_with(":=") || head.contains('=') {
+            continue;
+        }
+        let desc = rest
+            .split_once("##")
+            .map(|(_, d)| d.trim().to_string())
+            .unwrap_or_default();
+        for target in head.split_whitespace() {
+            let legal = target
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+            if legal && !out.iter().any(|(t, _)| t == target) {
+                out.push((target.to_string(), desc.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// Read the package's manifest name, so `packages` can match against declared
@@ -190,6 +345,9 @@ pub fn manifest_name(dir: &Path, eco: Ecosystem) -> Option<String> {
         Ecosystem::Python => toml_name(&dir.join("pyproject.toml"), &["project"])
             .or_else(|| toml_name(&dir.join("pyproject.toml"), &["tool", "poetry"])),
         Ecosystem::Go => go_module(&dir.join("go.mod")),
+        Ecosystem::Deno => deno_doc(dir)?.get("name")?.as_str().map(str::to_string),
+        // A Makefile declares no package name.
+        Ecosystem::Make => None,
     }
 }
 
@@ -216,6 +374,9 @@ pub fn manifest_deps(dir: &Path, eco: Ecosystem) -> Vec<String> {
         Ecosystem::Cargo => cargo_deps(&dir.join("Cargo.toml")),
         Ecosystem::Python => python_deps(&dir.join("pyproject.toml")),
         Ecosystem::Go => go_deps(&dir.join("go.mod")),
+        // Deno names dependencies by specifier (`jsr:@scope/pkg`), and a
+        // Makefile names none; neither yields workspace edges yet.
+        Ecosystem::Deno | Ecosystem::Make => Vec::new(),
     }
 }
 
@@ -826,6 +987,77 @@ mod tests {
     }
 
     #[test]
+    fn detects_deno_before_node_and_make_last() {
+        let d = scratch();
+        fs::write(d.join("package.json"), "{}").unwrap();
+        fs::write(d.join("deno.jsonc"), "{}").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Deno));
+
+        // A Makefile alone is Make; beside another marker it defers to it.
+        let d = scratch();
+        fs::write(d.join("Makefile"), "all:\n").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Make));
+        fs::write(d.join("go.mod"), "module m\n").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Go));
+        let d = scratch();
+        fs::write(d.join("GNUmakefile"), "all:\n").unwrap();
+        assert_eq!(detect(&d), Some(Ecosystem::Make));
+    }
+
+    #[test]
+    fn reads_deno_tasks_and_name_from_jsonc() {
+        let d = scratch();
+        fs::write(
+            d.join("deno.jsonc"),
+            r#"{
+              // the package
+              "name": "@acme/app", /* inline */
+              "tasks": {
+                "dev": "deno run -A main.ts",
+                "test": { "command": "deno test", "description": "Run the tests" },
+                "url": "echo http://x//y",
+              },
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest_name(&d, Ecosystem::Deno).as_deref(),
+            Some("@acme/app")
+        );
+        assert_eq!(
+            scripts(&d, Ecosystem::Deno).unwrap(),
+            [
+                ("dev".to_string(), "deno run -A main.ts".to_string()),
+                ("test".to_string(), "Run the tests".to_string()),
+                // `//` inside a string is not a comment.
+                ("url".to_string(), "echo http://x//y".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_make_targets_skipping_specials_and_assignments() {
+        let d = scratch();
+        fs::write(
+            d.join("Makefile"),
+            "CC := gcc\nVERSION = 1\nexport X ?= y\n.PHONY: build test\n\
+             build: deps ## Build everything\n\tgo build ./...\n\
+             test lint:\n\t@echo hi\n%.o: %.c\n\t$(CC) -c $<\n\
+             out/app.bin: build\n# comment: not a rule\nbuild:\n",
+        )
+        .unwrap();
+        assert_eq!(
+            scripts(&d, Ecosystem::Make).unwrap(),
+            [
+                ("build".to_string(), "Build everything".to_string()),
+                ("test".to_string(), String::new()),
+                ("lint".to_string(), String::new()),
+            ]
+        );
+        assert_eq!(manifest_name(&d, Ecosystem::Make), None);
+    }
+
+    #[test]
     fn native_command_conventions() {
         assert_eq!(
             Ecosystem::Npm.native_command("test"),
@@ -838,6 +1070,14 @@ mod tests {
         assert_eq!(
             Ecosystem::Yarn.native_command("dev"),
             ("yarn".into(), vec!["run".into(), "dev".into()])
+        );
+        assert_eq!(
+            Ecosystem::Deno.native_command("dev"),
+            ("deno".into(), vec!["task".into(), "dev".into()])
+        );
+        assert_eq!(
+            Ecosystem::Make.native_command("build"),
+            ("make".into(), vec!["build".into()])
         );
         assert_eq!(
             Ecosystem::Cargo.native_command("test"),

@@ -65,8 +65,8 @@ tsr dev                # → npm run dev
 tsr test -- --watch    # → npm run test --watch
 ```
 
-If neither a `tasks.toml` nor an ecosystem marker (`package.json`, `Cargo.toml`,
-`go.mod`, `pyproject.toml`) is found, `tsr` exits `64` and points you at
+If neither a `tasks.toml` nor an ecosystem marker (`package.json`, `deno.json`,
+`Cargo.toml`, `go.mod`, `pyproject.toml`, a `Makefile`) is found, `tsr` exits `64` and points you at
 `tsr --init`. A `tasks.toml`, when present, always wins — there's no fall-through
 from a defined config to auto-detection, so a mistyped task name stays an error.
 Package-qualified names (`web#build`) and the dependency graph need a `tasks.toml`.

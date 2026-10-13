@@ -196,8 +196,8 @@ fn implicit_config(cwd: &std::path::Path, task: &str) -> error::Result<Config> {
     }
     let root = config::nearest_package_root(cwd).ok_or_else(|| {
         TsrError::config(format!(
-            "no '{}' found in '{}' or any parent, and no package.json / Cargo.toml / \
-             go.mod / pyproject.toml to detect a runner from — run `tsr --init` to \
+            "no '{}' found in '{}' or any parent, and no package.json / deno.json / \
+             Cargo.toml / go.mod / pyproject.toml / Makefile to detect a runner from — run `tsr --init` to \
              create a config, or cd into a package",
             config::CONFIG_FILE,
             cwd.display()

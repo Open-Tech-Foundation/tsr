@@ -363,7 +363,10 @@ pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
 pub fn list_configless(cwd: &std::path::Path) {
     use crate::detect::{self, Ecosystem};
     let Some(root) = crate::config::nearest_package_root(cwd) else {
-        println!("No tasks.toml, and no package.json / Cargo.toml / go.mod / pyproject.toml here.");
+        println!(
+            "No tasks.toml, and no package.json / deno.json / Cargo.toml / go.mod / \
+             pyproject.toml / Makefile here."
+        );
         println!("Run `tsr --init` to create a config, or cd into a package.");
         return;
     };
@@ -387,6 +390,10 @@ pub fn list_configless(cwd: &std::path::Path) {
             println!("No [project.scripts] declared. A bare name runs a .py file (tsr app.py);");
             println!("for anything else, add a tasks.toml task such as run = \"uv run pytest\".");
         }
+        Some(_) if eco == Ecosystem::Deno => println!("deno.json declares no tasks."),
+        Some(_) if eco == Ecosystem::Make => {
+            println!("The Makefile declares no targets tsr can name.")
+        }
         Some(_) => println!("package.json declares no scripts."),
         None => {
             let tool = if eco == Ecosystem::Go { "go" } else { "cargo" };
@@ -406,6 +413,8 @@ fn ecosystem_label(eco: crate::detect::Ecosystem) -> &'static str {
         Cargo => "a Cargo crate (Cargo.toml)",
         Go => "a Go module (go.mod)",
         Python => "a Python project (pyproject.toml)",
+        Deno => "a Deno project (deno.json)",
+        Make => "a Makefile",
     }
 }
 

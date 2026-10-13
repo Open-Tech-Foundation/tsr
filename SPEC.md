@@ -43,7 +43,7 @@ NODE_ENV = "development"
 
 ### 2.1 Configless mode
 
-`tasks.toml` is **optional**. When none is found (walking up from the current directory), `tsr <task>` still runs repo-aware by treating `<task>` as a bare form-3 auto-detect task (§3.1) anchored at the nearest directory holding an ecosystem marker (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`). So in a plain npm repo, `tsr dev` runs `npm run dev`; in a Cargo crate, `tsr build` runs `cargo build` — no config to write.
+`tasks.toml` is **optional**. When none is found (walking up from the current directory), `tsr <task>` still runs repo-aware by treating `<task>` as a bare form-3 auto-detect task (§3.1) anchored at the nearest directory holding an ecosystem marker (`package.json`, `deno.json`/`deno.jsonc`, `Cargo.toml`, `go.mod`, `pyproject.toml`, or a `Makefile`). So in a plain npm repo, `tsr dev` runs `npm run dev`; in a Cargo crate, `tsr build` runs `cargo build` — no config to write.
 
 - Argument passthrough (§6) works as usual: `tsr test -- --watch`.
 - Package-qualified names (`web#build`) and the dependency graph require a `tasks.toml`; configless mode is single-task only.
@@ -62,7 +62,7 @@ When `tsr <task>` runs, the task's form is chosen in this order:
 
 1. **`delegate` present** → hand off to a backend: `<bin> run <task>`.
 2. **`run` present** → spawn the command directly (no `npm`/`node` startup tax).
-3. **Neither** → auto-detect the package's ecosystem and map the task name to its native runner (`npm run <task>`, `cargo <task>`, `go <task>`, …). Go's `run` maps to `go run .`, because a bare `go run` names no package and always fails. Python has no script-name convention, so `uv run <task>` is used only when `<task>` is a `.py` file or a script declared in `[project.scripts]` / `[tool.poetry.scripts]`; any other bare Python task is a runner error (exit `64`) telling the user to write a `run` command such as `uv run pytest`.
+3. **Neither** → auto-detect the package's ecosystem and map the task name to its native runner (`npm run <task>`, `cargo <task>`, `go <task>`, …). Deno maps to `deno task <task>` and Make to `make <task>`. Go's `run` maps to `go run .`, because a bare `go run` names no package and always fails. Python has no script-name convention, so `uv run <task>` is used only when `<task>` is a `.py` file or a script declared in `[project.scripts]` / `[tool.poetry.scripts]`; any other bare Python task is a runner error (exit `64`) telling the user to write a `run` command such as `uv run pytest`.
 
 Form 3 is the core "wrapper" behaviour: a bare `[tasks.test]` just works across a polyglot repo with no per-package config.
 
@@ -437,7 +437,7 @@ delegate = { bin = "sh", args = ["-c", "cat x | grep y > z"] }
 
 ## 9. Detection layer
 
-- **v1** — detect each package's **ecosystem** (via marker files: `package.json` → npm/bun/pnpm/yarn, chosen by the nearest lockfile — `bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json` — between the package and the workspace root, defaulting to npm; `Cargo.toml` → cargo, `go.mod` → go, `pyproject.toml` → uv/poetry) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
+- **v1** — detect each package's **ecosystem** (via marker files: `package.json` → npm/bun/pnpm/yarn, chosen by the nearest lockfile — `bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json` — between the package and the workspace root, defaulting to npm; `Cargo.toml` → cargo, `go.mod` → go, `pyproject.toml` → uv/poetry, `deno.json`/`deno.jsonc` → deno (checked before `package.json`), and — only when nothing else matches — a `Makefile` → make) and its **manifest name** (so `packages` can match against names like `@scope/pkg`, not just path globs).
 - **v1.1** — additionally read **dependency edges** from each manifest to build the package dependency graph that `^task`, affected-detection, and cross-package ordering require.
 
 One rule spans every ecosystem: an edge exists exactly when a **declared dependency name matches another workspace package's manifest name**. Version specifiers and protocols are never inspected, so `workspace:*`, `path = "../ui"`, `replace` directives and plain ranges all resolve identically, and external registry dependencies drop out because nothing matches them.

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Deno and Make detection.** A `deno.json`/`deno.jsonc` project now runs
+  `deno task <task>`. It is checked before `package.json`, since `deno task`
+  also reads `package.json` scripts. A directory with only a `Makefile` runs
+  `make <task>`. Both work configless, as `packages` fan-out members, and in
+  configless `--list`: Deno lists its `tasks`, and Make lists its targets with
+  any `## description` comment. A Cargo/Go/Node/Python repo that also has a
+  Makefile keeps its own runner.
+
 - **Task descriptions.** A task can carry `desc = "…"`, and `tsr --list` shows
   it before the task's form. `tsr --config` has a field for it. Until now, a
   `desc` key was ignored, and an unknown key was the only way to annotate a

@@ -247,7 +247,8 @@ pub fn locate(start: &Path) -> Option<PathBuf> {
 }
 
 /// Walk up from `start` to the nearest directory carrying a recognised ecosystem
-/// marker (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`). Anchors
+/// marker (`package.json`, `deno.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`,
+/// a Makefile). Anchors
 /// **configless** mode: when there is no `tasks.toml`, this is where `tsr <task>`
 /// auto-detects the native runner from.
 pub fn nearest_package_root(start: &Path) -> Option<PathBuf> {

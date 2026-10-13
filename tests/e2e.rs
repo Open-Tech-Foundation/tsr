@@ -883,6 +883,40 @@ fn configless_python_runs_files_and_declared_scripts_only() {
 }
 
 #[test]
+fn configless_deno_and_make_use_their_runner() {
+    for (marker, body, runner, expected) in [
+        (
+            "deno.json",
+            "{\"tasks\":{\"dev\":\"deno run main.ts\"}}",
+            "deno",
+            "INVOKED deno task dev",
+        ),
+        ("Makefile", "dev:\n\techo hi\n", "make", "INVOKED make dev"),
+    ] {
+        let ws = workspace();
+        let bin = ws.join("shims");
+        fs::create_dir_all(&bin).unwrap();
+        shim(&bin, runner);
+        write(&ws, marker, body);
+        let out = tsr_with_path(&ws, &["dev", "--", "--flag"], &bin);
+        assert_eq!(code(&out), 0, "{marker}: stderr {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("{expected} --flag")),
+            "{marker}: {}",
+            stdout(&out)
+        );
+
+        let out = tsr(&ws, &["--list"]);
+        assert_eq!(code(&out), 0, "{marker}: stderr {}", stderr(&out));
+        let s = stdout(&out);
+        assert!(
+            s.contains("Available scripts:") && s.contains("dev"),
+            "{marker}: {s}"
+        );
+    }
+}
+
+#[test]
 fn configless_go_run_names_the_current_package() {
     // A bare `go run` lists no files and always fails, so the Go `run` task maps
     // to `go run .`; passthrough lands after the package, as program args.

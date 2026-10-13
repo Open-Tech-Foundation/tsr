@@ -49,7 +49,7 @@ pub fn resolve(task: &Task, dir: &Path, root: &Path) -> Result<Invocation> {
     let eco = detect::detect_within(dir, root).ok_or_else(|| {
         TsrError::runtime(format!(
             "task '{}': no recognised ecosystem in '{}' \
-             (expected one of package.json, Cargo.toml, go.mod, pyproject.toml) \
+             (expected one of package.json, deno.json, Cargo.toml, go.mod, pyproject.toml, Makefile) \
              and the task defines neither 'run' nor 'delegate'",
             task.key,
             dir.display()
