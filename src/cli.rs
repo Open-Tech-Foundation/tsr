@@ -337,20 +337,36 @@ pub fn list(cfg: &Config, broken: &std::collections::BTreeMap<String, String>) {
 /// `tsr --list` when there is no `tasks.toml`: nothing is declared, but tasks
 /// still run repo-aware via auto-detection — point the user at how that works.
 pub fn list_configless(cwd: &std::path::Path) {
-    match crate::config::nearest_package_root(cwd) {
-        Some(root) => {
-            let runner = crate::detect::detect(&root)
-                .map(ecosystem_label)
-                .unwrap_or("a native runner");
-            println!("No tasks.toml — tsr runs your package scripts directly.");
-            println!("Detected {runner} at {}.", root.display());
-            println!("Run one with:  tsr <script>   (e.g. tsr dev, tsr build)");
+    use crate::detect::{self, Ecosystem};
+    let Some(root) = crate::config::nearest_package_root(cwd) else {
+        println!("No tasks.toml, and no package.json / Cargo.toml / go.mod / pyproject.toml here.");
+        println!("Run `tsr --init` to create a config, or cd into a package.");
+        return;
+    };
+    let Some(eco) = detect::detect(&root) else {
+        return;
+    };
+    println!("No tasks.toml — tsr runs your package scripts directly.");
+    println!("Detected {} at {}.", ecosystem_label(eco), root.display());
+    println!();
+    match detect::scripts(&root, eco) {
+        Some(scripts) if !scripts.is_empty() => {
+            let width = scripts.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+            println!("Available scripts:");
+            for (name, cmd) in &scripts {
+                println!("  {name:width$}  {cmd}");
+            }
+            println!();
+            println!("Run one with:  tsr <script>");
         }
+        Some(_) if eco == Ecosystem::Python => {
+            println!("No [project.scripts] declared. A bare name runs a .py file (tsr app.py);");
+            println!("for anything else, add a tasks.toml task such as run = \"uv run pytest\".");
+        }
+        Some(_) => println!("package.json declares no scripts."),
         None => {
-            println!(
-                "No tasks.toml, and no package.json / Cargo.toml / go.mod / pyproject.toml here."
-            );
-            println!("Run `tsr --init` to create a config, or cd into a package.");
+            let tool = if eco == Ecosystem::Go { "go" } else { "cargo" };
+            println!("Any {tool} subcommand runs as a task:  tsr build, tsr test, tsr run, …");
         }
     }
 }

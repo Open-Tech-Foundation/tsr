@@ -132,6 +132,52 @@ pub fn python_target(dir: &Path, task: &str) -> bool {
     declares(doc.get("project")) || declares(doc.get("tool").and_then(|t| t.get("poetry")))
 }
 
+/// The named scripts a package declares, as `(name, what it runs)` — the
+/// tasks configless mode can run by name. `None` for an ecosystem with no
+/// script concept (Cargo, Go), where task names are the tool's own
+/// subcommands instead.
+///
+/// Node: `package.json` `scripts`, alphabetical. Python: `[project.scripts]`
+/// then `[tool.poetry.scripts]`, each mapped to its entry point. An unreadable
+/// manifest declares nothing.
+pub fn scripts(dir: &Path, eco: Ecosystem) -> Option<Vec<(String, String)>> {
+    match eco {
+        Ecosystem::Npm | Ecosystem::Bun | Ecosystem::Pnpm | Ecosystem::Yarn => {
+            let doc = json_doc(&dir.join("package.json"));
+            let scripts = doc
+                .as_ref()
+                .and_then(|d| d.get("scripts"))
+                .and_then(serde_json::Value::as_object);
+            Some(
+                scripts
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                    .collect(),
+            )
+        }
+        Ecosystem::Python => {
+            let mut out = Vec::new();
+            if let Some(doc) = toml_doc(&dir.join("pyproject.toml")) {
+                let tables = [
+                    doc.get("project"),
+                    doc.get("tool").and_then(|t| t.get("poetry")),
+                ];
+                for table in tables.into_iter().flatten() {
+                    let Some(scripts) = table.get("scripts").and_then(|i| i.as_table_like()) else {
+                        continue;
+                    };
+                    for (k, v) in scripts.iter() {
+                        out.push((k.to_string(), v.as_str().unwrap_or_default().to_string()));
+                    }
+                }
+            }
+            Some(out)
+        }
+        Ecosystem::Cargo | Ecosystem::Go => None,
+    }
+}
+
 /// Read the package's manifest name, so `packages` can match against declared
 /// names (e.g. `@scope/pkg`), not only path globs (SPEC §9.1). Returns `None`
 /// when the manifest is unreadable or declares no name.
@@ -740,6 +786,43 @@ mod tests {
         assert!(!python_target(&d, "test"));
         // No pyproject (or a malformed one) declares nothing.
         assert!(!python_target(&scratch(), "serve"));
+    }
+
+    #[test]
+    fn lists_declared_scripts() {
+        let d = scratch();
+        fs::write(
+            d.join("package.json"),
+            r#"{"scripts":{"dev":"vite","build":"vite build"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            scripts(&d, Ecosystem::Npm).unwrap(),
+            [
+                ("build".to_string(), "vite build".to_string()),
+                ("dev".to_string(), "vite".to_string())
+            ]
+        );
+
+        let d = scratch();
+        fs::write(
+            d.join("pyproject.toml"),
+            "[project.scripts]\nserve = \"p:main\"\n[tool.poetry.scripts]\nmigrate = \"p.db:run\"\n",
+        )
+        .unwrap();
+        let names: Vec<String> = scripts(&d, Ecosystem::Python)
+            .unwrap()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(names, ["serve", "migrate"]);
+
+        // No scripts, or no manifest at all, is an empty list; Cargo/Go have
+        // no script concept.
+        let d = scratch();
+        fs::write(d.join("package.json"), "{}").unwrap();
+        assert_eq!(scripts(&d, Ecosystem::Npm), Some(Vec::new()));
+        assert_eq!(scripts(&d, Ecosystem::Cargo), None);
     }
 
     #[test]

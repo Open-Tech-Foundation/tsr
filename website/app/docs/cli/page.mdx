@@ -254,9 +254,21 @@ Available tasks:
   ok   run: echo fine
 ```
 
-With no `tasks.toml`, there is nothing declared to list, so `--list` instead
-reports the detected package and reminds you that scripts run directly (e.g.
-`tsr dev`).
+With no `tasks.toml`, `--list` reports the detected package and lists what you
+can run by name: the `package.json` scripts, or a Python project's
+`[project.scripts]`. For Cargo and Go, where any subcommand runs as a task, it
+says so instead.
+
+```text
+No tasks.toml — tsr runs your package scripts directly.
+Detected an npm package (package.json) at /work/app.
+
+Available scripts:
+  build  vite build
+  dev    vite
+
+Run one with:  tsr <script>
+```
 
 ## `tsr --config`
 

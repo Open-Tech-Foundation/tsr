@@ -360,6 +360,51 @@ fn list_shows_tasks() {
 }
 
 #[test]
+fn configless_list_shows_package_scripts() {
+    let ws = workspace();
+    write(
+        &ws,
+        "package.json",
+        r#"{"scripts":{"dev":"vite","build":"vite build"}}"#,
+    );
+    let out = tsr(&ws, &["--list"]);
+    assert_eq!(code(&out), 0, "stderr {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("Available scripts:"), "{s}");
+    assert!(s.contains("build  vite build"), "{s}");
+    assert!(s.contains("dev    vite"), "{s}");
+}
+
+#[test]
+fn configless_list_without_scripts_says_what_runs() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("package.json", "{}", "declares no scripts"),
+        (
+            "Cargo.toml",
+            "[package]\nname = \"c\"\n",
+            "Any cargo subcommand",
+        ),
+        ("go.mod", "module m\n", "Any go subcommand"),
+        (
+            "pyproject.toml",
+            "[project]\nname = \"p\"\n",
+            "run = \"uv run pytest\"",
+        ),
+    ];
+    for (marker, body, expected) in cases {
+        let ws = workspace();
+        write(&ws, marker, body);
+        let out = tsr(&ws, &["--list"]);
+        assert_eq!(code(&out), 0, "{marker}: stderr {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(expected),
+            "{marker}: {}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
 fn list_shows_broken_tasks_instead_of_failing() {
     // One invalid task must not hide the rest of the list.
     let ws = workspace();

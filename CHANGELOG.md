@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configless `tsr --list` lists what you can run.** Without a `tasks.toml`,
+  it used to print a hint and nothing else. It now lists the `package.json`
+  scripts, or a Python project's `[project.scripts]`, along with what each one
+  runs. For Cargo and Go it says that any subcommand runs as a task.
+
 - **`cd`, `exit` and `NAME=value` in `run` strings.** Ported npm scripts no
   longer have to move to `delegate = { bin = "sh", … }` and lose portability:
   - `cd <dir>` changes the directory for the rest of that `run` string, so
